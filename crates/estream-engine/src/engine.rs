@@ -190,6 +190,7 @@ pub struct Engine {
     requests: Sender<Request>,
     shared: Arc<Shared>,
     gpu: Option<GpuContext>,
+    registry: SourceRegistry,
     clock: EngineClock,
     control: Option<JoinHandle<()>>,
     video: Option<JoinHandle<()>>,
@@ -237,6 +238,7 @@ impl Engine {
 
         let (requests, rx) = crossbeam_channel::bounded(1024);
         let mut control = Control {
+            registry: config.registry.clone(),
             project,
             history: History::new(config.history_limit, config.coalesce_window),
             shared: shared.clone(),
@@ -254,6 +256,7 @@ impl Engine {
             requests,
             shared,
             gpu,
+            registry: config.registry,
             clock,
             control: Some(control),
             video,
@@ -378,6 +381,11 @@ impl Engine {
         self.shared.statuses.load_full()
     }
 
+    /// The source types this engine can create (for schemas and pickers).
+    pub fn registry(&self) -> &SourceRegistry {
+        &self.registry
+    }
+
     pub fn gpu(&self) -> Option<&GpuContext> {
         self.gpu.as_ref()
     }
@@ -412,6 +420,7 @@ impl Drop for Engine {
 
 /// State owned by the control thread.
 struct Control {
+    registry: SourceRegistry,
     project: Project,
     history: History,
     shared: Arc<Shared>,
@@ -480,10 +489,29 @@ impl Control {
     }
 
     fn execute(&mut self, command: Command) -> Result<u64, EngineError> {
+        self.validate(&command)?;
         let key = command.coalesce_key();
         let applied = command.apply(&mut self.project)?;
         self.history.record(key, applied.inverse, Instant::now());
         Ok(self.publish(applied.changes, Origin::Command))
+    }
+
+    /// Validates source settings against their type's schema.
+    fn validate(&self, command: &Command) -> Result<(), CommandError> {
+        let check = |kind: &str, settings: &serde_json::Value| {
+            self.registry
+                .validate(kind, settings)
+                .map_err(CommandError::Invalid)
+        };
+        match command {
+            Command::AddSource { source, .. } => check(&source.kind, &source.settings),
+            Command::SetSourceSettings { source, settings } => match self.project.source(*source) {
+                Some(def) => check(&def.kind, settings),
+                None => Ok(()),
+            },
+            Command::Batch { commands } => commands.iter().try_for_each(|c| self.validate(c)),
+            _ => Ok(()),
+        }
     }
 
     fn finish_history(

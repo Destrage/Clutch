@@ -198,6 +198,33 @@ export component TextField inherits Rectangle {
     }
 }
 
+// Multi-line text input.
+export component TextArea inherits Rectangle {
+    in-out property <string> text <=> input.text;
+    in property <string> label;
+    callback edited(string);
+
+    height: max(64px, input.preferred-height + 16px);
+    border-radius: Theme.radius-s;
+    background: Theme.surface-2;
+    border-width: 1px;
+    border-color: input.has-focus ? Theme.accent : Theme.border;
+    accessible-role: text-input;
+    accessible-label: label;
+    TouchArea { mouse-cursor: MouseCursor.text; clicked => { input.focus(); } }
+    input := TextInput {
+        x: 8px;
+        y: 8px;
+        width: parent.width - 16px;
+        single-line: false;
+        wrap: word-wrap;
+        color: Theme.text;
+        font-size: Theme.font-m;
+        selection-background-color: Theme.accent.with-alpha(0.35);
+        edited => { root.edited(self.text); }
+    }
+}
+
 // A numeric field whose label can be dragged horizontally to scrub the value.
 export component NumberField inherits Rectangle {
     in property <string> label;
@@ -437,7 +464,8 @@ export component Select inherits Rectangle {
     popup := PopupWindow {
         x: 0;
         y: root.height + 4px;
-        width: root.width;
+        width: max(root.width, 220px);
+        height: min(root.options.length * 28px + 8px, 320px);
         Rectangle {
             background: Theme.surface-3;
             border-radius: Theme.radius-m;
@@ -445,7 +473,9 @@ export component Select inherits Rectangle {
             border-color: Theme.border-strong;
             drop-shadow-blur: 16px;
             drop-shadow-color: #00000060;
-            VerticalLayout {
+            Flickable {
+              content-height: option-list.preferred-height;
+              option-list := VerticalLayout {
                 padding: 4px;
                 for option[i] in root.options: Rectangle {
                     height: 28px;
@@ -458,12 +488,14 @@ export component Select inherits Rectangle {
                             color: Theme.text;
                             font-size: Theme.font-m;
                             vertical-alignment: center;
+                            overflow: elide;
                         }
                     }
                     item-ta := TouchArea {
                         clicked => { root.selected(i); }
                     }
                 }
+              }
             }
         }
     }

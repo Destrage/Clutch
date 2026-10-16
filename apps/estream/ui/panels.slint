@@ -1,8 +1,8 @@
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
-import { SceneRow, LayerRow, Inspect } from "types.slint";
+import { SceneRow, LayerRow, Inspect, PropRow } from "types.slint";
 import {
-    Button, IconButton, Icon, TextField, NumberField, Toggle, Slider, Select, Panel,
+    Button, IconButton, Icon, TextField, TextArea, NumberField, Toggle, Slider, Select, Panel,
     PanelHeader, SectionTitle, Badge, EmptyState, Hint,
 } from "widgets.slint";
 
@@ -274,6 +274,8 @@ export component KindIcon inherits Icon {
         : kind == "color" ? Icons.palette
         : kind == "test_pattern" ? Icons.layout-dashboard
         : kind == "display_capture" ? Icons.monitor
+        : kind == "window_capture" ? Icons.app-window
+        : kind == "game_capture" ? Icons.gamepad
         : kind == "camera" ? Icons.camera
         : kind == "image" ? Icons.image
         : kind == "text" ? Icons.type
@@ -383,6 +385,105 @@ export component SourcesPanel inherits Panel {
     }
 }
 
+// Editor for one generic source property.
+component PropEditor inherits VerticalLayout {
+    in property <PropRow> prop;
+    callback set-flag(bool);
+    callback set-number(float);
+    callback set-text(string);
+    callback set-color(color);
+    callback set-index(int);
+    callback browse();
+    callback commit();
+
+    spacing: 4px;
+    if prop.kind != "bool": Text {
+        text: root.prop.label;
+        color: Theme.text-muted;
+        font-size: Theme.font-s;
+    }
+    if prop.kind == "bool": Toggle {
+        label: root.prop.label;
+        checked: root.prop.flag;
+        toggled(v) => { root.set-flag(v); }
+    }
+    if prop.kind == "int" || prop.kind == "float": NumberField {
+        label: "";
+        value: root.prop.number;
+        minimum: root.prop.minimum;
+        maximum: root.prop.maximum;
+        step: root.prop.step;
+        decimals: root.prop.decimals;
+        changed(v) => { root.set-number(v); }
+        committed => { root.commit(); }
+    }
+    if prop.kind == "text": TextField {
+        text: root.prop.text;
+        label: root.prop.label;
+        edited(t) => { root.set-text(t); }
+        accepted => { root.commit(); }
+    }
+    if prop.kind == "multiline": TextArea {
+        text: root.prop.text;
+        label: root.prop.label;
+        edited(t) => { root.set-text(t); }
+    }
+    if prop.kind == "select": Select {
+        label: root.prop.label;
+        options: root.prop.options;
+        current-index: root.prop.index;
+        selected(i) => { root.set-index(i); }
+    }
+    if prop.kind == "path": HorizontalLayout {
+        spacing: 6px;
+        TextField {
+            text: root.prop.text;
+            label: root.prop.label;
+            placeholder: "No file selected";
+            accepted(t) => { root.set-text(t); }
+        }
+        Button { text: "Browse…"; clicked => { root.browse(); } }
+    }
+    if prop.kind == "color": HorizontalLayout {
+        spacing: 6px;
+        Rectangle {
+            width: 28px;
+            height: 28px;
+            border-radius: Theme.radius-s;
+            background: root.prop.color;
+            border-width: 1px;
+            border-color: Theme.border-strong;
+        }
+        TextField {
+            text: root.prop.text;
+            label: root.prop.label;
+            placeholder: "#rrggbb or #rrggbbaa";
+            accepted(t) => { root.set-text(t); }
+        }
+    }
+    if prop.kind == "color": HorizontalLayout {
+        spacing: 6px;
+        for swatch in [#ffffff, #000000, #6c8cff, #f0435a, #3dd68c, #f2b84b, #b06cff, #00b5d8]: Rectangle {
+            width: 20px;
+            height: 20px;
+            border-radius: 10px;
+            background: swatch;
+            border-width: 1px;
+            border-color: Theme.border-strong;
+            TouchArea {
+                mouse-cursor: MouseCursor.pointer;
+                clicked => { root.set-color(swatch); }
+            }
+        }
+    }
+    if prop.hint != "": Text {
+        text: root.prop.hint;
+        color: Theme.text-faint;
+        font-size: Theme.font-xs;
+        wrap: word-wrap;
+    }
+}
+
 export component InspectorPanel inherits Panel {
     in property <Inspect> sel;
     in property <string> canvas-info;
@@ -392,8 +493,16 @@ export component InspectorPanel inherits Panel {
     callback edit-color(color);
     callback select-option(string, int);
     callback toggle(string, bool);
+    in property <[PropRow]> props;
     callback commit();
     callback action(string);
+    callback prop-flag(string, bool);
+    callback prop-number(string, float);
+    callback prop-text(string, string);
+    callback prop-color(string, color);
+    callback prop-index(string, int);
+    callback prop-browse(string);
+    callback prop-refresh();
 
     PanelHeader {
         title: "INSPECTOR";
@@ -438,11 +547,21 @@ export component InspectorPanel inherits Panel {
                         label: "Name";
                         accepted(t) => { root.edit-text("name", t); }
                     }
-                    HorizontalLayout {
-                        spacing: 6px;
-                        Text { text: root.sel.kind-label; color: Theme.text-faint; font-size: Theme.font-xs; vertical-alignment: center; }
-                        if root.sel.problem != "": Badge { text: root.sel.problem; tone: Theme.warn; }
-                    }
+                    Text { text: root.sel.kind-label; color: Theme.text-faint; font-size: Theme.font-xs; }
+                }
+            }
+            if root.sel.problem != "": Rectangle {
+                border-radius: Theme.radius-m;
+                background: Theme.warn.with-alpha(0.12);
+                height: problem-text.preferred-height + 16px;
+                problem-text := Text {
+                    x: 10px;
+                    width: parent.width - 20px;
+                    text: root.sel.problem;
+                    color: Theme.warn;
+                    font-size: Theme.font-s;
+                    wrap: word-wrap;
+                    vertical-alignment: center;
                 }
             }
             HorizontalLayout {
@@ -530,49 +649,30 @@ export component InspectorPanel inherits Panel {
                 }
             }
 
-            // Source settings
-            if !root.sel.group: VerticalLayout {
-                spacing: 8px;
-                SectionTitle { text: "SOURCE"; }
+            // Source settings (generic, from the source type's schema)
+            if !root.sel.group && root.props.length > 0: VerticalLayout {
+                spacing: 10px;
                 HorizontalLayout {
-                    spacing: 8px;
-                    NumberField { label: "W"; value: root.sel.src-w; minimum: 1; maximum: 16384; changed(v) => { root.edit("src-w", v); } committed => { root.commit(); } }
-                    NumberField { label: "H"; value: root.sel.src-h; minimum: 1; maximum: 16384; changed(v) => { root.edit("src-h", v); } committed => { root.commit(); } }
-                }
-                if root.sel.has-color: HorizontalLayout {
-                    spacing: 8px;
-                    Rectangle {
-                        width: 28px;
-                        height: 28px;
-                        border-radius: Theme.radius-s;
-                        background: root.sel.color;
-                        border-width: 1px;
-                        border-color: Theme.border-strong;
-                    }
-                    TextField {
-                        text: root.sel.color-hex;
-                        label: "Color (hex)";
-                        placeholder: "#rrggbb or #rrggbbaa";
-                        accepted(t) => { root.edit-text("color", t); }
+                    SectionTitle { text: "SOURCE"; horizontal-stretch: 1; vertical-alignment: center; }
+                    IconButton {
+                        icon: Icons.refresh;
+                        tooltip: "Refresh devices and windows";
+                        size: 22px;
+                        icon-size: 13px;
+                        clicked => { root.prop-refresh(); }
                     }
                 }
-                if root.sel.has-color: HorizontalLayout {
-                    spacing: 6px;
-                    for swatch in [#ffffff, #000000, #6c8cff, #f0435a, #3dd68c, #f2b84b, #b06cff, #00b5d8]: Rectangle {
-                        width: 22px;
-                        height: 22px;
-                        border-radius: 11px;
-                        background: swatch;
-                        border-width: 1px;
-                        border-color: Theme.border-strong;
-                        TouchArea {
-                            mouse-cursor: MouseCursor.pointer;
-                            clicked => { root.edit-color(swatch); }
-                        }
-                    }
+                for prop in root.props: PropEditor {
+                    prop: prop;
+                    set-flag(v) => { root.prop-flag(prop.key, v); }
+                    set-number(v) => { root.prop-number(prop.key, v); }
+                    set-text(v) => { root.prop-text(prop.key, v); }
+                    set-color(v) => { root.prop-color(prop.key, v); }
+                    set-index(i) => { root.prop-index(prop.key, i); }
+                    browse => { root.prop-browse(prop.key); }
+                    commit => { root.commit(); }
                 }
-            }
-        }
+            }        }
     }
 }
 

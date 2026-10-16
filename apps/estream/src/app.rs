@@ -6,12 +6,13 @@ use crate::interact::{self, Drag, DragKind, Handle, ItemGeom, Modifiers};
 use crate::presets::{self, PRESETS};
 use crate::settings::{PanelLayout, Paths, Settings, ThemeMode, WindowState};
 use crate::ui::{
-    AppWindow, CanvasBox, Guide, Inspect, LayerRow, PaletteEntry, Preset, SceneRow, SourceType,
-    Theme,
+    AppWindow, CanvasBox, Guide, Inspect, LayerRow, PaletteEntry, Preset, PropRow, SceneRow,
+    SourceType, Theme,
 };
 use estream_core::{BlendMode, BoundsMode, CanvasId, ItemId, Rgba8, SceneId, SourceId};
 use estream_engine::{
-    Command, Engine, EngineConfig, Event, ItemPatch, SourceInfo, SourceStatus, Subscription,
+    Command, Engine, EngineConfig, Event, ItemPatch, PropKind, SourceInfo, SourceStatus,
+    Subscription,
 };
 use estream_gpu::GpuContext;
 use estream_project::{ItemContent, Project, Scene, SceneItem, SourceDef, persist};
@@ -47,6 +48,10 @@ pub struct App {
     layers_model: Rc<VecModel<LayerRow>>,
     guides_model: Rc<VecModel<Guide>>,
     palette_model: Rc<VecModel<PaletteEntry>>,
+    props_model: Rc<VecModel<PropRow>>,
+    /// Cache key and schema behind the current property rows.
+    props: Option<((SourceId, String, u64), estream_engine::PropertySchema)>,
+    props_generation: u64,
 
     geoms: Vec<ItemGeom>,
     selection: Option<ItemId>,
@@ -202,6 +207,9 @@ impl App {
             layers_model: Rc::new(VecModel::default()),
             guides_model: Rc::new(VecModel::default()),
             palette_model: Rc::new(VecModel::default()),
+            props_model: Rc::new(VecModel::default()),
+            props: None,
+            props_generation: 0,
             geoms: Vec::new(),
             selection: None,
             hover: None,
@@ -220,6 +228,7 @@ impl App {
         window.set_layers(ModelRc::from(app.layers_model.clone()));
         window.set_guides(ModelRc::from(app.guides_model.clone()));
         window.set_palette_entries(ModelRc::from(app.palette_model.clone()));
+        window.set_props(ModelRc::from(app.props_model.clone()));
         Rc::new(RefCell::new(app))
     }
 
@@ -236,7 +245,6 @@ impl App {
         self.apply_layout(self.settings.layout);
         let info = &self.gpu.info;
         w.set_gpu_info(format!("{} · {:?}", info.name, info.backend).into());
-        w.set_source_types(ModelRc::new(VecModel::from(source_types())));
 
         self.collection = self
             .settings
@@ -330,7 +338,13 @@ impl App {
     }
 
     fn start(&mut self, project: Project) {
+        let mut registry = estream_engine::SourceRegistry::with_builtins();
+        estream_capture::register_all(&mut registry);
+        if let Some(w) = self.window() {
+            w.set_source_types(ModelRc::new(VecModel::from(source_types(&registry))));
+        }
         let config = EngineConfig {
+            registry,
             gpu: Some(self.gpu.clone()),
             collection_path: Some(self.collection.clone()),
             ..Default::default()
@@ -625,6 +639,7 @@ impl App {
         };
         w.set_selection_box(selection_box);
         w.set_inspect(inspect);
+        self.refresh_props(&snapshot);
         w.set_hover_box(self.hover_box());
     }
 
@@ -678,23 +693,18 @@ impl App {
             .clone()
             .or_else(|| source.map(|s| s.name.clone()))
             .unwrap_or_else(|| "Group".into());
-        let setting = |key: &str| {
-            source
-                .and_then(|s| s.settings.get(key))
-                .and_then(serde_json::Value::as_f64)
-                .map(|v| v as f32)
-        };
-        let color = source
-            .and_then(|s| s.settings.get("color"))
-            .and_then(|c| serde_json::from_value::<Rgba8>(c.clone()).ok())
-            .unwrap_or(Rgba8::WHITE);
+        let kind_label = self
+            .engine
+            .as_ref()
+            .and_then(|e| e.registry().get(kind).map(|t| t.name.clone()))
+            .unwrap_or_else(|| kind_label(kind).to_owned());
         let t = &item.transform;
         let inspect = Inspect {
             has: true,
             id: id_str(item.id),
             name: name.into(),
             kind: kind.into(),
-            kind_label: kind_label(kind).into(),
+            kind_label: kind_label.into(),
             group: item.is_group(),
             problem: status_problem(item.source_id().and_then(|id| infos.get(&id))).into(),
             x: t.position.x,
@@ -717,11 +727,6 @@ impl App {
                 .unwrap_or(0) as i32,
             visible: item.visible,
             locked: item.locked,
-            src_w: setting("width").unwrap_or(geom.source_size.x),
-            src_h: setting("height").unwrap_or(geom.source_size.y),
-            has_color: kind == "color",
-            color: to_color(color),
-            color_hex: hex(color).into(),
         };
         (selection_box, inspect)
     }
@@ -915,31 +920,51 @@ impl App {
             return;
         };
         let canvas_size = Vec2::new(canvas.width as f32, canvas.height as f32);
-        let (title, settings, transform) = match kind {
+        let Some(source_type) = self
+            .engine
+            .as_ref()
+            .and_then(|e| e.registry().get(kind).cloned())
+        else {
+            self.toast(format!("“{kind}” sources aren't available yet"), true);
+            return;
+        };
+        // Start from the schema defaults (first monitor, first camera, …).
+        let mut settings = source_type
+            .schema(&serde_json::json!({}))
+            .with_defaults(&serde_json::json!({}));
+        let transform = match kind {
             "color" => {
                 let (w, h) = (canvas.width / 3, canvas.height / 3);
                 let accent =
                     crate::settings::parse_hex(&self.settings.accent).unwrap_or((108, 140, 255));
-                (
-                    "Color",
-                    serde_json::json!({ "width": w, "height": h, "color": Rgba8::new(accent.0, accent.1, accent.2, 255) }),
-                    estream_core::ItemTransform {
-                        position: (canvas_size - Vec2::new(w as f32, h as f32)) * 0.5,
-                        ..Default::default()
-                    },
-                )
+                settings["width"] = w.into();
+                settings["height"] = h.into();
+                settings["color"] =
+                    serde_json::to_value(Rgba8::new(accent.0, accent.1, accent.2, 255))
+                        .unwrap_or_default();
+                estream_core::ItemTransform {
+                    position: (canvas_size - Vec2::new(w as f32, h as f32)) * 0.5,
+                    ..Default::default()
+                }
             }
-            "test_pattern" => (
-                "Test pattern",
-                serde_json::json!({ "width": canvas.width, "height": canvas.height }),
-                interact::fit_to_canvas(canvas_size),
-            ),
-            other => {
-                self.toast(format!("“{other}” sources aren't available yet"), true);
-                return;
+            "test_pattern" => {
+                settings["width"] = canvas.width.into();
+                settings["height"] = canvas.height.into();
+                interact::fit_to_canvas(canvas_size)
             }
+            "display_capture" | "window_capture" | "game_capture" | "camera" => {
+                interact::fit_to_canvas(canvas_size)
+            }
+            "text" => estream_core::ItemTransform {
+                position: canvas_size * 0.08,
+                ..Default::default()
+            },
+            _ => estream_core::ItemTransform::default(),
         };
-        let name = unique_name(title, snapshot.sources.iter().map(|s| s.name.as_str()));
+        let name = unique_name(
+            &source_type.name,
+            snapshot.sources.iter().map(|s| s.name.as_str()),
+        );
         let source = SourceDef::new(name, kind, settings);
         let mut item = SceneItem::source(source.id);
         item.transform = transform;
@@ -961,6 +986,119 @@ impl App {
             self.selection = Some(item_id);
             self.refresh();
         }
+    }
+
+    // ------------------------------------------------------------ source properties
+
+    /// Rebuilds the generic property rows when the selected source or its settings change.
+    fn refresh_props(&mut self, snapshot: &Project) {
+        let source = self
+            .selection
+            .and_then(|sel| {
+                snapshot
+                    .scenes
+                    .iter()
+                    .find_map(|s| s.find_item(sel))
+                    .and_then(|i| i.source_id())
+            })
+            .and_then(|id| snapshot.source(id));
+        let Some(source) = source else {
+            self.props = None;
+            self.props_model.set_vec(Vec::new());
+            return;
+        };
+        let key = (
+            source.id,
+            source.settings.to_string(),
+            self.props_generation,
+        );
+        if self.props.as_ref().is_some_and(|p| p.0 == key) {
+            return;
+        }
+        let Some(schema) = self.engine.as_ref().and_then(|e| {
+            e.registry()
+                .get(&source.kind)
+                .map(|t| t.schema(&source.settings))
+        }) else {
+            self.props = None;
+            self.props_model.set_vec(Vec::new());
+            return;
+        };
+        let settings = schema.with_defaults(&source.settings);
+        let rows = schema
+            .properties
+            .iter()
+            .map(|p| prop_row(p, &settings[&p.key]))
+            .collect();
+        sync_model(&self.props_model, rows);
+        self.props = Some((key, schema));
+    }
+
+    fn prop(&self, key: &str) -> Option<estream_engine::Property> {
+        self.props.as_ref()?.1.get(key).cloned()
+    }
+
+    pub fn prop_flag(&mut self, key: &str, value: bool) {
+        self.set_setting(key, value.into());
+    }
+
+    pub fn prop_number(&mut self, key: &str, value: f32) {
+        let value = match self.prop(key).map(|p| p.kind) {
+            Some(PropKind::Int { min, max, .. }) => {
+                serde_json::Value::from((value.round() as i64).clamp(min, max))
+            }
+            Some(PropKind::Float { min, max, .. }) => {
+                serde_json::Value::from((value as f64).clamp(min, max))
+            }
+            _ => return,
+        };
+        self.set_setting(key, value);
+    }
+
+    pub fn prop_text(&mut self, key: &str, value: &str) {
+        match self.prop(key).map(|p| p.kind) {
+            Some(PropKind::Color) => match parse_hex_color(value) {
+                Some(c) => self.set_setting(key, serde_json::to_value(c).unwrap_or_default()),
+                None => self.toast("Use a color like #ff8800 or #ff880080".into(), true),
+            },
+            Some(_) => self.set_setting(key, value.into()),
+            None => {}
+        }
+    }
+
+    pub fn prop_color(&mut self, key: &str, color: slint::Color) {
+        self.set_setting(
+            key,
+            serde_json::to_value(from_color(color)).unwrap_or_default(),
+        );
+    }
+
+    pub fn prop_index(&mut self, key: &str, index: i32) {
+        if let Some(PropKind::Select { options }) = self.prop(key).map(|p| p.kind)
+            && let Some(option) = options.get(index.max(0) as usize)
+        {
+            self.set_setting(key, option.value.clone());
+        }
+    }
+
+    pub fn prop_browse(&mut self, key: &str) {
+        let Some(PropKind::Path { filters }) = self.prop(key).map(|p| p.kind) else {
+            return;
+        };
+        let filters: Vec<&str> = filters.iter().map(String::as_str).collect();
+        let mut dialog = rfd::FileDialog::new().set_title("Choose a file");
+        if !filters.is_empty() {
+            dialog = dialog.add_filter("Supported files", &filters);
+        }
+        if let Some(path) = dialog.pick_file() {
+            self.set_setting(key, path.to_string_lossy().into_owned().into());
+        }
+    }
+
+    /// Re-enumerates devices/windows for the property dropdowns.
+    pub fn prop_refresh(&mut self) {
+        self.props_generation += 1;
+        self.refresh();
     }
 
     // ------------------------------------------------------------ inspector
@@ -1016,26 +1154,6 @@ impl App {
                 });
                 return;
             }
-            "src-w" | "src-h" => {
-                let Some(source) = item.source_id() else {
-                    return;
-                };
-                let Some((snapshot, _, _)) = self.canvas_and_scene() else {
-                    return;
-                };
-                let Some(def) = snapshot.source(source) else {
-                    return;
-                };
-                let mut settings = if def.settings.is_object() {
-                    def.settings.clone()
-                } else {
-                    serde_json::json!({})
-                };
-                let key = if field == "src-w" { "width" } else { "height" };
-                settings[key] = serde_json::Value::from(value.clamp(1.0, 16384.0).round() as u32);
-                self.exec(Command::SetSourceSettings { source, settings });
-                return;
-            }
             _ => return,
         }
         patch.transform = Some(t);
@@ -1047,38 +1165,29 @@ impl App {
     }
 
     pub fn inspect_text(&mut self, field: &str, value: &str) {
-        let Some((scene, item)) = self.selected() else {
+        let Some((_, item)) = self.selected() else {
             return;
         };
-        match field {
-            "name" => {
-                let name = value.trim();
-                if name.is_empty() {
-                    return;
-                }
-                match item.source_id() {
-                    Some(source) => {
-                        self.exec(Command::RenameSource {
-                            source,
-                            name: name.into(),
-                        });
-                    }
-                    None => self.update_selected(ItemPatch {
-                        name: Some(Some(name.into())),
-                        ..Default::default()
-                    }),
-                }
-            }
-            "color" => match parse_hex_color(value) {
-                Some(color) => self.set_color(color),
-                None => self.toast("Use a color like #ff8800 or #ff880080".into(), true),
-            },
-            _ => {}
+        let name = value.trim();
+        if field != "name" || name.is_empty() {
+            return;
         }
-        let _ = scene;
+        match item.source_id() {
+            Some(source) => {
+                self.exec(Command::RenameSource {
+                    source,
+                    name: name.into(),
+                });
+            }
+            None => self.update_selected(ItemPatch {
+                name: Some(Some(name.into())),
+                ..Default::default()
+            }),
+        }
     }
 
-    pub fn set_color(&mut self, color: Rgba8) {
+    /// Sets one key of the selected source's settings.
+    fn set_setting(&mut self, key: &str, value: serde_json::Value) {
         let Some((_, item)) = self.selected() else {
             return;
         };
@@ -1096,12 +1205,18 @@ impl App {
         } else {
             serde_json::json!({})
         };
-        settings["color"] = serde_json::to_value(color).unwrap_or_default();
+        if settings.get(key) == Some(&value) {
+            return;
+        }
+        settings[key] = value;
         self.exec(Command::SetSourceSettings { source, settings });
     }
 
     pub fn inspect_color(&mut self, color: slint::Color) {
-        self.set_color(from_color(color));
+        self.set_setting(
+            "color",
+            serde_json::to_value(from_color(color)).unwrap_or_default(),
+        );
     }
 
     pub fn inspect_option(&mut self, field: &str, index: i32) {
@@ -1793,55 +1908,108 @@ fn push_layers(
     }
 }
 
-fn source_types() -> Vec<SourceType> {
-    let t = |kind: &str, title: &str, description: &str, available: bool| SourceType {
-        kind: kind.into(),
-        title: title.into(),
-        description: description.into(),
-        available,
+/// Builds a property row for the inspector from a schema property and its current value.
+fn prop_row(p: &estream_engine::Property, value: &serde_json::Value) -> PropRow {
+    let mut row = PropRow {
+        key: p.key.clone().into(),
+        label: p.label.clone().into(),
+        hint: p.hint.clone().into(),
+        ..Default::default()
     };
-    vec![
-        t(
-            "test_pattern",
-            "Test pattern",
-            "Animated color bars for checking your setup",
-            true,
-        ),
-        t(
-            "color",
-            "Color",
-            "A solid color block — backgrounds, frames, overlays",
-            true,
-        ),
-        t(
-            "display_capture",
-            "Display capture",
-            "Capture an entire monitor",
-            false,
-        ),
-        t(
-            "camera",
-            "Video capture device",
-            "Webcams and capture cards",
-            false,
-        ),
-        t("image", "Image", "PNG, JPEG, WebP and animated GIF", false),
-        t("text", "Text", "Styled text with outline and shadow", false),
-        t(
-            "media",
-            "Media file",
-            "Video and audio files and playlists",
-            false,
-        ),
-        t(
-            "browser",
-            "Browser",
-            "Web pages, alerts and chat widgets",
-            false,
-        ),
-    ]
+    match &p.kind {
+        PropKind::Bool => {
+            row.kind = "bool".into();
+            row.flag = value.as_bool().unwrap_or_default();
+        }
+        PropKind::Int { min, max, step } => {
+            row.kind = "int".into();
+            row.number = value.as_f64().unwrap_or_default() as f32;
+            (row.minimum, row.maximum, row.step) = (*min as f32, *max as f32, *step as f32);
+        }
+        PropKind::Float { min, max, step } => {
+            row.kind = "float".into();
+            row.number = value.as_f64().unwrap_or_default() as f32;
+            (row.minimum, row.maximum, row.step) = (*min as f32, *max as f32, *step as f32);
+            row.decimals = if *step >= 1.0 { 0 } else { 2 };
+        }
+        PropKind::Text { multiline } => {
+            row.kind = if *multiline { "multiline" } else { "text" }.into();
+            row.text = value.as_str().unwrap_or_default().into();
+        }
+        PropKind::Font => {
+            row.kind = "text".into();
+            row.text = value.as_str().unwrap_or_default().into();
+        }
+        PropKind::Path { .. } => {
+            row.kind = "path".into();
+            row.text = value.as_str().unwrap_or_default().into();
+        }
+        PropKind::Color => {
+            row.kind = "color".into();
+            let c = serde_json::from_value::<Rgba8>(value.clone()).unwrap_or(Rgba8::WHITE);
+            row.color = to_color(c);
+            row.text = hex(c).into();
+        }
+        PropKind::Select { options } => {
+            row.kind = "select".into();
+            row.options = ModelRc::new(VecModel::from(
+                options
+                    .iter()
+                    .map(|o| SharedString::from(o.label.as_str()))
+                    .collect::<Vec<_>>(),
+            ));
+            row.index = options
+                .iter()
+                .position(|o| o.value == *value)
+                .map_or(-1, |i| i as i32);
+        }
+    }
+    row
 }
 
+/// Source types for the "Add source" dialog: everything registered, plus upcoming types.
+fn source_types(registry: &estream_engine::SourceRegistry) -> Vec<SourceType> {
+    let order = [
+        "display_capture",
+        "window_capture",
+        "game_capture",
+        "camera",
+        "image",
+        "text",
+        "color",
+        "test_pattern",
+    ];
+    let mut types: Vec<SourceType> = order
+        .iter()
+        .filter_map(|k| registry.get(k))
+        .chain(
+            registry
+                .types()
+                .iter()
+                .filter(|t| !order.contains(&t.kind.as_str())),
+        )
+        .map(|t| SourceType {
+            kind: t.kind.clone().into(),
+            title: t.name.clone().into(),
+            description: t.description.clone().into(),
+            available: true,
+        })
+        .collect();
+    for (kind, title, description) in [
+        ("media", "Media file", "Video and audio files and playlists"),
+        ("browser", "Browser", "Web pages, alerts and chat widgets"),
+    ] {
+        if registry.get(kind).is_none() {
+            types.push(SourceType {
+                kind: kind.into(),
+                title: title.into(),
+                description: description.into(),
+                available: false,
+            });
+        }
+    }
+    types
+}
 /// Wires every UI callback to the controller and starts the UI timers.
 pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     // Runs `f` with the controller; defers if the controller is already borrowed
@@ -1896,6 +2064,13 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     on!(on_recovery_restore, |a| a.recovery(true));
     on!(on_recovery_discard, |a| a.recovery(false));
     on!(on_toggle_theme, |a| a.toggle_theme());
+    on!(on_prop_flag, |a, k, v| a.prop_flag(&k, v));
+    on!(on_prop_number, |a, k, v| a.prop_number(&k, v));
+    on!(on_prop_text, |a, k, v| a.prop_text(&k, &v));
+    on!(on_prop_color, |a, k, v| a.prop_color(&k, v));
+    on!(on_prop_index, |a, k, i| a.prop_index(&k, i));
+    on!(on_prop_browse, |a, k| a.prop_browse(&k));
+    on!(on_prop_refresh, |a| a.prop_refresh());
 
     {
         let app = app.clone();

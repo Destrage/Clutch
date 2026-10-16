@@ -29,6 +29,23 @@ A hook-based capture may come later as a separate change, with a signed helper.
 Use `cosmic-text` for shaping/layout (complex scripts, emoji, fallback fonts) and render glyphs to a
 GPU atlas. Outline and shadow are done with SDF glyphs.
 
+## Implementation notes (learned while building)
+- **Sync without keyed mutexes**: the capture callback copies into a free ring slot, waits on a
+  D3D11 event query, then publishes the slot. The video thread marks the slot it reads, and the
+  writer never touches that slot or the newest one.
+- **Text** is rasterized on the CPU (worker thread, only when the text or style changes) instead
+  of SDF on the GPU: simpler, exact outlines/shadows, and supports color emoji. Revisit if
+  animated text becomes a feature.
+- **No blocking work on the video or control threads**: capture start-up (window enumeration,
+  WinRT activation) runs on a helper thread; image decoding, text rendering and camera reads have
+  their own worker threads; the video thread only polls their results with `try_lock`/`try_recv`.
+- **Deadlock lesson**: `GetWindowTextW` on a window of our own process sends `WM_GETTEXT` to the
+  UI thread. Validation used to enumerate windows on the engine's control thread while the UI
+  thread waited for it, which deadlocked. Our own windows are now skipped before any
+  message-sending call, and source types supply a cheap validation schema that never enumerates.
+- wgpu: two `wgpu::Instance`s on one GPU in the same process can mix up resource IDs when
+  importing HAL textures in parallel; the app uses a single device and tests share one.
+
 ## Risks
 - WGC shows a yellow capture border on Windows 10. Mitigation: request `IsBorderRequired = false`
   where supported (Windows 11).

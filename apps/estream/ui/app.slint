@@ -2,7 +2,7 @@
 
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
-import { SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SourceType } from "types.slint";
+import { SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SourceType, PropRow } from "types.slint";
 import { VSplitter, HSplitter, TooltipLayer, Hint } from "widgets.slint";
 import { Preview } from "preview.slint";
 import { TopBar, ScenesPanel, SourcesPanel, InspectorPanel, MixerPanel, StatusBar } from "panels.slint";
@@ -38,6 +38,7 @@ export component AppWindow inherits Window {
     in property <[SceneRow]> scenes;
     in property <[LayerRow]> layers;
     in property <Inspect> inspect;
+    in property <[PropRow]> props;
     in-out property <string> renaming-scene;
 
     // Top bar and status
@@ -92,6 +93,13 @@ export component AppWindow inherits Window {
     callback inspect-option(string, int);
     callback inspect-toggle(string, bool);
     callback inspect-commit();
+    callback prop-flag(string, bool);
+    callback prop-number(string, float);
+    callback prop-text(string, string);
+    callback prop-color(string, color);
+    callback prop-index(string, int);
+    callback prop-browse(string);
+    callback prop-refresh();
     callback palette-query-changed(string);
     callback palette-run(string);
     callback add-source-pick(string);
@@ -217,6 +225,14 @@ export component AppWindow inherits Window {
                     toggle(field, v) => { root.inspect-toggle(field, v); }
                     commit => { root.inspect-commit(); }
                     action(id) => { root.action(id); }
+                    props: root.props;
+                    prop-flag(k, v) => { root.prop-flag(k, v); }
+                    prop-number(k, v) => { root.prop-number(k, v); }
+                    prop-text(k, v) => { root.prop-text(k, v); }
+                    prop-color(k, v) => { root.prop-color(k, v); }
+                    prop-index(k, i) => { root.prop-index(k, i); }
+                    prop-browse(k) => { root.prop-browse(k); }
+                    prop-refresh => { root.prop-refresh(); }
                 }
             }
             StatusBar {

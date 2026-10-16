@@ -7,6 +7,7 @@ pub mod context;
 pub mod convert;
 pub mod pool;
 pub mod readback;
+pub mod yuv;
 
 pub use compositor::{CANVAS_FORMAT, CanvasRenderer, Compositor, DrawItem};
 pub use context::{GpuContext, GpuError, GpuOptions};
@@ -14,5 +15,7 @@ pub use convert::{
     ConvertInput, Nv12Target, OutputConverter, PREVIEW_FORMAT, PREVIEW_VIEW_FORMAT,
     create_preview_texture, preview_target_view,
 };
+pub use glam;
 pub use pool::TexturePool;
 pub use wgpu;
+pub use yuv::{Nv12Frame, YUV_OUTPUT_FORMAT, YuvConverter, YuvMatrix};

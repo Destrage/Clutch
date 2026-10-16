@@ -12,12 +12,16 @@ pub mod engine;
 pub mod frame_clock;
 pub mod graph;
 pub mod history;
+pub mod properties;
 pub mod source;
 pub mod video;
 
 pub use command::{CanvasPatch, Change, Command, CommandError, ItemPatch};
 pub use engine::{Engine, EngineConfig, EngineError, Event, Origin, Subscription};
-pub use source::{SourceRegistry, SourceStatus, VideoSource};
+pub use properties::{PropKind, Property, PropertySchema, SelectOption};
+pub use source::{
+    SourceContext, SourceError, SourceFrame, SourceRegistry, SourceStatus, SourceType, VideoSource,
+};
 pub use video::{CanvasFrame, CanvasOutput, SourceInfo, VideoCore};
 
 pub use estream_core as core;

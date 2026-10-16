@@ -278,3 +278,53 @@ fn nv12_bt709_limited_range() {
         &uv[2..4]
     );
 }
+
+#[test]
+fn nv12_to_rgb_matches_reference_colors() {
+    use estream_gpu::{YuvConverter, YuvMatrix};
+    let gpu = gpu();
+    let converter = YuvConverter::new(&gpu);
+    let frame = converter.create_frame(&gpu, 4, 2);
+    // 4x2 BT.709 limited range: left half white, right half pure red.
+    // Y plane (2 rows × 4), then CbCr plane (1 row × 2 pairs).
+    let data = [
+        235, 235, 63, 63, //
+        235, 235, 63, 63, //
+        128, 128, 102, 240,
+    ];
+    frame.upload(&gpu, &data, 4, YuvMatrix::Bt709, false);
+    let mut enc = gpu.device.create_command_encoder(&Default::default());
+    frame.convert(&converter, &mut enc);
+    gpu.queue.submit([enc.finish()]);
+    let px = readback::read_texture(&gpu, &frame.output).unwrap();
+    let close = |a: u8, b: u8| (a as i32 - b as i32).abs() <= 2;
+    assert!(
+        px[..3].iter().all(|v| close(*v, 255)),
+        "white {:?}",
+        &px[..4]
+    );
+    let red = &px[12..16];
+    assert!(
+        close(red[0], 255) && close(red[1], 0) && close(red[2], 0),
+        "red {red:?}"
+    );
+
+    // Full-range BT.601 mid grey.
+    let frame = converter.create_frame(&gpu, 2, 2);
+    frame.upload(
+        &gpu,
+        &[128, 128, 128, 128, 128, 128],
+        2,
+        YuvMatrix::Bt601,
+        true,
+    );
+    let mut enc = gpu.device.create_command_encoder(&Default::default());
+    frame.convert(&converter, &mut enc);
+    gpu.queue.submit([enc.finish()]);
+    let px = readback::read_texture(&gpu, &frame.output).unwrap();
+    assert!(
+        px[..3].iter().all(|v| close(*v, 128)),
+        "grey {:?}",
+        &px[..4]
+    );
+}

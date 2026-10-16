@@ -35,6 +35,9 @@ wgpu = "30.0.1"
 slint = { version = "1.18.1", default-features = false, features = ["std", "backend-winit", "renderer-femtovg-wgpu", "unstable-wgpu-30", "accessibility", "compat-1-2"] }
 slint-build = "1.18.1"
 dirs = "7.0.0"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
+cosmic-text = "0.19.0"
+rfd = "0.17.2"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

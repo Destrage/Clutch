@@ -1,11 +1,11 @@
 //! Runtime video sources: the trait every source implements, the type registry,
 //! and the built-in `color` and `test_pattern` sources.
 
+use crate::properties::{PropKind, Property, PropertySchema};
 use estream_core::{Rgba8, Size, Timestamp};
 use estream_gpu::{Compositor, GpuContext, wgpu};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Availability of a source, shown in the UI.
@@ -57,16 +57,76 @@ pub trait VideoSource: Send {
 
 type Factory =
     dyn Fn(&SourceContext<'_>, &Value) -> Result<Box<dyn VideoSource>, SourceError> + Send + Sync;
+type SchemaFn = dyn Fn(&Value) -> PropertySchema + Send + Sync;
 
-/// Maps source type identifiers (e.g. `"color"`) to constructors.
+/// Describes a source type: identity, UI text, settings schema and constructor.
+#[derive(Clone)]
+pub struct SourceType {
+    pub kind: String,
+    pub name: String,
+    pub description: String,
+    /// Builds the schema for the current settings (option lists such as
+    /// devices or windows are enumerated each time).
+    schema: Arc<SchemaFn>,
+    /// Cheap schema used to validate commands (must not enumerate devices or
+    /// windows: it runs on the engine's control thread).
+    validation: Option<Arc<SchemaFn>>,
+    factory: Arc<Factory>,
+}
+
+impl SourceType {
+    pub fn new(
+        kind: &str,
+        name: &str,
+        description: &str,
+        schema: impl Fn(&Value) -> PropertySchema + Send + Sync + 'static,
+        factory: impl Fn(&SourceContext<'_>, &Value) -> Result<Box<dyn VideoSource>, SourceError>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        Self {
+            kind: kind.into(),
+            name: name.into(),
+            description: description.into(),
+            schema: Arc::new(schema),
+            validation: None,
+            factory: Arc::new(factory),
+        }
+    }
+
+    /// Uses schema for validation instead of the full (UI) schema.
+    pub fn with_validation(
+        mut self,
+        schema: impl Fn(&Value) -> PropertySchema + Send + Sync + 'static,
+    ) -> Self {
+        self.validation = Some(Arc::new(schema));
+        self
+    }
+
+    pub fn validation_schema(&self, settings: &Value) -> PropertySchema {
+        match &self.validation {
+            Some(v) => v(settings),
+            None => self.schema(settings),
+        }
+    }
+
+    pub fn schema(&self, settings: &Value) -> PropertySchema {
+        (self.schema)(settings)
+    }
+}
+
+/// Maps source type identifiers (e.g. `"color"`) to their [`SourceType`].
 #[derive(Clone, Default)]
 pub struct SourceRegistry {
-    factories: HashMap<String, Arc<Factory>>,
+    types: Vec<SourceType>,
 }
 
 impl std::fmt::Debug for SourceRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_set().entries(self.factories.keys()).finish()
+        f.debug_set()
+            .entries(self.types.iter().map(|t| &t.kind))
+            .finish()
     }
 }
 
@@ -74,32 +134,71 @@ impl SourceRegistry {
     /// A registry with all built-in source types.
     pub fn with_builtins() -> Self {
         let mut r = Self::default();
-        r.register("color", |ctx, s| {
-            let mut src = ColorSource::new(ctx);
-            src.update(ctx, s)?;
-            Ok(Box::new(src))
-        });
-        r.register("test_pattern", |ctx, s| {
-            let mut src = TestPatternSource::new(ctx);
-            src.update(ctx, s)?;
-            Ok(Box::new(src))
-        });
+        r.register(SourceType::new(
+            "test_pattern",
+            "Test pattern",
+            "Animated color bars for checking your setup",
+            |_| {
+                PropertySchema::new(vec![
+                    Property::int("width", "Width", 1, 16384, 1920),
+                    Property::int("height", "Height", 1, 16384, 1080),
+                ])
+            },
+            |ctx, s| {
+                let mut src = TestPatternSource::new(ctx);
+                src.update(ctx, s)?;
+                Ok(Box::new(src))
+            },
+        ));
+        r.register(SourceType::new(
+            "color",
+            "Color",
+            "A solid color block — backgrounds, frames, overlays",
+            |_| {
+                PropertySchema::new(vec![
+                    Property::int("width", "Width", 1, 16384, 1920),
+                    Property::int("height", "Height", 1, 16384, 1080),
+                    Property::new(
+                        "color",
+                        "Color",
+                        PropKind::Color,
+                        serde_json::to_value(Rgba8::WHITE).unwrap_or_default(),
+                    ),
+                ])
+            },
+            |ctx, s| {
+                let mut src = ColorSource::new(ctx);
+                src.update(ctx, s)?;
+                Ok(Box::new(src))
+            },
+        ));
         r
     }
 
-    pub fn register(
-        &mut self,
-        kind: &str,
-        factory: impl Fn(&SourceContext<'_>, &Value) -> Result<Box<dyn VideoSource>, SourceError>
-        + Send
-        + Sync
-        + 'static,
-    ) {
-        self.factories.insert(kind.to_owned(), Arc::new(factory));
+    /// Adds or replaces a source type.
+    pub fn register(&mut self, source_type: SourceType) {
+        self.types.retain(|t| t.kind != source_type.kind);
+        self.types.push(source_type);
     }
 
     pub fn kinds(&self) -> impl Iterator<Item = &str> {
-        self.factories.keys().map(String::as_str)
+        self.types.iter().map(|t| t.kind.as_str())
+    }
+
+    pub fn types(&self) -> &[SourceType] {
+        &self.types
+    }
+
+    pub fn get(&self, kind: &str) -> Option<&SourceType> {
+        self.types.iter().find(|t| t.kind == kind)
+    }
+
+    /// Validates settings for `kind`. Unknown kinds are accepted (they show as unavailable).
+    pub fn validate(&self, kind: &str, settings: &Value) -> Result<(), String> {
+        match self.get(kind) {
+            Some(t) => t.validation_schema(settings).validate(settings),
+            None => Ok(()),
+        }
     }
 
     pub fn create(
@@ -108,22 +207,22 @@ impl SourceRegistry {
         ctx: &SourceContext<'_>,
         settings: &Value,
     ) -> Result<Box<dyn VideoSource>, SourceError> {
-        let factory = self
-            .factories
+        let source_type = self
             .get(kind)
             .ok_or_else(|| SourceError::UnknownKind(kind.to_owned()))?;
-        factory(ctx, settings)
+        (source_type.factory)(ctx, settings)
     }
 }
-
-fn parse<T: for<'de> Deserialize<'de> + Default>(settings: &Value) -> Result<T, SourceError> {
+/// Parses settings into a typed struct (missing fields use the struct's defaults).
+pub fn parse<T: for<'de> Deserialize<'de> + Default>(settings: &Value) -> Result<T, SourceError> {
     if settings.is_null() {
         return Ok(T::default());
     }
     serde_json::from_value(settings.clone()).map_err(|e| SourceError::Settings(e.to_string()))
 }
 
-fn check_size(width: u32, height: u32) -> Result<(), SourceError> {
+/// Checks a texture size is within GPU limits.
+pub fn check_size(width: u32, height: u32) -> Result<(), SourceError> {
     if width == 0 || height == 0 || width > 16384 || height > 16384 {
         return Err(SourceError::Settings(format!(
             "size {width}x{height} must be within 1..=16384"

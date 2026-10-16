@@ -62,11 +62,6 @@ export struct Inspect {
     blend: int,
     visible: bool,
     locked: bool,
-    src-w: float,
-    src-h: float,
-    has-color: bool,
-    color: color,
-    color-hex: string,
 }
 
 export struct PaletteEntry {
@@ -86,4 +81,23 @@ export struct SourceType {
     title: string,
     description: string,
     available: bool,
+}
+
+// One editable source setting, rendered generically by the inspector.
+export struct PropRow {
+    key: string,
+    label: string,
+    hint: string,
+    // "bool" | "int" | "float" | "text" | "multiline" | "color" | "path" | "select"
+    kind: string,
+    flag: bool,
+    number: float,
+    minimum: float,
+    maximum: float,
+    step: float,
+    decimals: int,
+    text: string,
+    color: color,
+    options: [string],
+    index: int,
 }

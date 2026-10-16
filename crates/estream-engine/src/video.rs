@@ -172,7 +172,11 @@ impl VideoCore {
                 (
                     *id,
                     SourceInfo {
-                        status: s.status.clone(),
+                        // Live status from the source unless its settings failed to apply.
+                        status: match (&s.status, s.instance.as_deref()) {
+                            (SourceStatus::Error(_), _) | (_, None) => s.status.clone(),
+                            (_, Some(instance)) => instance.status(),
+                        },
                         size,
                     },
                 )
@@ -430,12 +434,24 @@ pub(crate) trait VideoSink: Send + Sync + 'static {
 /// Main loop of the video thread.
 pub(crate) fn run(mut core: VideoCore, clock: EngineClock, sink: Arc<dyn VideoSink>) {
     let mut revision = u64::MAX;
+    let mut last_statuses = HashMap::new();
+    let mut statuses_checked = Instant::now();
     while !sink.shutdown_requested().load(Ordering::Acquire) {
         let graph = sink.graph();
-        if graph.revision != revision {
+        let changed = graph.revision != revision;
+        if changed {
             revision = graph.revision;
             core.sync(graph, clock.now());
-            sink.publish(core.outputs(), core.statuses());
+        }
+        // Sources change state on their own (devices connect, windows close,
+        // frame sizes change), so re-check a few times per second.
+        if changed || statuses_checked.elapsed() >= Duration::from_millis(250) {
+            statuses_checked = Instant::now();
+            let statuses = core.statuses();
+            if changed || statuses != last_statuses {
+                sink.publish(core.outputs(), statuses.clone());
+                last_statuses = statuses;
+            }
         }
         let Some(deadline) = core.next_deadline() else {
             std::thread::sleep(Duration::from_millis(5));

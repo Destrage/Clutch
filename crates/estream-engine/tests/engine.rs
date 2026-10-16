@@ -410,3 +410,37 @@ fn golden_composite_scene() {
         );
     }
 }
+
+#[test]
+fn invalid_source_settings_are_rejected_by_schema() {
+    let engine = Engine::start(
+        Project::new_default(320, 180, Rational::fps(30)),
+        EngineConfig {
+            video: false,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let (source, _) = add_fullscreen(&engine, "color", serde_json::json!({ "width": 100 }));
+    let before = engine.snapshot();
+    let err = engine
+        .execute(Command::SetSourceSettings {
+            source,
+            settings: serde_json::json!({ "width": 999_999 }),
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("between 1 and 16384"), "{err}");
+    assert_eq!(*engine.snapshot(), *before);
+    // Adding a source with bad settings is rejected too (also inside batches).
+    let bad = SourceDef::new("Bad", "color", serde_json::json!({ "color": "red" }));
+    assert!(
+        engine
+            .execute(Command::Batch {
+                commands: vec![Command::AddSource {
+                    source: bad,
+                    index: 0
+                }]
+            })
+            .is_err()
+    );
+}
