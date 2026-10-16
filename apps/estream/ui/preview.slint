@@ -1,0 +1,217 @@
+// Live canvas preview with on-canvas editing overlay.
+// Zoom and pan live here; selection/drag logic lives in Rust (interact.rs).
+
+import { Theme } from "theme.slint";
+import { CanvasBox, Guide } from "types.slint";
+
+export component Preview inherits Rectangle {
+    in property <image> frame;
+    in property <float> canvas-w: 1920;
+    in property <float> canvas-h: 1080;
+    in property <CanvasBox> selection;
+    in property <CanvasBox> hover;
+    in property <[Guide]> guides;
+    // Cursor requested by Rust for the current hover target.
+    in property <string> cursor: "default";
+    in property <bool> space-down;
+    in-out property <float> zoom: 1;
+    in-out property <length> pan-x;
+    in-out property <length> pan-y;
+
+    // kind: "down" | "move" | "up"; x/y in canvas pixels; px = canvas px per screen px.
+    callback pointer(kind: string, x: float, y: float, px: float, shift: bool, alt: bool, ctrl: bool);
+
+    out property <float> fit: max(0.01, min((self.width - 48px) / 1px / canvas-w, (self.height - 48px) / 1px / canvas-h));
+    out property <float> scale: fit * zoom;
+    property <length> img-w: canvas-w * scale * 1px;
+    property <length> img-h: canvas-h * scale * 1px;
+    property <length> img-x: (self.width - img-w) / 2 + pan-x;
+    property <length> img-y: (self.height - img-h) / 2 + pan-y;
+    property <bool> panning;
+    property <length> pan-start-x;
+    property <length> pan-start-y;
+
+    public function zoom-fit() {
+        zoom = 1;
+        pan-x = 0;
+        pan-y = 0;
+    }
+    public function zoom-actual() {
+        zoom = 1 / fit;
+        pan-x = 0;
+        pan-y = 0;
+    }
+
+    background: Theme.canvas-bg;
+    clip: true;
+    accessible-role: image;
+    accessible-label: "Canvas preview";
+
+    // Canvas frame and shadow.
+    Rectangle {
+        x: img-x - 1px;
+        y: img-y - 1px;
+        width: img-w + 2px;
+        height: img-h + 2px;
+        background: #000000;
+        border-width: 1px;
+        border-color: Theme.border-strong;
+        drop-shadow-blur: 30px;
+        drop-shadow-color: #00000070;
+    }
+    Image {
+        x: img-x;
+        y: img-y;
+        width: img-w;
+        height: img-h;
+        source: root.frame;
+        image-fit: fill;
+    }
+
+    // Snap guides.
+    for g in root.guides: Rectangle {
+        x: g.vertical ? img-x + g.pos * scale * 1px : img-x;
+        y: g.vertical ? img-y : img-y + g.pos * scale * 1px;
+        width: g.vertical ? 1px : img-w;
+        height: g.vertical ? img-h : 1px;
+        background: #ff4fd8;
+    }
+
+    // Hover outline.
+    if hover.visible && !(selection.visible && hover.cx == selection.cx && hover.cy == selection.cy): Rectangle {
+        x: img-x + (hover.cx - hover.w / 2) * scale * 1px;
+        y: img-y + (hover.cy - hover.h / 2) * scale * 1px;
+        width: hover.w * scale * 1px;
+        height: hover.h * scale * 1px;
+        transform-rotation: hover.rotation * 1deg;
+        border-width: 1px;
+        border-color: Theme.accent.with-alpha(0.55);
+    }
+
+    // Selection box with handles.
+    if selection.visible: Rectangle {
+        x: img-x + (selection.cx - selection.w / 2) * scale * 1px;
+        y: img-y + (selection.cy - selection.h / 2) * scale * 1px;
+        width: selection.w * scale * 1px;
+        height: selection.h * scale * 1px;
+        transform-rotation: selection.rotation * 1deg;
+        border-width: 1.5px;
+        border-color: selection.locked ? Theme.warn : Theme.accent;
+
+        if selection.handles && !selection.locked: Rectangle {
+            // Rotation handle stem and knob.
+            Rectangle {
+                x: (parent.width - 1px) / 2;
+                y: -28px;
+                width: 1px;
+                height: 28px;
+                background: Theme.accent;
+            }
+            Rectangle {
+                x: parent.width / 2 - 6px;
+                y: -28px - 6px;
+                width: 12px;
+                height: 12px;
+                border-radius: 6px;
+                background: #ffffff;
+                border-width: 1.5px;
+                border-color: Theme.accent;
+            }
+            for h in [
+                { fx: 0, fy: 0 }, { fx: 0.5, fy: 0 }, { fx: 1, fy: 0 }, { fx: 1, fy: 0.5 },
+                { fx: 1, fy: 1 }, { fx: 0.5, fy: 1 }, { fx: 0, fy: 1 }, { fx: 0, fy: 0.5 },
+            ]: Rectangle {
+                x: parent.width * h.fx - 4.5px;
+                y: parent.height * h.fy - 4.5px;
+                width: 9px;
+                height: 9px;
+                border-radius: 2px;
+                background: #ffffff;
+                border-width: 1.5px;
+                border-color: Theme.accent;
+            }
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: root.panning || root.space-down ? (root.panning ? MouseCursor.grabbing : MouseCursor.grab)
+            : root.cursor == "move" ? MouseCursor.move
+            : root.cursor == "nwse" ? MouseCursor.nwse-resize
+            : root.cursor == "nesw" ? MouseCursor.nesw-resize
+            : root.cursor == "ew" ? MouseCursor.ew-resize
+            : root.cursor == "ns" ? MouseCursor.ns-resize
+            : root.cursor == "rotate" ? MouseCursor.crosshair
+            : root.cursor == "pointer" ? MouseCursor.pointer
+            : MouseCursor.default;
+
+        function canvas-x() -> float { return (self.mouse-x - root.img-x) / 1px / root.scale; }
+        function canvas-y() -> float { return (self.mouse-y - root.img-y) / 1px / root.scale; }
+
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) {
+                if (e.button == PointerEventButton.middle || (e.button == PointerEventButton.left && root.space-down)) {
+                    root.panning = true;
+                    root.pan-start-x = root.pan-x - self.mouse-x;
+                    root.pan-start-y = root.pan-y - self.mouse-y;
+                } else if (e.button == PointerEventButton.left) {
+                    root.pointer("down", canvas-x(), canvas-y(), 1 / root.scale,
+                        e.modifiers.shift, e.modifiers.alt, e.modifiers.control);
+                }
+            } else if (e.kind == PointerEventKind.up) {
+                if (root.panning) {
+                    root.panning = false;
+                } else {
+                    root.pointer("up", canvas-x(), canvas-y(), 1 / root.scale,
+                        e.modifiers.shift, e.modifiers.alt, e.modifiers.control);
+                }
+            } else if (e.kind == PointerEventKind.move) {
+                if (root.panning) {
+                    root.pan-x = root.pan-start-x + self.mouse-x;
+                    root.pan-y = root.pan-start-y + self.mouse-y;
+                } else {
+                    root.pointer("move", canvas-x(), canvas-y(), 1 / root.scale,
+                        e.modifiers.shift, e.modifiers.alt, e.modifiers.control);
+                }
+            }
+        }
+
+        scroll-event(e) => {
+            if (e.modifiers.control) {
+                // Zoom around the cursor.
+                let cx = (self.mouse-x - root.img-x) / root.scale;
+                let cy = (self.mouse-y - root.img-y) / root.scale;
+                let factor = e.delta-y > 0 ? 1.15 : 1 / 1.15;
+                let new-zoom = clamp(root.zoom * factor, 0.1, 16);
+                let new-scale = root.fit * new-zoom;
+                root.zoom = new-zoom;
+                root.pan-x = self.mouse-x - cx * new-scale - (root.width - root.canvas-w * new-scale * 1px) / 2;
+                root.pan-y = self.mouse-y - cy * new-scale - (root.height - root.canvas-h * new-scale * 1px) / 2;
+            } else if (e.modifiers.shift) {
+                root.pan-x += e.delta-y;
+            } else {
+                root.pan-x += e.delta-x;
+                root.pan-y += e.delta-y;
+            }
+            return EventResult.accept;
+        }
+    }
+
+    // Zoom indicator.
+    Rectangle {
+        x: parent.width - self.width - 12px;
+        y: parent.height - self.height - 12px;
+        width: zoom-label.preferred-width + 16px;
+        height: 22px;
+        border-radius: 11px;
+        background: Theme.surface.with-alpha(0.85);
+        border-width: 1px;
+        border-color: Theme.border;
+        zoom-label := Text {
+            text: round(root.scale * 100) + "%";
+            color: Theme.text-muted;
+            font-size: Theme.font-xs;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}

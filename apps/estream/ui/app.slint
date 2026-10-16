@@ -1,0 +1,286 @@
+// eStream main window.
+
+import { Theme } from "theme.slint";
+import { Icons } from "icons.slint";
+import { SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SourceType } from "types.slint";
+import { VSplitter, HSplitter, TooltipLayer, Hint } from "widgets.slint";
+import { Preview } from "preview.slint";
+import { TopBar, ScenesPanel, SourcesPanel, InspectorPanel, MixerPanel, StatusBar } from "panels.slint";
+import { CommandPalette, AddSourceDialog, SetupWizard, RecoveryPrompt, Toast } from "overlays.slint";
+
+export { Theme }
+
+export component AppWindow inherits Window {
+    in property <string> window-title: "eStream";
+    title: window-title;
+    preferred-width: 1440px;
+    preferred-height: 900px;
+    min-width: 980px;
+    min-height: 620px;
+    background: Theme.bg;
+    default-font-family: Theme.font-family;
+    default-font-size: Theme.font-m;
+    icon: Icons.radio;
+
+    // "loading" | "wizard" | "recovery" | "ready"
+    in property <string> startup: "loading";
+
+    // Preview
+    in property <image> preview-frame;
+    in property <float> canvas-w: 1920;
+    in property <float> canvas-h: 1080;
+    in property <CanvasBox> selection-box;
+    in property <CanvasBox> hover-box;
+    in property <[Guide]> guides;
+    in property <string> cursor: "default";
+
+    // Panels
+    in property <[SceneRow]> scenes;
+    in property <[LayerRow]> layers;
+    in property <Inspect> inspect;
+    in-out property <string> renaming-scene;
+
+    // Top bar and status
+    in property <string> collection-name: "Untitled";
+    in property <string> canvas-info;
+    in property <string> gpu-info;
+    in property <bool> dirty;
+    in property <bool> can-undo;
+    in property <bool> can-redo;
+    in property <float> fps;
+    in property <float> target-fps: 60;
+    in property <float> render-ms;
+    in property <int> lagged;
+    in property <string> status-message;
+
+    // Overlays
+    in-out property <bool> palette-open;
+    in property <[PaletteEntry]> palette-entries;
+    in-out property <string> palette-query;
+    in-out property <int> palette-current;
+    in-out property <bool> add-source-open;
+    in property <[SourceType]> source-types;
+    in property <[Preset]> presets;
+    in property <string> wizard-gpu;
+    in property <string> wizard-encoders;
+    in-out property <int> wizard-current;
+    in property <string> toast-text;
+    in property <bool> toast-error;
+
+    // Layout (persisted)
+    in-out property <length> scenes-width: 220px;
+    in-out property <length> inspector-width: 300px;
+    in-out property <length> bottom-height: 230px;
+    in-out property <length> sources-width: 420px;
+
+    property <bool> space-down;
+
+    callback key(string, bool, bool, bool) -> bool;
+    callback preview-pointer(string, float, float, float, bool, bool, bool);
+    callback scene-activate(string);
+    callback scene-add();
+    callback scene-duplicate(string);
+    callback scene-remove(string);
+    callback scene-rename(string, string);
+    callback layer-select(string);
+    callback layer-toggle-visible(string);
+    callback layer-toggle-lock(string);
+    callback action(string);
+    callback inspect-edit(string, float);
+    callback inspect-text(string, string);
+    callback inspect-color(color);
+    callback inspect-option(string, int);
+    callback inspect-toggle(string, bool);
+    callback inspect-commit();
+    callback palette-query-changed(string);
+    callback palette-run(string);
+    callback add-source-pick(string);
+    callback wizard-create(int);
+    callback recovery-restore();
+    callback recovery-discard();
+    callback toggle-theme();
+
+    public function zoom-fit() { preview.zoom-fit(); }
+    public function zoom-actual() { preview.zoom-actual(); }
+    public function focus-main() { main-keys.focus(); }
+
+    main-keys := FocusScope {
+        width: 100%;
+        height: 100%;
+        init => { self.focus(); }
+        key-pressed(e) => {
+            if (e.text == " ") {
+                root.space-down = true;
+                return EventResult.accept;
+            }
+            if (root.key(e.text, e.modifiers.control, e.modifiers.shift, e.modifiers.alt)) {
+                return EventResult.accept;
+            }
+            return EventResult.reject;
+        }
+        key-released(e) => {
+            if (e.text == " ") {
+                root.space-down = false;
+            }
+            return EventResult.reject;
+        }
+
+        VerticalLayout {
+            width: parent.width;
+            height: parent.height;
+            TopBar {
+                collection-name: root.collection-name;
+                canvas-info: root.canvas-info;
+                dirty: root.dirty;
+                can-undo: root.can-undo;
+                can-redo: root.can-redo;
+                open-palette => { root.action("palette"); }
+                undo => { root.action("undo"); }
+                redo => { root.action("redo"); }
+                toggle-theme => { root.toggle-theme(); }
+            }
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 10px;
+                vertical-stretch: 1;
+
+                ScenesPanel {
+                    width: root.scenes-width;
+                    scenes: root.scenes;
+                    renaming <=> root.renaming-scene;
+                    activate(id) => { root.scene-activate(id); main-keys.focus(); }
+                    add => { root.scene-add(); }
+                    duplicate(id) => { root.scene-duplicate(id); }
+                    remove(id) => { root.scene-remove(id); }
+                    rename(id, name) => { root.scene-rename(id, name); main-keys.focus(); }
+                }
+                VSplitter { size <=> root.scenes-width; minimum: 160px; maximum: 420px; }
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    Rectangle {
+                        vertical-stretch: 1;
+                        border-radius: Theme.radius-l;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        clip: true;
+                        preview := Preview {
+                            frame: root.preview-frame;
+                            canvas-w: root.canvas-w;
+                            canvas-h: root.canvas-h;
+                            selection: root.selection-box;
+                            hover: root.hover-box;
+                            guides: root.guides;
+                            cursor: root.cursor;
+                            space-down: root.space-down;
+                            pointer(kind, x, y, px, shift, alt, ctrl) => {
+                                if (kind == "down") { main-keys.focus(); }
+                                root.preview-pointer(kind, x, y, px, shift, alt, ctrl);
+                            }
+                        }
+                    }
+                    HSplitter {
+                        size <=> root.bottom-height;
+                        invert: true;
+                        minimum: 140px;
+                        maximum: 520px;
+                    }
+                    HorizontalLayout {
+                        height: root.bottom-height;
+                        SourcesPanel {
+                            width: root.sources-width;
+                            layers: root.layers;
+                            select(id) => { root.layer-select(id); main-keys.focus(); }
+                            toggle-visible(id) => { root.layer-toggle-visible(id); }
+                            toggle-lock(id) => { root.layer-toggle-lock(id); }
+                            add => { root.action("source.add"); }
+                            remove => { root.action("item.remove"); }
+                            move-up => { root.action("item.up"); }
+                            move-down => { root.action("item.down"); }
+                            group => { root.action("item.group"); }
+                        }
+                        VSplitter { size <=> root.sources-width; minimum: 260px; maximum: 900px; }
+                        MixerPanel { horizontal-stretch: 1; }
+                    }
+                }
+
+                VSplitter { size <=> root.inspector-width; invert: true; minimum: 260px; maximum: 520px; }
+                InspectorPanel {
+                    width: root.inspector-width;
+                    sel: root.inspect;
+                    canvas-info: root.canvas-info;
+                    gpu-info: root.gpu-info;
+                    edit(field, v) => { root.inspect-edit(field, v); }
+                    edit-text(field, v) => { root.inspect-text(field, v); }
+                    edit-color(c) => { root.inspect-color(c); }
+                    select-option(field, i) => { root.inspect-option(field, i); }
+                    toggle(field, v) => { root.inspect-toggle(field, v); }
+                    commit => { root.inspect-commit(); }
+                    action(id) => { root.action(id); }
+                }
+            }
+            StatusBar {
+                fps: root.fps;
+                target-fps: root.target-fps;
+                render-ms: root.render-ms;
+                lagged: root.lagged;
+                gpu: root.gpu-info;
+                message: root.status-message;
+            }
+        }
+    }
+
+    if root.palette-open: CommandPalette {
+        entries: root.palette-entries;
+        query <=> root.palette-query;
+        current <=> root.palette-current;
+        query-changed(q) => { root.palette-query-changed(q); }
+        run(id) => {
+            root.palette-open = false;
+            main-keys.focus();
+            root.palette-run(id);
+        }
+        dismiss => {
+            root.palette-open = false;
+            main-keys.focus();
+        }
+    }
+
+    if root.add-source-open: AddSourceDialog {
+        types: root.source-types;
+        pick(kind) => {
+            root.add-source-open = false;
+            main-keys.focus();
+            root.add-source-pick(kind);
+        }
+        dismiss => {
+            root.add-source-open = false;
+            main-keys.focus();
+        }
+    }
+
+    if root.startup == "wizard": SetupWizard {
+        presets: root.presets;
+        gpu: root.wizard-gpu;
+        encoders: root.wizard-encoders;
+        current <=> root.wizard-current;
+        create(i) => { root.wizard-create(i); }
+    }
+
+    if root.startup == "recovery": RecoveryPrompt {
+        restore => { root.recovery-restore(); }
+        discard => { root.recovery-discard(); }
+    }
+
+    if root.toast-text != "": Toast {
+        x: (parent.width - self.width) / 2;
+        y: parent.height - self.height - 44px;
+        text: root.toast-text;
+        error: root.toast-error;
+    }
+
+    TooltipLayer {
+        width: 100%;
+        height: 100%;
+    }
+}

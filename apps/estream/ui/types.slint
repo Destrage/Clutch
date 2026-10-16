@@ -1,0 +1,89 @@
+// Data passed between Rust and the UI.
+
+export struct SceneRow {
+    id: string,
+    name: string,
+    active: bool,
+    items: int,
+}
+
+export struct LayerRow {
+    id: string,
+    name: string,
+    // "color" | "test_pattern" | "group" | other source kind
+    kind: string,
+    visible: bool,
+    locked: bool,
+    depth: int,
+    group: bool,
+    selected: bool,
+    // Empty when the source is active; otherwise a human-readable problem.
+    problem: string,
+}
+
+// Selection or hover box in canvas pixels (rotated around its center).
+export struct CanvasBox {
+    visible: bool,
+    cx: float,
+    cy: float,
+    w: float,
+    h: float,
+    rotation: float,
+    handles: bool,
+    locked: bool,
+}
+
+export struct Guide {
+    vertical: bool,
+    pos: float,
+}
+
+export struct Inspect {
+    has: bool,
+    id: string,
+    name: string,
+    kind: string,
+    kind-label: string,
+    group: bool,
+    problem: string,
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    rotation: float,
+    // 0 free scale, 1 stretch, 2 fit, 3 fill
+    size-mode: int,
+    crop-l: float,
+    crop-t: float,
+    crop-r: float,
+    crop-b: float,
+    opacity: float,
+    // 0 normal, 1 additive, 2 multiply, 3 screen
+    blend: int,
+    visible: bool,
+    locked: bool,
+    src-w: float,
+    src-h: float,
+    has-color: bool,
+    color: color,
+    color-hex: string,
+}
+
+export struct PaletteEntry {
+    id: string,
+    title: string,
+    category: string,
+    hint: string,
+}
+
+export struct Preset {
+    label: string,
+    detail: string,
+}
+
+export struct SourceType {
+    kind: string,
+    title: string,
+    description: string,
+    available: bool,
+}

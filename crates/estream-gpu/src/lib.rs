@@ -10,6 +10,9 @@ pub mod readback;
 
 pub use compositor::{CANVAS_FORMAT, CanvasRenderer, Compositor, DrawItem};
 pub use context::{GpuContext, GpuError, GpuOptions};
-pub use convert::{ConvertInput, Nv12Target, OutputConverter, PREVIEW_FORMAT};
+pub use convert::{
+    ConvertInput, Nv12Target, OutputConverter, PREVIEW_FORMAT, PREVIEW_VIEW_FORMAT,
+    create_preview_texture, preview_target_view,
+};
 pub use pool::TexturePool;
 pub use wgpu;

@@ -4,7 +4,7 @@
 use estream_core::{BlendMode, Crop, ItemTransform, Size};
 use estream_gpu::{
     CANVAS_FORMAT, CanvasRenderer, Compositor, DrawItem, GpuContext, GpuOptions, Nv12Target,
-    OutputConverter, PREVIEW_FORMAT, readback, wgpu,
+    OutputConverter, readback, wgpu,
 };
 use glam::Vec2;
 
@@ -53,15 +53,16 @@ impl Harness {
     /// Renders items onto a black canvas and returns sRGB8 pixels.
     fn render(&self, w: u32, h: u32, items: &[DrawItem<'_>]) -> Vec<u8> {
         let canvas = self.render_canvas(w, h, items);
-        let preview = self
-            .gpu
-            .create_render_texture("preview", w, h, PREVIEW_FORMAT);
+        let preview = estream_gpu::create_preview_texture(&self.gpu, w, h);
         let input = self
             .converter
             .create_input(&self.gpu, &canvas.create_view(&Default::default()));
         let mut enc = self.gpu.device.create_command_encoder(&Default::default());
-        self.converter
-            .to_srgb(&mut enc, &input, &preview.create_view(&Default::default()));
+        self.converter.to_srgb(
+            &mut enc,
+            &input,
+            &estream_gpu::preview_target_view(&preview),
+        );
         self.gpu.queue.submit([enc.finish()]);
         readback::read_texture(&self.gpu, &preview).unwrap()
     }

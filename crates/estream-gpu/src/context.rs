@@ -34,16 +34,39 @@ impl GpuContext {
     }
 
     async fn new_async(options: &GpuOptions) -> Result<Self, GpuError> {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                force_fallback_adapter: options.force_software,
-                compatible_surface: None,
-                ..Default::default()
-            })
-            .await?;
+        // Prefer the platform's native API (DX12 on Windows: needed for D3D11 capture
+        // interop, and avoids third-party Vulkan layers), then fall back to any backend.
+        // `WGPU_BACKEND` in the environment overrides this.
+        let preferred = if cfg!(windows) && wgpu::Backends::from_env().is_none() {
+            vec![Some(wgpu::Backends::DX12), None]
+        } else {
+            vec![None]
+        };
+        let mut result = None;
+        for backends in preferred {
+            let mut desc = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
+            if let Some(backends) = backends {
+                desc.backends = backends;
+            }
+            let instance = wgpu::Instance::new(desc);
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::HighPerformance,
+                    force_fallback_adapter: options.force_software,
+                    compatible_surface: None,
+                    ..Default::default()
+                })
+                .await;
+            let ok = adapter.is_ok();
+            result = Some((instance, adapter));
+            if ok {
+                break;
+            }
+        }
+        let Some((instance, adapter)) = result else {
+            unreachable!("at least one backend set is tried")
+        };
+        let adapter = adapter?;
         let info = adapter.get_info();
         tracing::info!(
             adapter = %info.name,

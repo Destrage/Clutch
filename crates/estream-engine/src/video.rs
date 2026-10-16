@@ -8,7 +8,7 @@ use estream_core::color::srgb_to_linear;
 use estream_core::{CanvasId, EngineClock, SourceId, Timestamp};
 use estream_gpu::{
     CANVAS_FORMAT, CanvasRenderer, Compositor, ConvertInput, DrawItem, GpuContext, OutputConverter,
-    PREVIEW_FORMAT, wgpu,
+    wgpu,
 };
 use glam::Vec2;
 use serde_json::Value;
@@ -64,7 +64,7 @@ impl CanvasOutput {
     fn new(gpu: &GpuContext, id: CanvasId, width: u32, height: u32) -> Self {
         let slots = std::array::from_fn(|_| OutputSlot {
             canvas: gpu.create_render_texture("canvas", width, height, CANVAS_FORMAT),
-            preview: gpu.create_render_texture("canvas preview", width, height, PREVIEW_FORMAT),
+            preview: estream_gpu::create_preview_texture(gpu, width, height),
         });
         Self {
             id,
@@ -97,6 +97,14 @@ impl CanvasOutput {
         self.latest
             .store((sequence << 8) | slot as u64, Ordering::Release);
     }
+}
+
+/// Runtime information about a source, published to consumers.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SourceInfo {
+    pub status: SourceStatus,
+    /// Size of the latest frame, if one exists.
+    pub size: Option<estream_core::Size>,
 }
 
 struct SourceSlot {
@@ -151,10 +159,24 @@ impl VideoCore {
         self.canvases.iter().map(|c| c.output.clone()).collect()
     }
 
-    pub fn statuses(&self) -> HashMap<SourceId, SourceStatus> {
+    /// Status and current frame size of every source.
+    pub fn statuses(&self) -> HashMap<SourceId, SourceInfo> {
         self.sources
             .iter()
-            .map(|(id, s)| (*id, s.status.clone()))
+            .map(|(id, s)| {
+                let size = s
+                    .instance
+                    .as_deref()
+                    .and_then(|i| i.frame())
+                    .map(|f| f.size);
+                (
+                    *id,
+                    SourceInfo {
+                        status: s.status.clone(),
+                        size,
+                    },
+                )
+            })
             .collect()
     }
 
@@ -236,7 +258,7 @@ impl VideoCore {
         let canvas_views =
             std::array::from_fn(|i| output.slots[i].canvas.create_view(&Default::default()));
         let preview_views =
-            std::array::from_fn(|i| output.slots[i].preview.create_view(&Default::default()));
+            std::array::from_fn(|i| estream_gpu::preview_target_view(&output.slots[i].preview));
         let inputs =
             std::array::from_fn(|i| self.converter.create_input(&self.gpu, &canvas_views[i]));
         CanvasSlot {
@@ -401,7 +423,7 @@ fn background(cg: &CanvasGraph) -> wgpu::Color {
 /// Callbacks from the video thread to the engine's shared state.
 pub(crate) trait VideoSink: Send + Sync + 'static {
     fn graph(&self) -> Arc<RenderGraph>;
-    fn publish(&self, outputs: Vec<Arc<CanvasOutput>>, statuses: HashMap<SourceId, SourceStatus>);
+    fn publish(&self, outputs: Vec<Arc<CanvasOutput>>, statuses: HashMap<SourceId, SourceInfo>);
     fn shutdown_requested(&self) -> &AtomicBool;
 }
 

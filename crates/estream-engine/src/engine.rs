@@ -5,7 +5,7 @@ use crate::command::{Change, Command, CommandError};
 use crate::graph::RenderGraph;
 use crate::history::History;
 use crate::source::{SourceRegistry, SourceStatus};
-use crate::video::{self, CanvasOutput, VideoCore, VideoSink};
+use crate::video::{self, CanvasOutput, SourceInfo, VideoCore, VideoSink};
 use arc_swap::ArcSwap;
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TrySendError};
 use estream_core::{CanvasId, EngineClock, SourceId};
@@ -129,9 +129,11 @@ struct Shared {
     graph: ArcSwap<RenderGraph>,
     revision: AtomicU64,
     outputs: ArcSwap<Vec<Arc<CanvasOutput>>>,
-    statuses: ArcSwap<HashMap<SourceId, SourceStatus>>,
+    statuses: ArcSwap<HashMap<SourceId, SourceInfo>>,
     subscribers: Mutex<Vec<Subscriber>>,
     shutdown: AtomicBool,
+    can_undo: AtomicBool,
+    can_redo: AtomicBool,
 }
 
 impl Shared {
@@ -155,7 +157,7 @@ impl VideoSink for Shared {
         self.graph.load_full()
     }
 
-    fn publish(&self, outputs: Vec<Arc<CanvasOutput>>, statuses: HashMap<SourceId, SourceStatus>) {
+    fn publish(&self, outputs: Vec<Arc<CanvasOutput>>, statuses: HashMap<SourceId, SourceInfo>) {
         self.outputs.store(Arc::new(outputs));
         self.statuses.store(Arc::new(statuses));
     }
@@ -204,6 +206,8 @@ impl Engine {
             statuses: ArcSwap::from_pointee(HashMap::new()),
             subscribers: Mutex::new(Vec::new()),
             shutdown: AtomicBool::new(false),
+            can_undo: AtomicBool::new(false),
+            can_redo: AtomicBool::new(false),
         });
 
         let gpu = if config.video {
@@ -314,6 +318,15 @@ impl Engine {
         self.shared.snapshot.load_full()
     }
 
+    /// Whether there is a step to undo (updated before change events are sent).
+    pub fn can_undo(&self) -> bool {
+        self.shared.can_undo.load(Ordering::Acquire)
+    }
+
+    pub fn can_redo(&self) -> bool {
+        self.shared.can_redo.load(Ordering::Acquire)
+    }
+
     pub fn revision(&self) -> u64 {
         self.shared.revision.load(Ordering::Acquire)
     }
@@ -344,7 +357,25 @@ impl Engine {
     }
 
     pub fn source_status(&self, source: SourceId) -> Option<SourceStatus> {
-        self.shared.statuses.load().get(&source).cloned()
+        self.shared
+            .statuses
+            .load()
+            .get(&source)
+            .map(|i| i.status.clone())
+    }
+
+    /// Size of the source's latest frame, if it has produced one.
+    pub fn source_size(&self, source: SourceId) -> Option<estream_core::Size> {
+        self.shared
+            .statuses
+            .load()
+            .get(&source)
+            .and_then(|i| i.size)
+    }
+
+    /// Status and size of every source.
+    pub fn source_infos(&self) -> Arc<HashMap<SourceId, SourceInfo>> {
+        self.shared.statuses.load_full()
     }
 
     pub fn gpu(&self) -> Option<&GpuContext> {
@@ -470,6 +501,12 @@ impl Control {
     }
 
     fn publish(&mut self, changes: Vec<Change>, origin: Origin) -> u64 {
+        self.shared
+            .can_undo
+            .store(self.history.can_undo(), Ordering::Release);
+        self.shared
+            .can_redo
+            .store(self.history.can_redo(), Ordering::Release);
         let revision = self.shared.revision.fetch_add(1, Ordering::AcqRel) + 1;
         self.shared.snapshot.store(Arc::new(self.project.clone()));
         self.shared

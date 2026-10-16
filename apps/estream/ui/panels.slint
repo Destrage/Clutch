@@ -1,0 +1,636 @@
+import { Theme } from "theme.slint";
+import { Icons } from "icons.slint";
+import { SceneRow, LayerRow, Inspect } from "types.slint";
+import {
+    Button, IconButton, Icon, TextField, NumberField, Toggle, Slider, Select, Panel,
+    PanelHeader, SectionTitle, Badge, EmptyState, Hint,
+} from "widgets.slint";
+
+export component TopBar inherits Rectangle {
+    in property <string> collection-name;
+    in property <string> canvas-info;
+    in property <bool> dirty;
+    in property <bool> can-undo;
+    in property <bool> can-redo;
+    callback open-palette();
+    callback undo();
+    callback redo();
+    callback toggle-theme();
+
+    height: 52px;
+    background: Theme.bg;
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 12px;
+        spacing: 8px;
+
+        // Brand
+        HorizontalLayout {
+            spacing: 8px;
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 26px;
+                    height: 26px;
+                    border-radius: 8px;
+                    background: @linear-gradient(135deg, Theme.accent 0%, #b06cff 100%);
+                    Icon { source: Icons.radio; size: 15px; tint: #ffffff; }
+                }
+            }
+            Text {
+                text: "eStream";
+                color: Theme.text;
+                font-size: Theme.font-l;
+                font-weight: 700;
+                vertical-alignment: center;
+            }
+        }
+        Rectangle { width: 10px; }
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                height: 28px;
+                border-radius: Theme.radius-s;
+                background: Theme.surface-2;
+                width: coll.preferred-width + 20px;
+                coll := HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    spacing: 6px;
+                    VerticalLayout {
+                        alignment: center;
+                        Icon { source: Icons.folder; size: 14px; }
+                    }
+                    Text {
+                        text: root.collection-name + (root.dirty ? " •" : "");
+                        color: Theme.text;
+                        font-size: Theme.font-s;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: root.canvas-info;
+                        color: Theme.text-faint;
+                        font-size: Theme.font-s;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            HorizontalLayout {
+                spacing: 2px;
+                IconButton { icon: Icons.undo; tooltip: "Undo (Ctrl+Z)"; enabled: root.can-undo; clicked => { root.undo(); } }
+                IconButton { icon: Icons.redo; tooltip: "Redo (Ctrl+Shift+Z)"; enabled: root.can-redo; clicked => { root.redo(); } }
+            }
+        }
+
+        Rectangle { horizontal-stretch: 1; }
+
+        // Command palette launcher
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 260px;
+                height: 30px;
+                border-radius: Theme.radius-s;
+                background: palette-ta.has-hover ? Theme.surface-3 : Theme.surface-2;
+                border-width: 1px;
+                border-color: Theme.border;
+                accessible-role: button;
+                accessible-label: "Open command palette";
+                accessible-action-default => { root.open-palette(); }
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 6px;
+                    spacing: 8px;
+                    VerticalLayout {
+                        alignment: center;
+                        Icon { source: Icons.search; size: 14px; tint: Theme.text-faint; }
+                    }
+                    Text {
+                        text: "Search actions, scenes, sources…";
+                        color: Theme.text-faint;
+                        font-size: Theme.font-s;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        Badge { text: "Ctrl K"; }
+                    }
+                }
+                palette-ta := TouchArea {
+                    mouse-cursor: MouseCursor.pointer;
+                    clicked => { root.open-palette(); }
+                }
+            }
+        }
+
+        Rectangle { horizontal-stretch: 1; }
+
+        VerticalLayout {
+            alignment: center;
+            IconButton {
+                icon: Theme.dark ? Icons.sun : Icons.moon;
+                tooltip: Theme.dark ? "Switch to light theme" : "Switch to dark theme";
+                clicked => { root.toggle-theme(); }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            Button {
+                text: "Record";
+                has-icon: true;
+                icon: Icons.circle;
+                enabled: false;
+                tooltip: "Recording arrives with the add-recording change";
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            Button {
+                text: "Go Live";
+                has-icon: true;
+                icon: Icons.radio;
+                kind: "live";
+                enabled: false;
+                tooltip: "Streaming arrives with the add-streaming-outputs change";
+            }
+        }
+    }
+}
+
+export component ScenesPanel inherits Panel {
+    in property <[SceneRow]> scenes;
+    in-out property <string> renaming;
+    callback activate(string);
+    callback add();
+    callback duplicate(string);
+    callback remove(string);
+    callback rename(string, string);
+
+    PanelHeader {
+        title: "SCENES";
+        icon: Icons.layers;
+        IconButton { icon: Icons.plus; tooltip: "New scene (Ctrl+Shift+N)"; clicked => { root.add(); } }
+    }
+    Flickable {
+        vertical-stretch: 1;
+        content-height: list.preferred-height;
+        list := VerticalLayout {
+            padding: 6px;
+            spacing: 2px;
+            alignment: start;
+            for scene in root.scenes: Rectangle {
+                height: 36px;
+                border-radius: Theme.radius-m;
+                background: scene.active ? Theme.accent-soft : row-ta.has-hover ? Theme.hover : transparent;
+                accessible-role: list-item;
+                accessible-label: scene.name;
+                accessible-item-selected: scene.active;
+                accessible-action-default => { root.activate(scene.id); }
+
+                row-ta := TouchArea {
+                    mouse-cursor: MouseCursor.pointer;
+                    clicked => { root.activate(scene.id); }
+                    double-clicked => { root.renaming = scene.id; }
+                }
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 4px;
+                    spacing: 8px;
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 6px;
+                            height: 6px;
+                            border-radius: 3px;
+                            background: scene.active ? Theme.accent : Theme.text-faint.with-alpha(0.5);
+                        }
+                    }
+                    if root.renaming == scene.id: VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 1;
+                        TextField {
+                            text: scene.name;
+                            label: "Scene name";
+                            init => { self.focus(); }
+                            accepted(t) => {
+                                root.rename(scene.id, t);
+                                root.renaming = "";
+                            }
+                            changed has-focus => {
+                                if (!self.has-focus && root.renaming == scene.id) {
+                                    root.rename(scene.id, self.text);
+                                    root.renaming = "";
+                                }
+                            }
+                        }
+                    }
+                    if root.renaming != scene.id: Text {
+                        text: scene.name;
+                        color: scene.active ? Theme.text : Theme.text-muted;
+                        font-size: Theme.font-m;
+                        font-weight: scene.active ? 600 : 400;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                    }
+                    if root.renaming != scene.id && (row-ta.has-hover || scene.active): HorizontalLayout {
+                        VerticalLayout {
+                            alignment: center;
+                            IconButton {
+                                icon: Icons.pencil; tooltip: "Rename (F2)"; size: 24px; icon-size: 13px;
+                                clicked => { root.renaming = scene.id; }
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            IconButton {
+                                icon: Icons.copy; tooltip: "Duplicate scene"; size: 24px; icon-size: 13px;
+                                clicked => { root.duplicate(scene.id); }
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            IconButton {
+                                icon: Icons.trash; tooltip: "Delete scene"; size: 24px; icon-size: 13px;
+                                enabled: root.scenes.length > 1;
+                                clicked => { root.remove(scene.id); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component KindIcon inherits Icon {
+    in property <string> kind;
+    source: kind == "group" ? Icons.folder
+        : kind == "color" ? Icons.palette
+        : kind == "test_pattern" ? Icons.layout-dashboard
+        : kind == "display_capture" ? Icons.monitor
+        : kind == "camera" ? Icons.camera
+        : kind == "image" ? Icons.image
+        : kind == "text" ? Icons.type
+        : kind == "browser" ? Icons.globe
+        : kind == "media" ? Icons.film
+        : Icons.square;
+}
+
+export component SourcesPanel inherits Panel {
+    in property <[LayerRow]> layers;
+    callback select(string);
+    callback toggle-visible(string);
+    callback toggle-lock(string);
+    callback add();
+    callback remove();
+    callback move-up();
+    callback move-down();
+    callback group();
+
+    PanelHeader {
+        title: "SOURCES";
+        icon: Icons.layers;
+        IconButton { icon: Icons.chevron-up; tooltip: "Move up (Ctrl+])"; clicked => { root.move-up(); } }
+        IconButton { icon: Icons.chevron-down; tooltip: "Move down (Ctrl+[)"; clicked => { root.move-down(); } }
+        IconButton { icon: Icons.folder; tooltip: "Group (Ctrl+G)"; clicked => { root.group(); } }
+        IconButton { icon: Icons.trash; tooltip: "Delete (Del)"; clicked => { root.remove(); } }
+        IconButton { icon: Icons.plus; tooltip: "Add source (Ctrl+N)"; clicked => { root.add(); } }
+    }
+    if root.layers.length == 0: EmptyState {
+        vertical-stretch: 1;
+        icon: Icons.sparkles;
+        title: "This scene is empty";
+        body: "Add a source to start building your scene.";
+        HorizontalLayout {
+            alignment: center;
+            Button { text: "Add source"; kind: "primary"; has-icon: true; icon: Icons.plus; clicked => { root.add(); } }
+        }
+    }
+    if root.layers.length > 0: Flickable {
+        vertical-stretch: 1;
+        content-height: rows.preferred-height;
+        rows := VerticalLayout {
+            padding: 6px;
+            spacing: 2px;
+            alignment: start;
+            for layer in root.layers: Rectangle {
+                height: 34px;
+                border-radius: Theme.radius-m;
+                background: layer.selected ? Theme.accent-soft : layer-ta.has-hover ? Theme.hover : transparent;
+                accessible-role: list-item;
+                accessible-label: layer.name;
+                accessible-item-selected: layer.selected;
+                accessible-action-default => { root.select(layer.id); }
+                layer-ta := TouchArea {
+                    clicked => { root.select(layer.id); }
+                }
+                HorizontalLayout {
+                    padding-left: 8px + layer.depth * 18px;
+                    padding-right: 4px;
+                    spacing: 8px;
+                    VerticalLayout {
+                        alignment: center;
+                        KindIcon {
+                            kind: layer.kind;
+                            size: 15px;
+                            tint: layer.selected ? Theme.accent : Theme.text-muted;
+                        }
+                    }
+                    Text {
+                        text: layer.name;
+                        color: !layer.visible ? Theme.text-faint : layer.selected ? Theme.text : Theme.text-muted;
+                        font-size: Theme.font-m;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                    }
+                    if layer.problem != "": VerticalLayout {
+                        alignment: center;
+                        Badge { text: "Unavailable"; tone: Theme.warn; }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        IconButton {
+                            icon: layer.locked ? Icons.lock : Icons.lock-open;
+                            tooltip: layer.locked ? "Unlock" : "Lock";
+                            size: 24px;
+                            icon-size: 13px;
+                            tint: layer.locked ? Theme.warn : Theme.text-faint;
+                            opacity: layer.locked || layer-ta.has-hover ? 1 : 0;
+                            clicked => { root.toggle-lock(layer.id); }
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        IconButton {
+                            icon: layer.visible ? Icons.eye : Icons.eye-off;
+                            tooltip: layer.visible ? "Hide" : "Show";
+                            size: 24px;
+                            icon-size: 13px;
+                            tint: layer.visible ? Theme.text-muted : Theme.text-faint;
+                            clicked => { root.toggle-visible(layer.id); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component InspectorPanel inherits Panel {
+    in property <Inspect> sel;
+    in property <string> canvas-info;
+    in property <string> gpu-info;
+    callback edit(string, float);
+    callback edit-text(string, string);
+    callback edit-color(color);
+    callback select-option(string, int);
+    callback toggle(string, bool);
+    callback commit();
+    callback action(string);
+
+    PanelHeader {
+        title: "INSPECTOR";
+        icon: Icons.sliders-horizontal;
+    }
+
+    if !root.sel.has: EmptyState {
+        vertical-stretch: 1;
+        icon: Icons.square;
+        title: "Nothing selected";
+        body: "Click a source in the preview or the list to edit its position, size, crop and appearance.";
+        VerticalLayout {
+            padding-top: 12px;
+            spacing: 4px;
+            Text { text: root.canvas-info; color: Theme.text-muted; font-size: Theme.font-s; horizontal-alignment: center; }
+            Text { text: root.gpu-info; color: Theme.text-faint; font-size: Theme.font-xs; horizontal-alignment: center; wrap: word-wrap; }
+        }
+    }
+
+    if root.sel.has: Flickable {
+        vertical-stretch: 1;
+        content-height: body.preferred-height;
+        body := VerticalLayout {
+            padding: 14px;
+            spacing: 14px;
+            alignment: start;
+
+            // Identity
+            HorizontalLayout {
+                spacing: 10px;
+                Rectangle {
+                    width: 34px;
+                    height: 34px;
+                    border-radius: Theme.radius-m;
+                    background: Theme.surface-3;
+                    KindIcon { kind: root.sel.kind; size: 16px; tint: Theme.accent; }
+                }
+                VerticalLayout {
+                    spacing: 3px;
+                    TextField {
+                        text: root.sel.name;
+                        label: "Name";
+                        accepted(t) => { root.edit-text("name", t); }
+                    }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        Text { text: root.sel.kind-label; color: Theme.text-faint; font-size: Theme.font-xs; vertical-alignment: center; }
+                        if root.sel.problem != "": Badge { text: root.sel.problem; tone: Theme.warn; }
+                    }
+                }
+            }
+            HorizontalLayout {
+                spacing: 16px;
+                Toggle { label: "Visible"; checked: root.sel.visible; toggled(v) => { root.toggle("visible", v); } }
+                Toggle { label: "Locked"; checked: root.sel.locked; toggled(v) => { root.toggle("locked", v); } }
+            }
+
+            // Transform
+            VerticalLayout {
+                spacing: 8px;
+                SectionTitle { text: "TRANSFORM"; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    NumberField { label: "X"; value: root.sel.x; step: 1; changed(v) => { root.edit("x", v); } committed => { root.commit(); } }
+                    NumberField { label: "Y"; value: root.sel.y; step: 1; changed(v) => { root.edit("y", v); } committed => { root.commit(); } }
+                }
+                if !root.sel.group: HorizontalLayout {
+                    spacing: 8px;
+                    NumberField { label: "W"; value: root.sel.w; step: 1; minimum: 1; changed(v) => { root.edit("w", v); } committed => { root.commit(); } }
+                    NumberField { label: "H"; value: root.sel.h; step: 1; minimum: 1; changed(v) => { root.edit("h", v); } committed => { root.commit(); } }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    NumberField { label: "R"; value: root.sel.rotation; step: 1; decimals: 1; suffix: "°"; minimum: -360; maximum: 360; changed(v) => { root.edit("rotation", v); } committed => { root.commit(); } }
+                    if !root.sel.group: Select {
+                        label: "Size mode";
+                        options: ["Free scale", "Stretch", "Fit", "Fill"];
+                        current-index: root.sel.size-mode;
+                        selected(i) => { root.select-option("size-mode", i); }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    Button { text: "Fit"; kind: "ghost"; tooltip: "Fit to canvas (Ctrl+F)"; clicked => { root.action("transform.fit"); } }
+                    Button { text: "Stretch"; kind: "ghost"; tooltip: "Stretch to canvas"; clicked => { root.action("transform.stretch"); } }
+                    Button { text: "Center"; kind: "ghost"; tooltip: "Center on canvas (Ctrl+E)"; clicked => { root.action("transform.center"); } }
+                    Button { text: "Reset"; kind: "ghost"; tooltip: "Reset transform (Ctrl+R)"; clicked => { root.action("transform.reset"); } }
+                }
+            }
+
+            // Crop
+            if !root.sel.group: VerticalLayout {
+                spacing: 8px;
+                HorizontalLayout {
+                    SectionTitle { text: "CROP"; horizontal-stretch: 1; }
+                    Text { text: "Alt-drag edges in the preview"; color: Theme.text-faint; font-size: Theme.font-xs; }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    NumberField { label: "L"; value: root.sel.crop-l; minimum: 0; changed(v) => { root.edit("crop-l", v); } committed => { root.commit(); } }
+                    NumberField { label: "R"; value: root.sel.crop-r; minimum: 0; changed(v) => { root.edit("crop-r", v); } committed => { root.commit(); } }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    NumberField { label: "T"; value: root.sel.crop-t; minimum: 0; changed(v) => { root.edit("crop-t", v); } committed => { root.commit(); } }
+                    NumberField { label: "B"; value: root.sel.crop-b; minimum: 0; changed(v) => { root.edit("crop-b", v); } committed => { root.commit(); } }
+                }
+            }
+
+            // Appearance
+            VerticalLayout {
+                spacing: 8px;
+                SectionTitle { text: "APPEARANCE"; }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Text { text: "Opacity"; color: Theme.text-muted; font-size: Theme.font-s; vertical-alignment: center; width: 56px; }
+                    Slider {
+                        label: "Opacity";
+                        value: root.sel.opacity;
+                        changed(v) => { root.edit("opacity", v); }
+                        committed => { root.commit(); }
+                    }
+                    Text { text: round(root.sel.opacity * 100) + "%"; color: Theme.text-muted; font-size: Theme.font-s; vertical-alignment: center; width: 36px; horizontal-alignment: right; }
+                }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Text { text: "Blend"; color: Theme.text-muted; font-size: Theme.font-s; vertical-alignment: center; width: 56px; }
+                    Select {
+                        label: "Blend mode";
+                        options: ["Normal", "Additive", "Multiply", "Screen"];
+                        current-index: root.sel.blend;
+                        selected(i) => { root.select-option("blend", i); }
+                    }
+                }
+            }
+
+            // Source settings
+            if !root.sel.group: VerticalLayout {
+                spacing: 8px;
+                SectionTitle { text: "SOURCE"; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    NumberField { label: "W"; value: root.sel.src-w; minimum: 1; maximum: 16384; changed(v) => { root.edit("src-w", v); } committed => { root.commit(); } }
+                    NumberField { label: "H"; value: root.sel.src-h; minimum: 1; maximum: 16384; changed(v) => { root.edit("src-h", v); } committed => { root.commit(); } }
+                }
+                if root.sel.has-color: HorizontalLayout {
+                    spacing: 8px;
+                    Rectangle {
+                        width: 28px;
+                        height: 28px;
+                        border-radius: Theme.radius-s;
+                        background: root.sel.color;
+                        border-width: 1px;
+                        border-color: Theme.border-strong;
+                    }
+                    TextField {
+                        text: root.sel.color-hex;
+                        label: "Color (hex)";
+                        placeholder: "#rrggbb or #rrggbbaa";
+                        accepted(t) => { root.edit-text("color", t); }
+                    }
+                }
+                if root.sel.has-color: HorizontalLayout {
+                    spacing: 6px;
+                    for swatch in [#ffffff, #000000, #6c8cff, #f0435a, #3dd68c, #f2b84b, #b06cff, #00b5d8]: Rectangle {
+                        width: 22px;
+                        height: 22px;
+                        border-radius: 11px;
+                        background: swatch;
+                        border-width: 1px;
+                        border-color: Theme.border-strong;
+                        TouchArea {
+                            mouse-cursor: MouseCursor.pointer;
+                            clicked => { root.edit-color(swatch); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component MixerPanel inherits Panel {
+    PanelHeader {
+        title: "AUDIO MIXER";
+        icon: Icons.volume;
+    }
+    EmptyState {
+        vertical-stretch: 1;
+        icon: Icons.mic;
+        title: "Audio is coming next";
+        body: "Microphones, desktop and per-app audio, meters and filters arrive with the audio engine.";
+    }
+}
+
+export component StatusBar inherits Rectangle {
+    in property <float> fps;
+    in property <float> target-fps;
+    in property <float> render-ms;
+    in property <int> lagged;
+    in property <string> gpu;
+    in property <string> message;
+
+    height: 28px;
+    background: Theme.bg;
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        spacing: 16px;
+        HorizontalLayout {
+            spacing: 6px;
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 7px;
+                    height: 7px;
+                    border-radius: 3.5px;
+                    background: root.lagged > 0 ? Theme.warn : Theme.ok;
+                }
+            }
+            Text {
+                text: root.fps.to-fixed(1) + " / " + root.target-fps.to-fixed(root.target-fps == round(root.target-fps) ? 0 : 2) + " fps";
+                color: Theme.text-muted;
+                font-size: Theme.font-xs;
+                vertical-alignment: center;
+            }
+        }
+        Text { text: "render " + root.render-ms.to-fixed(2) + " ms"; color: Theme.text-muted; font-size: Theme.font-xs; vertical-alignment: center; }
+        Text {
+            text: root.lagged + " lagged";
+            color: root.lagged > 0 ? Theme.warn : Theme.text-muted;
+            font-size: Theme.font-xs;
+            font-weight: root.lagged > 0 ? 700 : 400;
+            vertical-alignment: center;
+        }
+        Text { text: root.gpu; color: Theme.text-faint; font-size: Theme.font-xs; vertical-alignment: center; overflow: elide; }
+        Rectangle { horizontal-stretch: 1; }
+        Text { text: root.message; color: Theme.text-faint; font-size: Theme.font-xs; vertical-alignment: center; }
+    }
+}

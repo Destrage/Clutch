@@ -1,0 +1,404 @@
+import { Theme } from "theme.slint";
+import { Icons } from "icons.slint";
+import { PaletteEntry, Preset, SourceType } from "types.slint";
+import { Button, Icon, Badge } from "widgets.slint";
+import { KindIcon } from "panels.slint";
+
+// Full-window scrim with a centered card. Clicking the scrim calls `dismiss`.
+component Modal inherits Rectangle {
+    in property <length> card-width: 520px;
+    in property <length> card-top: -1px;
+    in property <bool> dismissable: true;
+    callback dismiss();
+
+    background: Theme.scrim;
+    TouchArea {
+        clicked => { if (root.dismissable) { root.dismiss(); } }
+    }
+    card := Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: root.card-top >= 0 ? root.card-top : (parent.height - self.height) / 2;
+        width: min(root.card-width, parent.width - 40px);
+        height: content.preferred-height;
+        background: Theme.surface;
+        border-radius: Theme.radius-l;
+        border-width: 1px;
+        border-color: Theme.border-strong;
+        drop-shadow-blur: 40px;
+        drop-shadow-offset-y: 12px;
+        drop-shadow-color: #00000080;
+        clip: true;
+        accessible-role: groupbox;
+        TouchArea { }
+        content := VerticalLayout {
+            @children
+        }
+    }
+}
+
+export component CommandPalette inherits Modal {
+    in property <[PaletteEntry]> entries;
+    in-out property <int> current;
+    in-out property <string> query;
+    callback query-changed(string);
+    callback run(string);
+
+    card-width: 620px;
+    card-top: 80px;
+
+    keys := FocusScope {
+        capture-key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                root.dismiss();
+                return EventResult.accept;
+            }
+            if (e.text == Key.DownArrow) {
+                root.current = min(root.current + 1, root.entries.length - 1);
+                return EventResult.accept;
+            }
+            if (e.text == Key.UpArrow) {
+                root.current = max(0, root.current - 1);
+                return EventResult.accept;
+            }
+            if (e.text == Key.Return) {
+                if (root.entries.length > 0) {
+                    root.run(root.entries[root.current].id);
+                }
+                return EventResult.accept;
+            }
+            return EventResult.reject;
+        }
+        HorizontalLayout {
+            height: 52px;
+            padding-left: 16px;
+            padding-right: 16px;
+            spacing: 10px;
+            VerticalLayout {
+                alignment: center;
+                Icon { source: Icons.search; size: 18px; tint: Theme.text-muted; }
+            }
+            input := TextInput {
+                text <=> root.query;
+                single-line: true;
+                vertical-alignment: center;
+                color: Theme.text;
+                font-size: Theme.font-l;
+                accessible-label: "Search commands";
+                init => { self.focus(); }
+                edited => {
+                    root.current = 0;
+                    root.query-changed(self.text);
+                }
+            }
+            if root.query == "": Text {
+                text: "Type a command, scene or source…";
+                color: Theme.text-faint;
+                font-size: Theme.font-l;
+                vertical-alignment: center;
+            }
+        }
+    }
+    Rectangle { height: 1px; background: Theme.border; }
+    if root.entries.length == 0: Text {
+        height: 64px;
+        text: "No matches";
+        color: Theme.text-faint;
+        font-size: Theme.font-m;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    VerticalLayout {
+        padding: 6px;
+        spacing: 1px;
+        for entry[i] in root.entries: Rectangle {
+            height: 36px;
+            border-radius: Theme.radius-m;
+            background: i == root.current ? Theme.accent-soft : entry-ta.has-hover ? Theme.hover : transparent;
+            accessible-role: list-item;
+            accessible-label: entry.title;
+            accessible-item-selected: i == root.current;
+            entry-ta := TouchArea {
+                mouse-cursor: MouseCursor.pointer;
+                clicked => { root.run(entry.id); }
+            }
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 10px;
+                Text {
+                    text: entry.title;
+                    color: i == root.current ? Theme.text : Theme.text-muted;
+                    font-size: Theme.font-m;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+                Text {
+                    text: entry.category;
+                    color: Theme.text-faint;
+                    font-size: Theme.font-xs;
+                    vertical-alignment: center;
+                }
+                if entry.hint != "": VerticalLayout {
+                    alignment: center;
+                    Badge { text: entry.hint; }
+                }
+            }
+        }
+    }
+}
+
+export component AddSourceDialog inherits Modal {
+    in property <[SourceType]> types;
+    callback pick(string);
+
+    card-width: 560px;
+
+    FocusScope {
+        height: 0px;
+        init => { self.focus(); }
+        key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                root.dismiss();
+                return EventResult.accept;
+            }
+            return EventResult.reject;
+        }
+    }
+    HorizontalLayout {
+        padding: 18px;
+        padding-bottom: 6px;
+        Text {
+            text: "Add a source";
+            color: Theme.text;
+            font-size: Theme.font-xl;
+            font-weight: 700;
+            horizontal-stretch: 1;
+        }
+        Button { text: "Close"; kind: "ghost"; clicked => { root.dismiss(); } }
+    }
+    Text {
+        x: 18px;
+        text: "Sources are reusable: add the same source to several scenes.";
+        color: Theme.text-muted;
+        font-size: Theme.font-s;
+    }
+    VerticalLayout {
+        padding: 12px;
+        spacing: 4px;
+        for t in root.types: Rectangle {
+            height: 54px;
+            border-radius: Theme.radius-m;
+            background: t.available && type-ta.has-hover ? Theme.hover : transparent;
+            opacity: t.available ? 1 : 0.55;
+            accessible-role: button;
+            accessible-label: t.title;
+            accessible-enabled: t.available;
+            accessible-action-default => { if (t.available) { root.pick(t.kind); } }
+            type-ta := TouchArea {
+                enabled: t.available;
+                mouse-cursor: MouseCursor.pointer;
+                clicked => { root.pick(t.kind); }
+            }
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 10px;
+                spacing: 12px;
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 36px;
+                        height: 36px;
+                        border-radius: Theme.radius-m;
+                        background: t.available ? Theme.accent-soft : Theme.surface-3;
+                        KindIcon { kind: t.kind; size: 17px; tint: t.available ? Theme.accent : Theme.text-faint; }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 2px;
+                    horizontal-stretch: 1;
+                    Text { text: t.title; color: Theme.text; font-size: Theme.font-m; font-weight: 600; }
+                    Text { text: t.description; color: Theme.text-muted; font-size: Theme.font-s; overflow: elide; }
+                }
+                if !t.available: VerticalLayout {
+                    alignment: center;
+                    Badge { text: "Soon"; }
+                }
+            }
+        }
+    }
+}
+
+export component SetupWizard inherits Modal {
+    in property <[Preset]> presets;
+    in property <string> gpu;
+    in property <string> encoders;
+    in-out property <int> current;
+    callback create(int);
+
+    card-width: 600px;
+    dismissable: false;
+
+    VerticalLayout {
+        padding: 28px;
+        spacing: 18px;
+        HorizontalLayout {
+            spacing: 14px;
+            Rectangle {
+                width: 44px;
+                height: 44px;
+                border-radius: 12px;
+                background: @linear-gradient(135deg, Theme.accent 0%, #b06cff 100%);
+                Icon { source: Icons.radio; size: 22px; tint: #ffffff; }
+            }
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                Text { text: "Welcome to eStream"; color: Theme.text; font-size: 22px; font-weight: 700; }
+                Text { text: "Let's set up your canvas. You can change it any time."; color: Theme.text-muted; font-size: Theme.font-m; }
+            }
+        }
+        Rectangle {
+            height: hw.preferred-height + 20px;
+            border-radius: Theme.radius-m;
+            background: Theme.surface-2;
+            hw := VerticalLayout {
+                padding: 10px;
+                padding-left: 14px;
+                spacing: 4px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    Icon { source: Icons.gauge; size: 14px; tint: Theme.ok; }
+                    Text { text: "GPU: " + root.gpu; color: Theme.text; font-size: Theme.font-s; }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Icon { source: Icons.film; size: 14px; tint: Theme.text-muted; }
+                    Text { text: "Hardware encoding: " + root.encoders; color: Theme.text-muted; font-size: Theme.font-s; wrap: word-wrap; }
+                }
+            }
+        }
+        VerticalLayout {
+            spacing: 4px;
+            for preset[i] in root.presets: Rectangle {
+                height: 46px;
+                border-radius: Theme.radius-m;
+                border-width: 1px;
+                border-color: i == root.current ? Theme.accent : Theme.border;
+                background: i == root.current ? Theme.accent-soft : preset-ta.has-hover ? Theme.hover : transparent;
+                accessible-role: radio-button;
+                accessible-label: preset.label;
+                accessible-checked: i == root.current;
+                preset-ta := TouchArea {
+                    mouse-cursor: MouseCursor.pointer;
+                    clicked => { root.current = i; }
+                    double-clicked => { root.create(i); }
+                }
+                HorizontalLayout {
+                    padding-left: 14px;
+                    padding-right: 14px;
+                    spacing: 10px;
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 16px;
+                            height: 16px;
+                            border-radius: 8px;
+                            border-width: 2px;
+                            border-color: i == root.current ? Theme.accent : Theme.border-strong;
+                            Rectangle {
+                                width: 8px;
+                                height: 8px;
+                                border-radius: 4px;
+                                background: i == root.current ? Theme.accent : transparent;
+                            }
+                        }
+                    }
+                    Text { text: preset.label; color: Theme.text; font-size: Theme.font-m; font-weight: 600; vertical-alignment: center; }
+                    Text { text: preset.detail; color: Theme.text-muted; font-size: Theme.font-s; vertical-alignment: center; horizontal-stretch: 1; horizontal-alignment: right; }
+                }
+            }
+        }
+        HorizontalLayout {
+            alignment: end;
+            Button {
+                text: "Create scene collection";
+                kind: "primary";
+                clicked => { root.create(root.current); }
+            }
+        }
+    }
+}
+
+export component RecoveryPrompt inherits Modal {
+    callback restore();
+    callback discard();
+
+    card-width: 460px;
+    dismissable: false;
+    VerticalLayout {
+        padding: 24px;
+        spacing: 14px;
+        HorizontalLayout {
+            spacing: 12px;
+            VerticalLayout {
+                alignment: start;
+                Rectangle {
+                    width: 36px;
+                    height: 36px;
+                    border-radius: 18px;
+                    background: Theme.warn.with-alpha(0.16);
+                    Icon { source: Icons.triangle-alert; size: 18px; tint: Theme.warn; }
+                }
+            }
+            VerticalLayout {
+                spacing: 6px;
+                Text { text: "Restore unsaved changes?"; color: Theme.text; font-size: Theme.font-l; font-weight: 700; }
+                Text {
+                    text: "eStream didn't shut down cleanly last time. Your most recent autosave can be restored.";
+                    color: Theme.text-muted;
+                    font-size: Theme.font-m;
+                    wrap: word-wrap;
+                }
+            }
+        }
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+            Button { text: "Discard"; kind: "ghost"; clicked => { root.discard(); } }
+            Button { text: "Restore"; kind: "primary"; clicked => { root.restore(); } }
+        }
+    }
+}
+
+export component Toast inherits Rectangle {
+    in property <string> text;
+    in property <bool> error;
+    height: 38px;
+    width: label.preferred-width + 44px;
+    border-radius: 19px;
+    background: Theme.dark ? #2b303b : #1d2129;
+    drop-shadow-blur: 16px;
+    drop-shadow-color: #00000060;
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 16px;
+        spacing: 8px;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 8px;
+                height: 8px;
+                border-radius: 4px;
+                background: root.error ? Theme.live : Theme.ok;
+            }
+        }
+        label := Text {
+            text: root.text;
+            color: #f1f3f7;
+            font-size: Theme.font-m;
+            vertical-alignment: center;
+        }
+    }
+}

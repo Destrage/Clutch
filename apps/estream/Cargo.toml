@@ -1,0 +1,27 @@
+[package]
+name = "estream"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "eStream: a modern live streaming and recording studio"
+
+[lints]
+workspace = true
+
+[dependencies]
+estream-core.workspace = true
+estream-engine.workspace = true
+estream-gpu.workspace = true
+estream-project.workspace = true
+anyhow.workspace = true
+dirs.workspace = true
+glam.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+slint.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[build-dependencies]
+slint-build.workspace = true

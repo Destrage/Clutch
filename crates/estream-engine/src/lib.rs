@@ -18,7 +18,7 @@ pub mod video;
 pub use command::{CanvasPatch, Change, Command, CommandError, ItemPatch};
 pub use engine::{Engine, EngineConfig, EngineError, Event, Origin, Subscription};
 pub use source::{SourceRegistry, SourceStatus, VideoSource};
-pub use video::{CanvasFrame, CanvasOutput, VideoCore};
+pub use video::{CanvasFrame, CanvasOutput, SourceInfo, VideoCore};
 
 pub use estream_core as core;
 pub use estream_gpu as gpu;

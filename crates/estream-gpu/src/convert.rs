@@ -3,7 +3,39 @@
 use crate::{CANVAS_FORMAT, GpuContext};
 use std::sync::Arc;
 
-pub const PREVIEW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+/// Storage format of preview textures. Stored as plain `Rgba8Unorm` holding sRGB-encoded
+/// values, so UI toolkits that sample without sRGB decoding (e.g. Slint) show correct colors.
+pub const PREVIEW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+/// View format used to render into preview textures (hardware performs the sRGB encode).
+pub const PREVIEW_VIEW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+
+/// Creates a preview texture: `Rgba8Unorm` storage, renderable through an sRGB view.
+pub fn create_preview_texture(gpu: &GpuContext, width: u32, height: u32) -> wgpu::Texture {
+    gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("preview"),
+        size: wgpu::Extent3d {
+            width: width.max(1),
+            height: height.max(1),
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: PREVIEW_FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[PREVIEW_VIEW_FORMAT],
+    })
+}
+
+/// The view to pass to [`OutputConverter::to_srgb`] for a preview texture.
+pub fn preview_target_view(texture: &wgpu::Texture) -> wgpu::TextureView {
+    texture.create_view(&wgpu::TextureViewDescriptor {
+        format: Some(PREVIEW_VIEW_FORMAT),
+        ..Default::default()
+    })
+}
 
 /// NV12 output as two planes: Y (`R8Unorm`, full size) and interleaved CbCr (`Rg8Unorm`, half size).
 #[derive(Debug)]
@@ -99,7 +131,7 @@ impl OutputConverter {
             })
         };
         Arc::new(Self {
-            srgb: make("fs_srgb", PREVIEW_FORMAT),
+            srgb: make("fs_srgb", PREVIEW_VIEW_FORMAT),
             y: make("fs_y", wgpu::TextureFormat::R8Unorm),
             uv: make("fs_uv", wgpu::TextureFormat::Rg8Unorm),
             layout,
@@ -118,7 +150,7 @@ impl OutputConverter {
         }))
     }
 
-    /// Writes the canvas into a same-size [`PREVIEW_FORMAT`] texture.
+    /// Writes the canvas into a same-size preview texture via [`preview_target_view`].
     pub fn to_srgb(
         &self,
         encoder: &mut wgpu::CommandEncoder,

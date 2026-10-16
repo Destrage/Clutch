@@ -52,6 +52,21 @@ preview with minimal latency.
 └────────────────────────────────┴─────────────────────────────────────┘
 ```
 
+### Implementation notes (learned while building)
+- **Renderer**: Slint 1.18 `renderer-femtovg-wgpu` + `unstable-wgpu-30`, configured with
+  `WGPUConfiguration::Manual` so Slint uses the engine's instance/adapter/device/queue.
+- **Color**: Slint samples imported textures without sRGB decoding, so preview textures are stored
+  as `Rgba8Unorm` and written through an `Rgba8UnormSrgb` view (hardware encode).
+- **Frame safety**: engine and UI submit to the same `wgpu::Queue`, and the engine publishes a
+  ring slot only after submitting its frame, so a UI read is always ordered after the write. A
+  slot is reused only 3 frames later; no tearing without explicit fences.
+- **Backend**: DX12 is preferred on Windows (needed for D3D11 capture interop; avoids injected
+  third-party Vulkan layers). `WGPU_BACKEND` overrides.
+- **Editing logic** (hit testing, handles, move/resize/crop/rotate, snapping) lives in
+  `apps/estream/src/interact.rs` as pure, unit-tested functions; Slint only draws the overlay.
+- **Tooltips** use a shared `Hint` global rendered once at the window root, so they are never
+  clipped by panels.
+
 ## Risks / Trade-offs
 - Slint's wgpu interop API may be marked unstable. Mitigation: pin the Slint version and wrap the
   interop in a single module (`preview/texture_bridge.rs`).

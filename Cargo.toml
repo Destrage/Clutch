@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/*", "apps/*"]
 
 [workspace.package]
 version = "0.1.0"
@@ -32,6 +32,9 @@ tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 uuid = { version = "1.28.0", features = ["v7", "serde"] }
 wgpu = "30.0.1"
+slint = { version = "1.18.1", default-features = false, features = ["std", "backend-winit", "renderer-femtovg-wgpu", "unstable-wgpu-30", "accessibility", "compat-1-2"] }
+slint-build = "1.18.1"
+dirs = "7.0.0"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
