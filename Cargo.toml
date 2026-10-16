@@ -1,0 +1,44 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/estream/estream"
+rust-version = "1.90"
+
+[workspace.dependencies]
+estream-core = { path = "crates/estream-core" }
+estream-gpu = { path = "crates/estream-gpu" }
+estream-project = { path = "crates/estream-project" }
+estream-engine = { path = "crates/estream-engine" }
+
+anyhow = "1.0.104"
+arc-swap = "1.9.2"
+bytemuck = { version = "1.25.2", features = ["derive"] }
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+crossbeam-channel = "0.5.17"
+fastrand = "2.5.0"
+glam = { version = "0.34.1", features = ["serde", "bytemuck"] }
+png = "0.18.1"
+pollster = "1.0.1"
+serde = { version = "1.0.229", features = ["derive", "rc"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+tracing = "0.1.44"
+tracing-appender = "0.2.5"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+uuid = { version = "1.28.0", features = ["v7", "serde"] }
+wgpu = "30.0.1"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+
+[profile.dev.package."*"]
+opt-level = 2

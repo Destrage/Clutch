@@ -1,0 +1,412 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+//! End-to-end engine tests on a real (or software) GPU.
+
+use estream_core::{Alignment, BoundsMode, EngineClock, ItemTransform, Rational, Rgba8, Timestamp};
+use estream_engine::frame_clock::{FrameClock, wait_until};
+use estream_engine::graph::RenderGraph;
+use estream_engine::{
+    Command, Engine, EngineConfig, Event, ItemPatch, SourceRegistry, SourceStatus, VideoCore,
+};
+use estream_gpu::{GpuContext, GpuOptions, readback};
+use estream_project::{Canvas, Project, Scene, SceneItem, SourceDef, persist};
+use glam::Vec2;
+use std::path::PathBuf;
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
+
+fn gpu() -> GpuContext {
+    static GPU: OnceLock<GpuContext> = OnceLock::new();
+    GPU.get_or_init(|| {
+        GpuContext::new_headless(&GpuOptions::default())
+            .or_else(|_| {
+                GpuContext::new_headless(&GpuOptions {
+                    force_software: true,
+                })
+            })
+            .expect("GPU adapter")
+    })
+    .clone()
+}
+
+fn config() -> EngineConfig {
+    EngineConfig {
+        gpu: Some(gpu()),
+        ..Default::default()
+    }
+}
+
+fn temp_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("estream-engine-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn fill(width: f32, height: f32) -> ItemTransform {
+    ItemTransform {
+        bounds_mode: BoundsMode::Stretch,
+        bounds: Vec2::new(width, height),
+        bounds_alignment: Alignment::TopLeft,
+        ..Default::default()
+    }
+}
+
+/// Adds a source and a full-canvas item for it; returns (source, item).
+fn add_fullscreen(
+    engine: &Engine,
+    kind: &str,
+    settings: serde_json::Value,
+) -> (estream_core::SourceId, estream_core::ItemId) {
+    let project = engine.snapshot();
+    let canvas = &project.canvases[0];
+    let scene = canvas.active_scene.unwrap();
+    let source = SourceDef::new(kind, kind, settings);
+    let mut item = SceneItem::source(source.id);
+    item.transform = fill(canvas.width as f32, canvas.height as f32);
+    let ids = (source.id, item.id);
+    engine
+        .execute(Command::Batch {
+            commands: vec![
+                Command::AddSource {
+                    source,
+                    index: usize::MAX,
+                },
+                Command::AddItem {
+                    scene,
+                    parent: None,
+                    index: usize::MAX,
+                    item,
+                },
+            ],
+        })
+        .unwrap();
+    ids
+}
+
+fn wait_for(mut cond: impl FnMut() -> bool, timeout: Duration) -> bool {
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        if cond() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    false
+}
+
+#[test]
+fn engine_renders_live_frames_and_applies_edits() {
+    let engine =
+        Engine::start(Project::new_default(320, 180, Rational::fps(60)), config()).unwrap();
+    let canvas = engine.snapshot().canvases[0].id;
+    let (_, item) = add_fullscreen(
+        &engine,
+        "color",
+        serde_json::json!({ "color": Rgba8::new(255, 0, 0, 255) }),
+    );
+
+    let output = engine.canvas_output(canvas).expect("canvas output");
+    let rev = engine.revision();
+    // Wait until a frame rendered after the edit is available, then check its color.
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(wait_for(
+        || output.latest().is_some_and(|f| f.sequence > 3),
+        Duration::from_secs(2)
+    ));
+    let frame = output.latest().unwrap();
+    let pixels = readback::read_texture(engine.gpu().unwrap(), frame.preview).unwrap();
+    assert_eq!(&pixels[..4], &[255, 0, 0, 255], "revision {rev}");
+
+    // Hide the item through the command bus: the canvas returns to black.
+    let scene = engine.snapshot().scenes[0].id;
+    engine
+        .execute(Command::UpdateItem {
+            scene,
+            item,
+            patch: ItemPatch {
+                visible: Some(false),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    let frame = output.latest().unwrap();
+    let pixels = readback::read_texture(engine.gpu().unwrap(), frame.preview).unwrap();
+    assert_eq!(&pixels[..4], &[0, 0, 0, 255]);
+
+    // And undo brings it back.
+    assert!(engine.undo().unwrap());
+    std::thread::sleep(Duration::from_millis(100));
+    let frame = output.latest().unwrap();
+    let pixels = readback::read_texture(engine.gpu().unwrap(), frame.preview).unwrap();
+    assert_eq!(&pixels[..4], &[255, 0, 0, 255]);
+}
+
+#[test]
+fn two_canvases_render_at_their_own_size_and_rate() {
+    let mut project = Project::new_default(1920, 1080, Rational::fps(60));
+    let mut vertical = Canvas::new("Vertical", 1080, 1920, Rational::fps(30));
+    let scene = Scene::new("Vertical scene", vertical.id);
+    vertical.active_scene = Some(scene.id);
+    project.canvases.push(vertical);
+    project.scenes.push(scene);
+    let engine = Engine::start(project, config()).unwrap();
+
+    let outputs = engine.canvas_outputs();
+    assert_eq!(outputs.len(), 2);
+    assert_eq!((outputs[0].width, outputs[0].height), (1920, 1080));
+    assert_eq!((outputs[1].width, outputs[1].height), (1080, 1920));
+
+    let start: Vec<u64> = outputs
+        .iter()
+        .map(|o| o.stats.rendered.load(std::sync::atomic::Ordering::Relaxed))
+        .collect();
+    std::thread::sleep(Duration::from_secs(2));
+    let rendered: Vec<u64> = outputs
+        .iter()
+        .zip(&start)
+        .map(|(o, s)| o.stats.rendered.load(std::sync::atomic::Ordering::Relaxed) - s)
+        .collect();
+    assert!(
+        (115..=125).contains(&rendered[0]),
+        "60 fps canvas rendered {}",
+        rendered[0]
+    );
+    assert!(
+        (57..=63).contains(&rendered[1]),
+        "30 fps canvas rendered {}",
+        rendered[1]
+    );
+}
+
+#[test]
+fn frame_pacing_is_stable() {
+    let clock = EngineClock::new();
+    let rate = Rational::fps(60);
+    let mut frames = FrameClock::new(rate, clock.now());
+    let mut errors = Vec::new();
+    for _ in 0..300 {
+        let deadline = frames.next_deadline();
+        wait_until(&clock, deadline);
+        let woke = clock.now();
+        frames.advance(woke);
+        errors.push(woke.0.saturating_sub(deadline.0));
+    }
+    errors.sort_unstable();
+    let p99 = Duration::from_nanos(errors[errors.len() * 99 / 100]);
+    assert!(p99 < Duration::from_millis(1), "p99 wake-up error {p99:?}");
+    assert_eq!(frames.lagged(), 0);
+}
+
+/// Long-running pacing check from the spec (10 minutes). Run with `--ignored`.
+#[test]
+#[ignore]
+fn frame_pacing_ten_minutes() {
+    let engine = Engine::start(
+        Project::new_default(1920, 1080, Rational::fps(60)),
+        config(),
+    )
+    .unwrap();
+    add_fullscreen(&engine, "test_pattern", serde_json::Value::Null);
+    let output = engine.canvas_outputs()[0].clone();
+    let start = Instant::now();
+    let base = output
+        .stats
+        .rendered
+        .load(std::sync::atomic::Ordering::Relaxed);
+    std::thread::sleep(Duration::from_secs(600));
+    let rendered = output
+        .stats
+        .rendered
+        .load(std::sync::atomic::Ordering::Relaxed)
+        - base;
+    let expected = (start.elapsed().as_secs_f64() * 60.0) as u64;
+    assert!(
+        rendered.abs_diff(expected) <= 1,
+        "rendered {rendered}, expected {expected}"
+    );
+    assert_eq!(
+        output
+            .stats
+            .lagged
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+}
+
+#[test]
+fn slow_consumer_does_not_stall_rendering() {
+    let engine =
+        Engine::start(Project::new_default(320, 180, Rational::fps(60)), config()).unwrap();
+    let sub = engine.subscribe(); // never read during the burst
+    let scene = engine.snapshot().scenes[0].id;
+    let output = engine.canvas_outputs()[0].clone();
+    let before = output.latest().map(|f| f.sequence).unwrap_or(0);
+    for i in 0..3000 {
+        engine
+            .submit(Command::RenameScene {
+                scene,
+                name: format!("n{i}"),
+            })
+            .unwrap();
+    }
+    std::thread::sleep(Duration::from_millis(500));
+    let after = output.latest().unwrap().sequence;
+    assert!(
+        after > before + 20,
+        "rendering continued ({before} -> {after})"
+    );
+    assert!(sub.take_lagged(), "consumer is told it missed events");
+    assert!(wait_for(
+        || engine.snapshot().scenes[0].name == "n2999",
+        Duration::from_secs(2)
+    ));
+}
+
+#[test]
+fn unknown_source_type_is_unavailable_not_fatal() {
+    let engine =
+        Engine::start(Project::new_default(320, 180, Rational::fps(30)), config()).unwrap();
+    let (source, _) = add_fullscreen(&engine, "holo_projector", serde_json::Value::Null);
+    assert!(wait_for(
+        || matches!(
+            engine.source_status(source),
+            Some(SourceStatus::Unavailable(_))
+        ),
+        Duration::from_secs(2)
+    ));
+}
+
+#[test]
+fn autosave_writes_recovery_and_clean_shutdown_saves() {
+    let dir = temp_dir("autosave");
+    let path = dir.join("show.json");
+    let engine = Engine::start(
+        Project::new_default(320, 180, Rational::fps(30)),
+        EngineConfig {
+            collection_path: Some(path.clone()),
+            autosave_delay: Duration::from_millis(100),
+            video: false,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let events = engine.subscribe();
+    let scene = engine.snapshot().scenes[0].id;
+    engine
+        .execute(Command::RenameScene {
+            scene,
+            name: "Live".into(),
+        })
+        .unwrap();
+
+    assert!(wait_for(
+        || persist::find_recovery(&path).is_some(),
+        Duration::from_secs(2)
+    ));
+    let recovered = persist::load(&persist::recovery_path(&path)).unwrap();
+    assert_eq!(recovered.project.scenes[0].name, "Live");
+    let mut saw_recovery_event = false;
+    while let Some(e) = events.recv_timeout(Duration::from_millis(50)) {
+        saw_recovery_event |= matches!(e, Event::RecoverySaved { .. });
+    }
+    assert!(saw_recovery_event);
+
+    engine.shutdown();
+    assert_eq!(persist::load(&path).unwrap().project.scenes[0].name, "Live");
+    assert!(
+        persist::find_recovery(&path).is_none(),
+        "clean shutdown removes recovery file"
+    );
+}
+
+#[test]
+fn engine_rejects_invalid_commands_without_changes() {
+    let engine = Engine::start(
+        Project::new_default(320, 180, Rational::fps(30)),
+        EngineConfig {
+            video: false,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let before = engine.snapshot();
+    let scene = before.scenes[0].id;
+    let err = engine
+        .execute(Command::AddItem {
+            scene,
+            parent: None,
+            index: 0,
+            item: SceneItem::source(estream_core::SourceId::new()),
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("does not exist"));
+    assert_eq!(*engine.snapshot(), *before);
+    assert!(!engine.undo().unwrap(), "nothing recorded");
+}
+
+/// Golden image of a fixed composite scene rendered headless at t = 0.
+/// Set `ESTREAM_BLESS=1` to (re)generate the reference image.
+#[test]
+fn golden_composite_scene() {
+    let mut project = Project::new_default(320, 180, Rational::fps(30));
+    let bars = SourceDef::new(
+        "Bars",
+        "test_pattern",
+        serde_json::json!({ "width": 640, "height": 360 }),
+    );
+    let tint = SourceDef::new(
+        "Tint",
+        "color",
+        serde_json::json!({ "width": 100, "height": 100, "color": Rgba8::new(0, 128, 255, 255) }),
+    );
+    let mut bars_item = SceneItem::source(bars.id);
+    bars_item.transform = fill(320.0, 180.0);
+    let mut tint_item = SceneItem::source(tint.id);
+    tint_item.transform = ItemTransform {
+        position: Vec2::new(200.0, 20.0),
+        rotation: 15.0,
+        scale: Vec2::splat(0.8),
+        ..Default::default()
+    };
+    tint_item.opacity = 0.6;
+    let mut grouped = SceneItem::source(tint.id);
+    grouped.transform.position = Vec2::new(10.0, 10.0);
+    grouped.blend = estream_core::BlendMode::Screen;
+    let mut group = SceneItem::group("G", vec![grouped]);
+    group.transform.position = Vec2::new(20.0, 90.0);
+    group.transform.scale = Vec2::splat(0.5);
+    project.scenes[0].items = vec![bars_item, tint_item, group];
+    project.sources = vec![bars, tint];
+
+    let gpu = gpu();
+    let mut core = VideoCore::new(gpu.clone(), SourceRegistry::with_builtins());
+    core.sync(Arc::new(RenderGraph::build(&project, 1)), Timestamp::ZERO);
+    let outputs = core.render_now(Timestamp::ZERO);
+    let frame = outputs[0].latest().unwrap();
+    let pixels = readback::read_texture(&gpu, frame.preview).unwrap();
+
+    let golden = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/composite.png");
+    if std::env::var_os("ESTREAM_BLESS").is_some() || !golden.exists() {
+        readback::save_png(&golden, 320, 180, &pixels).unwrap();
+        eprintln!("wrote golden image {}", golden.display());
+    }
+    let (w, h, expected) = readback::load_png(&golden).unwrap();
+    assert_eq!((w, h), (320, 180));
+    let mismatched = pixels
+        .chunks(4)
+        .zip(expected.chunks(4))
+        .filter(|(a, b)| a.iter().zip(*b).any(|(x, y)| x.abs_diff(*y) > 3))
+        .count();
+    // Allow a few edge pixels to differ across GPU vendors' rasterizers.
+    let allowed = (w * h) as usize / 500;
+    if mismatched > allowed {
+        let actual = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/output/composite.actual.png");
+        readback::save_png(&actual, w, h, &pixels).unwrap();
+        panic!(
+            "{mismatched} pixels differ (allowed {allowed}); actual written to {}",
+            actual.display()
+        );
+    }
+}

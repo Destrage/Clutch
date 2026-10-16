@@ -1,0 +1,28 @@
+[package]
+name = "estream-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+estream-core.workspace = true
+estream-gpu.workspace = true
+estream-project.workspace = true
+arc-swap.workspace = true
+bytemuck.workspace = true
+chrono.workspace = true
+crossbeam-channel.workspace = true
+glam.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-appender.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+fastrand.workspace = true
