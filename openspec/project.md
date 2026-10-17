@@ -170,7 +170,7 @@ Each change below gets its own `openspec/changes/<id>/` when work starts. ✅ = 
 | 3 | ✅ `add-remote-api` | obs-websocket v5 compatible server | Parity (ecosystem compatible) |
 | 3 | ✅ `add-virtual-camera` | Virtual webcam output (Windows/macOS/Linux) | Parity |
 | 3 | ✅ `add-hotkeys-macros` | Global hotkeys, macros and triggers (scene switch on window focus, timers…) | Beyond OBS (built-in Advanced Scene Switcher) |
-| 3 | `add-stats-health` | Stats dock, network health, encoder overload hints, auto-quality fallback | Better |
+| 3 | ✅ `add-stats-health` | Stats dock, network health, encoder overload hints (auto-quality fallback deferred) | Better |
 | 4 – Ecosystem | `add-plugin-system` | WASM plugin host (sources, filters, docks, commands) | Better (sandboxed) |
 | 4 | `add-ai-features` | Noise suppression, background removal, auto captions | Beyond OBS |
 | 4 | `add-iso-recording` | Per-source isolated recordings | Beyond OBS |

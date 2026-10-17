@@ -1,0 +1,160 @@
+// Stats and health: live numbers with 5 minutes of history, and alerts with advice.
+
+import { Theme } from "theme.slint";
+import { Icons } from "icons.slint";
+import { StatsForm, StatTile, StatRow, AlertRow } from "types.slint";
+import { Button, Icon, SectionTitle } from "widgets.slint";
+import { Modal } from "overlays.slint";
+
+component Tile inherits Rectangle {
+    in property <StatTile> tile;
+    property <color> tone: tile.level == 2 ? Theme.live : tile.level == 1 ? Theme.warn : Theme.accent;
+
+    height: 116px;
+    border-radius: Theme.radius-m;
+    background: Theme.surface-2;
+    border-width: 1px;
+    border-color: tile.level > 0 ? tone.with-alpha(0.6) : Theme.border;
+    VerticalLayout {
+        padding: 10px;
+        alignment: start;
+        spacing: 2px;
+        Text { text: tile.label; color: Theme.text-faint; font-size: Theme.font-xs; }
+        Text { text: tile.value; color: tile.level > 0 ? tone : Theme.text; font-size: Theme.font-xl; font-weight: 700; }
+        Text { text: tile.sub; color: Theme.text-muted; font-size: Theme.font-xs; overflow: elide; }
+    }
+    if tile.path != "": Path {
+        x: 10px;
+        y: parent.height - 32px;
+        width: parent.width - 20px;
+        height: 20px;
+        viewbox-width: 100;
+        viewbox-height: 12;
+        commands: tile.path;
+        stroke: tone.with-alpha(0.8);
+        stroke-width: 1.5px;
+        fill: transparent;
+    }
+}
+
+component TableRow inherits HorizontalLayout {
+    in property <StatRow> row-data;
+    in property <bool> header;
+    spacing: 10px;
+    height: 26px;
+    property <color> tone: row-data.level == 2 ? Theme.live : row-data.level == 1 ? Theme.warn : Theme.text;
+    VerticalLayout {
+        alignment: center;
+        horizontal-stretch: 1;
+        Text { text: row-data.name; color: header ? Theme.text-faint : Theme.text; font-size: header ? Theme.font-xs : Theme.font-s; overflow: elide; }
+        if !header && row-data.detail != "": Text { text: row-data.detail; color: Theme.text-faint; font-size: Theme.font-xs; overflow: elide; }
+    }
+    for c in [row-data.c1, row-data.c2, row-data.c3, row-data.c4]: Text {
+        width: 96px;
+        text: c;
+        color: header ? Theme.text-faint : tone;
+        font-size: header ? Theme.font-xs : Theme.font-s;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+    }
+}
+
+export component StatsDialog inherits Modal {
+    in property <StatsForm> form;
+
+    card-width: 900px;
+    card-top: 40px;
+
+    FocusScope {
+        height: 0px;
+        init => { self.focus(); }
+        key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                root.dismiss();
+                return EventResult.accept;
+            }
+            return EventResult.reject;
+        }
+    }
+    HorizontalLayout {
+        padding: 18px;
+        padding-bottom: 4px;
+        Text { text: "Stats"; color: Theme.text; font-size: Theme.font-xl; font-weight: 700; horizontal-stretch: 1; }
+        Button { text: "Done"; kind: "primary"; clicked => { root.dismiss(); } }
+    }
+    Flickable {
+        height: min(content.preferred-height, 660px);
+        width: root.inner-width;
+        content-width: root.inner-width;
+        content-height: content.preferred-height;
+        content := VerticalLayout {
+            width: root.inner-width;
+            padding: 18px;
+            padding-top: 8px;
+            spacing: 12px;
+
+            if root.form.alerts.length == 0: HorizontalLayout {
+                spacing: 8px;
+                height: 34px;
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle { width: 9px; height: 9px; border-radius: 4.5px; background: Theme.ok; }
+                }
+                Text { text: "Everything looks healthy."; color: Theme.text-muted; font-size: Theme.font-m; vertical-alignment: center; }
+            }
+            for a in root.form.alerts: Rectangle {
+                border-radius: Theme.radius-m;
+                background: (a.severity == 2 ? Theme.live : Theme.warn).with-alpha(0.10);
+                border-width: 1px;
+                border-color: (a.severity == 2 ? Theme.live : Theme.warn).with-alpha(0.5);
+                height: alert-body.preferred-height;
+                alert-body := HorizontalLayout {
+                    padding: 12px;
+                    spacing: 10px;
+                    VerticalLayout {
+                        alignment: start;
+                        Icon { source: Icons.triangle-alert; width: 18px; height: 18px; colorize: a.severity == 2 ? Theme.live : Theme.warn; }
+                    }
+                    VerticalLayout {
+                        spacing: 3px;
+                        horizontal-stretch: 1;
+                        Text { text: a.title; color: Theme.text; font-size: Theme.font-m; font-weight: 700; wrap: word-wrap; }
+                        Text { text: a.detail; color: Theme.text-muted; font-size: Theme.font-s; wrap: word-wrap; }
+                        Text { text: a.advice; color: Theme.text; font-size: Theme.font-s; wrap: word-wrap; }
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 10px;
+                Tile { tile: root.form.tiles[0]; width: (parent.width - 30px) / 4; }
+                Tile { tile: root.form.tiles[1]; width: (parent.width - 30px) / 4; }
+                Tile { tile: root.form.tiles[2]; width: (parent.width - 30px) / 4; }
+                Tile { tile: root.form.tiles[3]; width: (parent.width - 30px) / 4; }
+            }
+            HorizontalLayout {
+                spacing: 10px;
+                Tile { tile: root.form.tiles[4]; width: (parent.width - 30px) / 4; }
+                Tile { tile: root.form.tiles[5]; width: (parent.width - 30px) / 4; }
+                Tile { tile: root.form.tiles[6]; width: (parent.width - 30px) / 4; }
+                Tile { tile: root.form.tiles[7]; width: (parent.width - 30px) / 4; }
+            }
+
+            SectionTitle { text: "ENCODERS"; }
+            if root.form.encoders.length == 0: Text { text: "Nothing is recording or streaming."; color: Theme.text-faint; font-size: Theme.font-s; }
+            if root.form.encoders.length > 0: TableRow {
+                header: true;
+                row-data: { name: "Output", c1: "Frames/s", c2: "Dropped", c3: "Bitrate", c4: "" };
+            }
+            for r in root.form.encoders: TableRow { row-data: r; }
+
+            SectionTitle { text: "STREAM DESTINATIONS"; }
+            if root.form.destinations.length == 0: Text { text: "Not live."; color: Theme.text-faint; font-size: Theme.font-s; }
+            if root.form.destinations.length > 0: TableRow {
+                header: true;
+                row-data: { name: "Destination", c1: "Bitrate", c2: "Dropped", c3: "Delay", c4: "Reconnects" };
+            }
+            for r in root.form.destinations: TableRow { row-data: r; }
+        }
+    }
+}

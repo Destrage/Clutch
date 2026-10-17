@@ -324,3 +324,40 @@ export struct AutomationForm {
     error: string,
     running: bool,
 }
+
+/// One metric tile in Stats: value, caption and a sparkline.
+export struct StatTile {
+    label: string,
+    value: string,
+    sub: string,
+    /// Sparkline as path commands in a 100×12 box ("" = no history yet).
+    path: string,
+    /// 0 good, 1 warning, 2 problem.
+    level: int,
+}
+
+/// An encoder or destination row in Stats.
+export struct StatRow {
+    name: string,
+    detail: string,
+    c1: string,
+    c2: string,
+    c3: string,
+    c4: string,
+    level: int,
+}
+
+export struct AlertRow {
+    /// 1 warning, 2 problem.
+    severity: int,
+    title: string,
+    detail: string,
+    advice: string,
+}
+
+export struct StatsForm {
+    tiles: [StatTile],
+    encoders: [StatRow],
+    destinations: [StatRow],
+    alerts: [AlertRow],
+}

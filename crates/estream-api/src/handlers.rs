@@ -569,10 +569,11 @@ pub fn handle(
             });
             let stream = studio.output_status(Output::Stream);
             let record = studio.output_status(Output::Record);
+            let (cpu, memory, disk) = studio.system_stats().unwrap_or_default();
             Ok(json!({
-                "cpuUsage": 0.0,
-                "memoryUsage": 0.0,
-                "availableDiskSpace": 0.0,
+                "cpuUsage": cpu,
+                "memoryUsage": memory,
+                "availableDiskSpace": disk,
                 "activeFps": ctx.active_fps,
                 "averageFrameRenderTime": render_ns as f64 / 1e6,
                 "renderSkippedFrames": lagged,

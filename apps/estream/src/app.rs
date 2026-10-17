@@ -116,6 +116,10 @@ pub struct App {
     auto_selected: Option<estream_core::MacroId>,
     /// Trigger whose hotkey is being recorded.
     auto_recording: Option<usize>,
+    /// Stats history and health alerts.
+    monitor: estream_health::Monitor,
+    system: estream_health::SystemSampler,
+    health_at: Instant,
 }
 
 /// What the shader editor dialog applies to.
@@ -425,6 +429,9 @@ impl App {
             runner: Some(estream_automation::Runner::new(true)),
             auto_selected: None,
             auto_recording: None,
+            monitor: estream_health::Monitor::new(),
+            system: estream_health::SystemSampler::start(),
+            health_at: Instant::now(),
         };
         window.set_scenes(ModelRc::from(app.scenes_model.clone()));
         window.set_layers(ModelRc::from(app.layers_model.clone()));
@@ -750,6 +757,10 @@ impl App {
         }
         self.tick_api();
         self.tick_automation();
+        if self.health_at.elapsed() >= Duration::from_secs(1) {
+            self.health_at = Instant::now();
+            self.sample_health();
+        }
     }
 
     fn update_stats(&mut self) {
@@ -2759,6 +2770,299 @@ impl App {
         }
     }
 
+    // ------------------------------------------------------------ stats and health
+
+    /// Once a second: gather counters, update health, announce new alerts.
+    fn sample_health(&mut self) {
+        use estream_health::{CanvasCounters, DestCounters, OutputCounters, Sample};
+        use std::sync::atomic::Ordering::Relaxed;
+        let Some(engine) = &self.engine else { return };
+        let snapshot = engine.snapshot();
+        self.system
+            .watch_disk(Some(self.settings.recording.folder.clone()));
+        let canvases = snapshot
+            .canvases
+            .iter()
+            .filter_map(|c| {
+                let out = engine.canvas_output(c.id)?;
+                Some(CanvasCounters {
+                    name: c.name.clone(),
+                    target_fps: c.fps.as_f64(),
+                    rendered: out.stats.rendered.load(Relaxed),
+                    lagged: out.stats.lagged.load(Relaxed),
+                    encoder_dropped: out.stats.encoder_dropped.load(Relaxed),
+                    render_ms: out.stats.last_render_ns.load(Relaxed) as f64 / 1e6,
+                })
+            })
+            .collect();
+        let encoder_name = |s: &estream_media::OutputStats| {
+            s.encoder.lock().map(|e| e.clone()).unwrap_or_default()
+        };
+        let mut outputs = Vec::new();
+        if let Some(rec) = &self.recording {
+            let s = rec.stats();
+            outputs.push(OutputCounters {
+                key: "record".into(),
+                name: "Recording".into(),
+                encoder: encoder_name(s),
+                frames: s.frames.load(Relaxed),
+                dropped: s.dropped.load(Relaxed),
+                bytes: s.bytes.load(Relaxed),
+                recording: true,
+            });
+        }
+        if let Some(replay) = &self.replay {
+            let s = replay.stats();
+            outputs.push(OutputCounters {
+                key: "replay".into(),
+                name: "Replay buffer".into(),
+                encoder: encoder_name(s),
+                frames: s.frames.load(Relaxed),
+                dropped: s.dropped.load(Relaxed),
+                bytes: s.bytes.load(Relaxed),
+                recording: false,
+            });
+        }
+        let mut destinations = Vec::new();
+        if let Some(stream) = &self.stream {
+            let n = stream.encoder_count();
+            for i in 0..n {
+                if let Some(s) = stream.encoder_stats(i) {
+                    outputs.push(OutputCounters {
+                        key: format!("stream:{i}"),
+                        name: if n > 1 {
+                            format!("Stream encoder {}", i + 1)
+                        } else {
+                            "Stream".into()
+                        },
+                        encoder: encoder_name(s),
+                        frames: s.frames.load(Relaxed),
+                        dropped: s.dropped.load(Relaxed),
+                        bytes: s.bytes.load(Relaxed),
+                        recording: false,
+                    });
+                }
+            }
+            let fps = snapshot.canvases.first().map_or(60.0, |c| c.fps.as_f64());
+            for (k, d) in stream.destinations().iter().enumerate() {
+                let state = d.state();
+                if state == estream_media::StreamState::Stopped {
+                    continue;
+                }
+                let key = self.stream_dests.get(k).map_or(k, |l| l.config).to_string();
+                destinations.push(DestCounters {
+                    key: format!("dest:{key}"),
+                    name: d.name().to_owned(),
+                    state: format!("{state:?}"),
+                    reconnecting: state == estream_media::StreamState::Reconnecting,
+                    bytes: d.stats.bytes.load(Relaxed),
+                    dropped: d.stats.network.dropped.load(Relaxed),
+                    queue_ms: d.stats.network.queue_ms.load(Relaxed),
+                    reconnects: d.stats.network.reconnects.load(Relaxed) as u64,
+                    fps,
+                });
+            }
+        }
+        let raised = self.monitor.push(Sample {
+            at: Instant::now(),
+            canvases,
+            outputs,
+            destinations,
+            system: self.system.latest(),
+        });
+        for alert in raised {
+            let problem = alert.severity == estream_health::Severity::Problem;
+            self.toast(format!("{} — {}", alert.title, alert.advice), problem);
+        }
+        let Some(w) = self.window() else { return };
+        let alerts = self.monitor.alerts();
+        w.set_health(match self.monitor.health() {
+            estream_health::Severity::Ok => 0,
+            estream_health::Severity::Warning => 1,
+            estream_health::Severity::Problem => 2,
+        });
+        w.set_health_text(match alerts.as_slice() {
+            [] => "Healthy".into(),
+            [one] => one.title.clone().into(),
+            [first, rest @ ..] => format!("{} (+{} more)", first.title, rest.len()).into(),
+        });
+        if w.get_stats_open() {
+            self.refresh_stats();
+        }
+    }
+
+    fn open_stats(&mut self) {
+        self.refresh_stats();
+        if let Some(w) = self.window() {
+            w.set_stats_open(true);
+        }
+    }
+
+    fn refresh_stats(&self) {
+        use crate::ui::{AlertRow, StatRow, StatTile, StatsForm};
+        let Some(w) = self.window() else { return };
+        let m = &self.monitor;
+        let history = m.history();
+        let p = m.latest();
+        /// Sparkline commands for a series in a 100×30 box (0 at the bottom).
+        fn spark(values: &[f64], max: f64) -> SharedString {
+            if values.len() < 2 {
+                return SharedString::new();
+            }
+            let max = values.iter().copied().fold(max, f64::max).max(1e-9);
+            let n = values.len() - 1;
+            let mut path = String::new();
+            for (i, v) in values.iter().enumerate() {
+                let x = i as f64 / n as f64 * 100.0;
+                let y = 11.5 - (v / max).clamp(0.0, 1.0) * 11.0;
+                path.push_str(&format!(
+                    "{}{x:.2} {y:.2} ",
+                    if i == 0 { "M " } else { "L " }
+                ));
+            }
+            path.into()
+        }
+        let series =
+            |f: fn(&estream_health::Point) -> f64| -> Vec<f64> { history.iter().map(f).collect() };
+        let level = |warn: bool, problem: bool| {
+            if problem {
+                2
+            } else if warn {
+                1
+            } else {
+                0
+            }
+        };
+        let fps_skipped = series(|p| p.skipped_pct);
+        let recent_skipped = fps_skipped.iter().rev().take(10).sum::<f64>() / 10.0;
+        let gpu = series(|p| p.gpu.unwrap_or(0.0));
+        let tiles = vec![
+            StatTile {
+                label: "FRAME RATE".into(),
+                value: format!("{:.1} fps", p.fps).into(),
+                sub: format!("target {:.0} · render {:.1} ms", p.target_fps, p.render_ms).into(),
+                path: spark(&series(|p| p.fps), p.target_fps),
+                level: level(recent_skipped > 2.0, recent_skipped > 10.0),
+            },
+            StatTile {
+                label: "SKIPPED FRAMES".into(),
+                value: format!("{recent_skipped:.1}%").into(),
+                sub: "average over the last 10 s".into(),
+                path: spark(&fps_skipped, 5.0),
+                level: level(recent_skipped > 2.0, recent_skipped > 10.0),
+            },
+            StatTile {
+                label: "CPU".into(),
+                value: format!("{:.0}%", p.cpu).into(),
+                sub: format!("eStream {:.0}%", p.cpu_process).into(),
+                path: spark(&series(|p| p.cpu), 100.0),
+                level: level(p.cpu > 90.0, false),
+            },
+            StatTile {
+                label: "GPU".into(),
+                value: p.gpu.map_or("—".into(), |g| format!("{g:.0}%")).into(),
+                sub: "3D load (busiest GPU)".into(),
+                path: if p.gpu.is_some() {
+                    spark(&gpu, 100.0)
+                } else {
+                    SharedString::new()
+                },
+                level: level(p.gpu.is_some_and(|g| g > 95.0), false),
+            },
+            StatTile {
+                label: "MEMORY".into(),
+                value: format!("{:.0} MB", p.memory_mb).into(),
+                sub: "used by eStream".into(),
+                path: spark(&series(|p| p.memory_mb), 1.0),
+                level: 0,
+            },
+            StatTile {
+                label: "RECORDING DRIVE".into(),
+                value: p
+                    .disk_free_gb
+                    .map_or("—".into(), |g| format!("{g:.0} GB free"))
+                    .into(),
+                sub: self
+                    .settings
+                    .recording
+                    .folder
+                    .ancestors()
+                    .last()
+                    .map(|r| r.display().to_string())
+                    .unwrap_or_default()
+                    .into(),
+                path: SharedString::new(),
+                level: level(
+                    p.disk_free_gb.is_some_and(|g| g < 5.0),
+                    p.disk_free_gb.is_some_and(|g| g < 1.0),
+                ),
+            },
+            StatTile {
+                label: "UPLOAD".into(),
+                value: format!("{:.1} Mb/s", p.upload_kbps / 1000.0).into(),
+                sub: format!("send delay {:.1} s", p.queue_ms / 1000.0).into(),
+                path: spark(&series(|p| p.upload_kbps), 1.0),
+                level: level(p.network_dropped_pct > 1.0 || p.queue_ms > 2000.0, false),
+            },
+            StatTile {
+                label: "ENCODER DROPS".into(),
+                value: format!("{:.1}%", p.encoder_dropped_pct).into(),
+                sub: "worst encoder, last 10 s".into(),
+                path: spark(&series(|p| p.encoder_dropped_pct), 5.0),
+                level: level(p.encoder_dropped_pct > 1.0, p.encoder_dropped_pct > 5.0),
+            },
+        ];
+        let encoders: Vec<StatRow> = m
+            .outputs()
+            .iter()
+            .map(|o| StatRow {
+                name: o.name.clone().into(),
+                detail: o.encoder.clone().into(),
+                c1: format!("{:.1}", o.fps).into(),
+                c2: format!("{:.1}%", o.dropped_pct).into(),
+                c3: format!("{:.1} Mb/s", o.kbps / 1000.0).into(),
+                c4: SharedString::new(),
+                level: level(o.dropped_pct > 1.0, o.dropped_pct > 5.0),
+            })
+            .collect();
+        let destinations: Vec<StatRow> = m
+            .destinations()
+            .iter()
+            .map(|d| StatRow {
+                name: d.name.clone().into(),
+                detail: d.state.clone().into(),
+                c1: format!("{:.1} Mb/s", d.kbps / 1000.0).into(),
+                c2: format!("{:.1}%", d.dropped_pct).into(),
+                c3: format!("{:.1} s", d.queue_ms as f64 / 1000.0).into(),
+                c4: d.reconnects.to_string().into(),
+                level: level(
+                    d.dropped_pct > 0.5 || d.queue_ms > 1000,
+                    d.dropped_pct > 1.0 || d.state == "Reconnecting",
+                ),
+            })
+            .collect();
+        let alerts: Vec<AlertRow> = m
+            .alerts()
+            .into_iter()
+            .map(|a| AlertRow {
+                severity: if a.severity == estream_health::Severity::Problem {
+                    2
+                } else {
+                    1
+                },
+                title: a.title.into(),
+                detail: a.detail.into(),
+                advice: a.advice.into(),
+            })
+            .collect();
+        w.set_stats_form(StatsForm {
+            tiles: ModelRc::new(VecModel::from(tiles)),
+            encoders: ModelRc::new(VecModel::from(encoders)),
+            destinations: ModelRc::new(VecModel::from(destinations)),
+            alerts: ModelRc::new(VecModel::from(alerts)),
+        });
+    }
+
     // ------------------------------------------------------------ automation
 
     fn tick_automation(&mut self) {
@@ -4416,6 +4720,7 @@ impl App {
             Action::SaveReplay => self.save_replay(),
             Action::RevealOutput => self.reveal_output(),
             Action::OpenAutomation => self.open_automation(),
+            Action::OpenStats => self.open_stats(),
             Action::OpenSettings => {
                 self.refresh_settings_form();
                 w.set_settings_open(true);
@@ -4937,6 +5242,15 @@ impl estream_api::Studio for App {
             .ok_or("the media source isn't loaded")?;
         player.seek(position);
         Ok(())
+    }
+
+    fn system_stats(&self) -> Option<(f64, f64, f64)> {
+        let s = self.monitor.system();
+        Some((
+            s.cpu_process,
+            s.memory_bytes as f64 / 1_048_576.0,
+            s.disk_free.map_or(0.0, |b| b as f64 / 1_048_576.0),
+        ))
     }
 
     fn macro_names(&self) -> Vec<String> {

@@ -1605,6 +1605,7 @@ dependencies = [
  "estream-core",
  "estream-engine",
  "estream-gpu",
+ "estream-health",
  "estream-media",
  "estream-project",
  "estream-vcam",
@@ -1753,6 +1754,13 @@ dependencies = [
  "thiserror 2.0.21",
  "tracing",
  "wgpu",
+]
+
+[[package]]
+name = "estream-health"
+version = "0.1.0"
+dependencies = [
+ "windows",
 ]
 
 [[package]]

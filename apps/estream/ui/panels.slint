@@ -1389,6 +1389,10 @@ export component StatusBar inherits Rectangle {
     /// Live stream summary; `stream-health` 0 = not streaming, 1 good, 2 congested, 3 failing.
     in property <string> stream-info;
     in property <int> stream-health;
+    /// Overall health: 0 good, 1 warning, 2 problem; `health-text` is the main alert.
+    in property <int> health;
+    in property <string> health-text;
+    callback open-stats();
 
     height: 28px;
     background: Theme.bg;
@@ -1404,7 +1408,7 @@ export component StatusBar inherits Rectangle {
                     width: 7px;
                     height: 7px;
                     border-radius: 3.5px;
-                    background: root.lagged > 0 ? Theme.warn : Theme.ok;
+                    background: root.health == 2 ? Theme.live : root.health == 1 ? Theme.warn : Theme.ok;
                 }
             }
             Text {
@@ -1412,15 +1416,24 @@ export component StatusBar inherits Rectangle {
                 color: Theme.text-muted;
                 font-size: Theme.font-xs;
                 vertical-alignment: center;
+                TouchArea {
+                    mouse-cursor: MouseCursor.pointer;
+                    clicked => { root.open-stats(); }
+                }
             }
         }
         Text { text: "render " + root.render-ms.to-fixed(2) + " ms"; color: Theme.text-muted; font-size: Theme.font-xs; vertical-alignment: center; }
         Text {
-            text: root.lagged + " lagged";
-            color: root.lagged > 0 ? Theme.warn : Theme.text-muted;
+            text: root.health-text;
+            color: root.health == 2 ? Theme.live : root.health == 1 ? Theme.warn : Theme.text-muted;
             font-size: Theme.font-xs;
-            font-weight: root.lagged > 0 ? 700 : 400;
+            font-weight: root.health > 0 ? 700 : 400;
             vertical-alignment: center;
+            overflow: elide;
+            TouchArea {
+                mouse-cursor: MouseCursor.pointer;
+                clicked => { root.open-stats(); }
+            }
         }
         Text { text: root.gpu; color: Theme.text-faint; font-size: Theme.font-xs; vertical-alignment: center; overflow: elide; }
         Rectangle { horizontal-stretch: 1; }

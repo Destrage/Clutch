@@ -12,6 +12,7 @@ A modern streaming and recording studio written from scratch in Rust. It is an a
 - multiple canvases (for example horizontal and vertical at the same time);
 - a virtual camera for Zoom, Teams, Discord, Meet and other apps (Windows 11);
 - automation: macros started by global hotkeys, a window coming to the front, timers, scenes or outputs;
+- stats and health: live numbers with 5 minutes of history, and plain-language alerts (rendering lag, encoder overload, network trouble, CPU/GPU load, low disk) with advice;
 
 Windows 10/11 (x64) is the supported platform today.
 
@@ -163,6 +164,7 @@ crates/estream-shm      shared-memory frames and audio between processes
 crates/estream-api      remote control server (obs-websocket v5 protocol)
 crates/estream-vcam     virtual camera: the Media Foundation camera source DLL and its controls
 crates/estream-automation  macros, triggers and global hotkeys
+crates/estream-health   stats history, health alerts and the system sampler
 openspec/               specs and change proposals (start with openspec/project.md)
 ```
 

@@ -2,12 +2,13 @@
 
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
-import { CanvasTab, SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SourceType, PropRow, MixerStrip, AudioInspect, SettingsForm, LiveRow, DestinationRow, VideoFilterRow, MediaInspect, AutomationForm, MacroRow, TriggerRow, StepRow } from "types.slint";
+import { CanvasTab, SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SourceType, PropRow, MixerStrip, AudioInspect, SettingsForm, LiveRow, DestinationRow, VideoFilterRow, MediaInspect, AutomationForm, MacroRow, TriggerRow, StepRow, StatsForm, StatTile, StatRow, AlertRow } from "types.slint";
 import { VSplitter, HSplitter, TooltipLayer, Hint } from "widgets.slint";
 import { Preview } from "preview.slint";
 import { TopBar, ScenesPanel, SourcesPanel, InspectorPanel, MixerPanel, StatusBar, TransitionColumn, ProgramView, CanvasTabs } from "panels.slint";
 import { CommandPalette, AddSourceDialog, SetupWizard, RecoveryPrompt, Toast, SettingsDialog, LivePanel, ShaderDialog } from "overlays.slint";
 import { AutomationDialog } from "automation.slint";
+import { StatsDialog } from "stats.slint";
 
 export { Theme }
 
@@ -125,6 +126,10 @@ export component AppWindow inherits Window {
     callback live-toggle(int);
     in-out property <bool> settings-open;
     in-out property <bool> automation-open;
+    in-out property <bool> stats-open;
+    in property <StatsForm> stats-form;
+    in property <int> health;
+    in property <string> health-text: "Healthy";
     in property <AutomationForm> automation-form;
     callback automation-edit(string, int, float);
     callback automation-text(string, int, string);
@@ -411,6 +416,9 @@ export component AppWindow inherits Window {
                 message: root.status-message;
                 stream-info: root.stream-info;
                 stream-health: root.stream-health;
+                health: root.health;
+                health-text: root.health-text;
+                open-stats => { root.action("stats"); }
             }
         }
     }
@@ -471,6 +479,14 @@ export component AppWindow inherits Window {
         browse => { root.settings-browse(); }
         dismiss => {
             root.settings-open = false;
+            main-keys.focus();
+        }
+    }
+
+    if root.stats-open: StatsDialog {
+        form: root.stats-form;
+        dismiss => {
+            root.stats-open = false;
             main-keys.focus();
         }
     }

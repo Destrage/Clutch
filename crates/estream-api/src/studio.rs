@@ -82,6 +82,11 @@ pub trait Studio {
     /// A source's action button (e.g. a browser source's refresh).
     fn press_input_button(&mut self, source: SourceId, property: &str) -> Result<(), String>;
 
+    /// Machine load for `GetStats`: (CPU %, memory MB, free disk MB on the recording drive).
+    fn system_stats(&self) -> Option<(f64, f64, f64)> {
+        None
+    }
+
     /// Macro names (obs-websocket "hotkeys").
     fn macro_names(&self) -> Vec<String> {
         Vec::new()
