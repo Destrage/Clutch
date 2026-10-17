@@ -12,10 +12,17 @@ export component TopBar inherits Rectangle {
     in property <bool> dirty;
     in property <bool> can-undo;
     in property <bool> can-redo;
+    in property <bool> recording;
+    in property <string> record-time;
+    in property <bool> replay-active;
     callback open-palette();
     callback undo();
     callback redo();
     callback toggle-theme();
+    callback toggle-record();
+    callback toggle-replay();
+    callback save-replay();
+    callback open-settings();
 
     height: 52px;
     background: Theme.bg;
@@ -140,12 +147,40 @@ export component TopBar inherits Rectangle {
         }
         VerticalLayout {
             alignment: center;
+            IconButton {
+                icon: Icons.settings;
+                tooltip: "Settings (Ctrl+,)";
+                clicked => { root.open-settings(); }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            IconButton {
+                icon: Icons.rotate-cw;
+                toggled: root.replay-active;
+                tooltip: root.replay-active ? "Stop replay buffer" : "Start replay buffer";
+                clicked => { root.toggle-replay(); }
+            }
+        }
+        if root.replay-active: VerticalLayout {
+            alignment: center;
             Button {
-                text: "Record";
+                text: "Save replay";
+                kind: "ghost";
+                tooltip: "Save the last seconds (Ctrl+Shift+R)";
+                clicked => { root.save-replay(); }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            Button {
+                text: root.recording ? root.record-time : "Record";
                 has-icon: true;
-                icon: Icons.circle;
-                enabled: false;
-                tooltip: "Recording arrives with the add-recording change";
+                icon: root.recording ? Icons.square : Icons.circle;
+                kind: root.recording ? "live" : "default";
+                active: root.recording;
+                tooltip: root.recording ? "Stop recording" : "Start recording";
+                clicked => { root.toggle-record(); }
             }
         }
         VerticalLayout {

@@ -70,6 +70,13 @@ export component Button inherits Rectangle {
         }
     }
 
+    // Keep a visible tooltip in sync when the label changes while hovered.
+    changed tooltip => {
+        if (ta.has-hover && root.tooltip != "") {
+            Hint.text = root.tooltip;
+        }
+    }
+
     ta := TouchArea {
         enabled: root.enabled;
         mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
@@ -105,6 +112,12 @@ export component IconButton inherits Rectangle {
     accessible-label: tooltip;
     accessible-enabled: enabled;
     accessible-action-default => { if (enabled) { root.clicked(); } }
+
+    changed tooltip => {
+        if (ta.has-hover && root.tooltip != "") {
+            Hint.text = root.tooltip;
+        }
+    }
 
     Icon {
         source: root.icon;
@@ -162,6 +175,10 @@ export component TextField inherits Rectangle {
     forward-focus: input;
 
     height: 28px;
+    clip: true;
+    // Size by layout, not by text, so long values (paths) scroll inside the field.
+    preferred-width: 160px;
+    horizontal-stretch: 1;
     border-radius: Theme.radius-s;
     background: Theme.surface-2;
     border-width: 1px;
@@ -175,6 +192,8 @@ export component TextField inherits Rectangle {
         padding-left: 8px;
         padding-right: 8px;
         input := TextInput {
+            min-width: 0px;
+            horizontal-stretch: 1;
             enabled: root.enabled;
             input-type: root.input-type;
             single-line: true;

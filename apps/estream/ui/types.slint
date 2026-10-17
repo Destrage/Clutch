@@ -154,3 +154,24 @@ export struct AudioInspect {
     global: bool,
     filters: [FilterRow],
 }
+// Recording & app settings shown in the Settings dialog.
+export struct SettingsForm {
+    folder: string,
+    filename: string,
+    container: int,
+    codec: int,
+    encoders: [string],
+    encoder: int,
+    rate-control: int,
+    bitrate: float,
+    quality: float,
+    keyframe: float,
+    preset: int,
+    audio-codec: int,
+    audio-bitrate: float,
+    tracks: int,
+    replay-seconds: float,
+    auto-remux: bool,
+    theme: int,
+    ffmpeg: string,
+}

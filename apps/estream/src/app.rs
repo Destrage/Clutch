@@ -7,7 +7,7 @@ use crate::presets::{self, PRESETS};
 use crate::settings::{PanelLayout, Paths, Settings, ThemeMode, WindowState};
 use crate::ui::{
     AppWindow, AudioInspect, CanvasBox, FilterParamRow, FilterRow, Guide, Inspect, LayerRow,
-    MixerStrip, PaletteEntry, Preset, PropRow, SceneRow, SourceType, Theme,
+    MixerStrip, PaletteEntry, Preset, PropRow, SceneRow, SettingsForm, SourceType, Theme,
 };
 use estream_core::{BlendMode, BoundsMode, CanvasId, ItemId, Rgba8, SceneId, SourceId};
 use estream_engine::{
@@ -75,6 +75,10 @@ pub struct App {
     stats_rendered: u64,
     toast_until: Option<Instant>,
     theme_checked_at: Instant,
+    recording: Option<estream_media::Recording>,
+    replay: Option<estream_media::ReplayBuffer>,
+    /// Last file written by a recording or replay save, for "Show in folder".
+    last_output: Option<std::path::PathBuf>,
 }
 
 fn id_str(id: impl std::fmt::Display) -> SharedString {
@@ -235,6 +239,9 @@ impl App {
             stats_rendered: 0,
             toast_until: None,
             theme_checked_at: Instant::now(),
+            recording: None,
+            replay: None,
+            last_output: None,
         };
         window.set_scenes(ModelRc::from(app.scenes_model.clone()));
         window.set_layers(ModelRc::from(app.layers_model.clone()));
@@ -394,6 +401,15 @@ impl App {
             return;
         }
         self.shut_down = true;
+        // Finish files cleanly before the engine goes away.
+        if let Some(engine) = &self.engine {
+            if let Some(rec) = self.recording.take() {
+                let _ = rec.stop(engine);
+            }
+            if let Some(replay) = self.replay.take() {
+                let _ = replay.stop(engine);
+            }
+        }
         if let Some(w) = self.window() {
             let win = w.window();
             let size = win.size();
@@ -483,6 +499,7 @@ impl App {
         }
         if self.stats_at.elapsed() >= Duration::from_millis(500) {
             self.update_stats();
+            self.update_outputs();
         }
         if self.toast_until.is_some_and(|t| Instant::now() >= t) {
             self.toast_until = None;
@@ -1047,6 +1064,293 @@ impl App {
         }) {
             self.selection = Some(item_id);
             self.refresh();
+        }
+    }
+
+    // ------------------------------------------------------------ outputs
+
+    fn toggle_recording(&mut self) {
+        let Some(engine) = &self.engine else { return };
+        if let Some(rec) = self.recording.take() {
+            match rec.stop(engine) {
+                Ok(path) => {
+                    self.toast(format!("Saved {}", path.display()), false);
+                    self.last_output = Some(path);
+                }
+                Err(e) => self.toast(format!("Recording failed: {e}"), true),
+            }
+        } else {
+            match estream_media::Recording::start(engine, &self.settings.recording) {
+                Ok(rec) => {
+                    self.recording = Some(rec);
+                    self.toast("Recording started".into(), false);
+                }
+                Err(e) => self.toast(format!("Couldn't start recording: {e}"), true),
+            }
+        }
+        self.update_outputs();
+    }
+
+    fn toggle_replay(&mut self) {
+        let Some(engine) = &self.engine else { return };
+        if let Some(replay) = self.replay.take() {
+            let _ = replay.stop(engine);
+            self.toast("Replay buffer stopped".into(), false);
+        } else {
+            match estream_media::ReplayBuffer::start(engine, &self.settings.recording) {
+                Ok(r) => {
+                    self.replay = Some(r);
+                    let secs = self.settings.recording.replay_seconds;
+                    self.toast(
+                        format!(
+                            "Replay buffer on — keeps the last {secs} s (Ctrl+Shift+R to save)"
+                        ),
+                        false,
+                    );
+                }
+                Err(e) => self.toast(format!("Couldn't start the replay buffer: {e}"), true),
+            }
+        }
+        self.update_outputs();
+    }
+
+    fn save_replay(&mut self) {
+        let Some(replay) = &self.replay else {
+            self.toast("Start the replay buffer first".into(), false);
+            return;
+        };
+        match replay.save() {
+            Ok(path) => {
+                self.toast(format!("Replay saved: {}", path.display()), false);
+                self.last_output = Some(path);
+            }
+            Err(e) => self.toast(format!("Couldn't save the replay: {e}"), true),
+        }
+    }
+
+    /// Opens the file manager at the last saved recording (or the recording folder).
+    fn reveal_output(&mut self) {
+        let file = self.last_output.clone().filter(|p| p.exists());
+        let folder = self.settings.recording.folder.clone();
+        let mut cmd = if cfg!(windows) {
+            let mut c = std::process::Command::new("explorer");
+            match &file {
+                Some(f) => c.arg(format!("/select,{}", f.display())),
+                None => c.arg(&folder),
+            };
+            c
+        } else if cfg!(target_os = "macos") {
+            let mut c = std::process::Command::new("open");
+            match &file {
+                Some(f) => c.arg("-R").arg(f),
+                None => c.arg(&folder),
+            };
+            c
+        } else {
+            let mut c = std::process::Command::new("xdg-open");
+            c.arg(file.as_ref().and_then(|f| f.parent()).unwrap_or(&folder));
+            c
+        };
+        if let Err(e) = cmd.spawn() {
+            self.toast(format!("Couldn't open the folder: {e}"), true);
+        }
+    }
+
+    /// Updates the record button, timer and status message; surfaces encoder failures.
+    fn update_outputs(&mut self) {
+        let Some(w) = self.window() else { return };
+        let failed = self
+            .recording
+            .as_ref()
+            .and_then(|r| r.stats().error.lock().ok().and_then(|e| e.clone()));
+        if let Some(error) = failed {
+            if let (Some(engine), Some(rec)) = (&self.engine, self.recording.take()) {
+                let _ = rec.stop(engine);
+            }
+            self.toast(format!("Recording stopped: {error}"), true);
+        }
+        w.set_recording(self.recording.is_some());
+        w.set_replay_active(self.replay.is_some());
+        let Some(rec) = &self.recording else {
+            w.set_status_message(
+                if self.replay.is_some() {
+                    "Replay buffer active"
+                } else {
+                    ""
+                }
+                .into(),
+            );
+            return;
+        };
+        if let Some(engine) = &self.engine {
+            rec.poll(engine);
+        }
+        let secs = rec.elapsed().as_secs();
+        w.set_record_time(
+            format!("{:02}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60).into(),
+        );
+        let stats = rec.stats();
+        let bytes = stats.bytes.load(std::sync::atomic::Ordering::Relaxed);
+        let dropped = stats.dropped.load(std::sync::atomic::Ordering::Relaxed);
+        let mbps = if secs > 0 {
+            bytes as f64 * 8.0 / secs as f64 / 1e6
+        } else {
+            0.0
+        };
+        let encoder = stats.encoder.lock().map(|e| e.clone()).unwrap_or_default();
+        w.set_status_message(
+            format!(
+                "● REC {:.1} MB · {mbps:.1} Mb/s · {dropped} dropped · {encoder}",
+                bytes as f64 / 1e6
+            )
+            .into(),
+        );
+    }
+
+    // ------------------------------------------------------------ settings dialog
+
+    pub fn refresh_settings_form(&mut self) {
+        let Some(w) = self.window() else { return };
+        use estream_media::{AudioCodec, Container, Preset, RateControl, VideoCodec, encode};
+        let r = &self.settings.recording;
+        let encoders = encode::available(r.codec);
+        let mut names = vec![SharedString::from("Automatic (best available)")];
+        names.extend(encoders.iter().map(|e| SharedString::from(e.label)));
+        let encoder = encoders
+            .iter()
+            .position(|e| e.name == r.encoder)
+            .map_or(0, |i| i + 1);
+        let index = |v: usize| v as i32;
+        w.set_settings_form(SettingsForm {
+            folder: r.folder.to_string_lossy().into_owned().into(),
+            filename: r.filename.clone().into(),
+            container: index(
+                Container::ALL
+                    .iter()
+                    .position(|c| *c == r.container)
+                    .unwrap_or(0),
+            ),
+            codec: index(
+                VideoCodec::ALL
+                    .iter()
+                    .position(|c| *c == r.codec)
+                    .unwrap_or(0),
+            ),
+            encoders: ModelRc::new(VecModel::from(names)),
+            encoder: encoder as i32,
+            rate_control: match r.rate_control {
+                RateControl::Cbr => 0,
+                RateControl::Vbr => 1,
+                RateControl::ConstantQuality => 2,
+            },
+            bitrate: r.bitrate_kbps as f32,
+            quality: r.quality as f32,
+            keyframe: r.keyframe_seconds as f32,
+            preset: match r.preset {
+                Preset::Performance => 0,
+                Preset::Balanced => 1,
+                Preset::Quality => 2,
+            },
+            audio_codec: match r.audio_codec {
+                AudioCodec::Aac => 0,
+                AudioCodec::Opus => 1,
+            },
+            audio_bitrate: r.audio_bitrate_kbps as f32,
+            tracks: r.tracks as i32,
+            replay_seconds: r.replay_seconds as f32,
+            auto_remux: r.auto_remux,
+            theme: match self.settings.theme {
+                ThemeMode::Dark => 0,
+                ThemeMode::Light => 1,
+                ThemeMode::System => 2,
+            },
+            ffmpeg: format!("FFmpeg libavutil {}", estream_media::version()).into(),
+        });
+    }
+
+    pub fn settings_set(&mut self, field: &str, value: f32) {
+        use estream_media::{AudioCodec, Container, Preset, RateControl, VideoCodec, encode};
+        let i = value.round().max(0.0) as usize;
+        let r = &mut self.settings.recording;
+        match field {
+            "container" => r.container = Container::ALL.get(i).copied().unwrap_or_default(),
+            "codec" => {
+                r.codec = VideoCodec::ALL.get(i).copied().unwrap_or_default();
+                r.encoder = "auto".into();
+            }
+            "encoder" => {
+                r.encoder = if i == 0 {
+                    "auto".into()
+                } else {
+                    encode::available(r.codec)
+                        .get(i - 1)
+                        .map_or("auto".into(), |e| e.name.to_owned())
+                }
+            }
+            "rate-control" => {
+                r.rate_control = [
+                    RateControl::Cbr,
+                    RateControl::Vbr,
+                    RateControl::ConstantQuality,
+                ]
+                .get(i)
+                .copied()
+                .unwrap_or_default()
+            }
+            "bitrate" => r.bitrate_kbps = value.clamp(500.0, 150_000.0) as u32,
+            "quality" => r.quality = value.clamp(1.0, 51.0) as u32,
+            "keyframe" => r.keyframe_seconds = value.clamp(1.0, 10.0) as u32,
+            "preset" => {
+                r.preset = [Preset::Performance, Preset::Balanced, Preset::Quality]
+                    .get(i)
+                    .copied()
+                    .unwrap_or_default()
+            }
+            "audio-codec" => {
+                r.audio_codec = if i == 1 {
+                    AudioCodec::Opus
+                } else {
+                    AudioCodec::Aac
+                }
+            }
+            "audio-bitrate" => r.audio_bitrate_kbps = value.clamp(64.0, 512.0) as u32,
+            "tracks" => r.tracks = (value.round() as i32).clamp(1, 63) as u8,
+            "replay-seconds" => r.replay_seconds = value.clamp(5.0, 300.0) as u32,
+            "auto-remux" => r.auto_remux = value > 0.5,
+            "theme" => {
+                self.settings.theme = match i {
+                    1 => ThemeMode::Light,
+                    2 => ThemeMode::System,
+                    _ => ThemeMode::Dark,
+                };
+                self.apply_theme();
+            }
+            _ => {}
+        }
+        self.settings.save(&self.paths.settings());
+        self.refresh_settings_form();
+    }
+
+    pub fn settings_text(&mut self, field: &str, value: &str) {
+        let value = value.trim();
+        match field {
+            "folder" if !value.is_empty() => self.settings.recording.folder = PathBuf::from(value),
+            "filename" if !value.is_empty() => self.settings.recording.filename = value.to_owned(),
+            _ => return,
+        }
+        self.settings.save(&self.paths.settings());
+        self.refresh_settings_form();
+    }
+
+    pub fn settings_browse(&mut self) {
+        if let Some(folder) = rfd::FileDialog::new()
+            .set_title("Recording folder")
+            .set_directory(&self.settings.recording.folder)
+            .pick_folder()
+        {
+            self.settings.recording.folder = folder;
+            self.settings.save(&self.paths.settings());
+            self.refresh_settings_form();
         }
     }
 
@@ -1930,6 +2234,14 @@ impl App {
                 self.selection = None;
                 self.refresh();
             }
+            Action::ToggleRecording => self.toggle_recording(),
+            Action::ToggleReplay => self.toggle_replay(),
+            Action::SaveReplay => self.save_replay(),
+            Action::RevealOutput => self.reveal_output(),
+            Action::OpenSettings => {
+                self.refresh_settings_form();
+                w.set_settings_open(true);
+            }
         }
     }
 
@@ -2430,6 +2742,9 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     on!(on_mixer_select, |a, id| a.mixer_select(&id));
     on!(on_mixer_fader, |a, id, v| a.mixer_fader(&id, v));
     on!(on_mixer_mute, |a, id| a.mixer_mute(&id));
+    on!(on_settings_set, |a, k, v| a.settings_set(&k, v));
+    on!(on_settings_text, |a, k, v| a.settings_text(&k, &v));
+    on!(on_settings_browse, |a| a.settings_browse());
 
     {
         let app = app.clone();

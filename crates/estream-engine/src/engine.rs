@@ -3,6 +3,7 @@
 
 use crate::audio::{self, AudioHost};
 use crate::command::{Change, Command, CommandError};
+use crate::feed::{VideoConsumer, VideoFrame};
 use crate::graph::RenderGraph;
 use crate::history::History;
 use crate::source::{SourceRegistry, SourceStatus};
@@ -140,6 +141,8 @@ struct Shared {
     video_infos: ArcSwap<HashMap<SourceId, SourceInfo>>,
     audio_statuses: ArcSwap<HashMap<SourceId, SourceStatus>>,
     audio_meters: ArcSwap<MeterSet>,
+    consumers: ArcSwap<Vec<VideoConsumer>>,
+    next_consumer: AtomicU64,
     subscribers: Mutex<Vec<Subscriber>>,
     shutdown: AtomicBool,
     can_undo: AtomicBool,
@@ -193,6 +196,10 @@ impl AudioHost for Shared {
 }
 
 impl VideoSink for Shared {
+    fn consumers(&self) -> Arc<Vec<VideoConsumer>> {
+        self.consumers.load_full()
+    }
+
     fn graph(&self) -> Arc<RenderGraph> {
         self.graph.load_full()
     }
@@ -251,6 +258,8 @@ impl Engine {
             video_infos: ArcSwap::from_pointee(HashMap::new()),
             audio_statuses: ArcSwap::from_pointee(HashMap::new()),
             audio_meters: ArcSwap::from_pointee(MeterSet::default()),
+            consumers: ArcSwap::from_pointee(Vec::new()),
+            next_consumer: AtomicU64::new(1),
             subscribers: Mutex::new(Vec::new()),
             shutdown: AtomicBool::new(false),
             can_undo: AtomicBool::new(false),
@@ -442,6 +451,34 @@ impl Engine {
     }
 
     /// Status and size of every source.
+    /// Delivers NV12 frames of `canvas` to `tx` (bounded; full = frame dropped). Returns an id.
+    pub fn add_video_consumer(
+        &self,
+        canvas: CanvasId,
+        tx: crossbeam_channel::Sender<VideoFrame>,
+    ) -> u64 {
+        let id = self.shared.next_consumer.fetch_add(1, Ordering::Relaxed);
+        self.shared.consumers.rcu(|list| {
+            let mut list = (**list).clone();
+            list.push(VideoConsumer {
+                id,
+                canvas,
+                tx: tx.clone(),
+            });
+            list
+        });
+        id
+    }
+
+    pub fn remove_video_consumer(&self, id: u64) {
+        self.shared.consumers.rcu(|list| {
+            list.iter()
+                .filter(|c| c.id != id)
+                .cloned()
+                .collect::<Vec<_>>()
+        });
+    }
+
     /// Level meters for the sources being mixed and the master mix.
     pub fn audio_meters(&self) -> Arc<MeterSet> {
         self.shared.audio_meters.load_full()

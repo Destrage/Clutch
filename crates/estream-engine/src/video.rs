@@ -1,6 +1,7 @@
 //! The video pipeline: keeps runtime sources in sync with the render graph,
 //! renders each canvas on its own frame clock, and publishes the results.
 
+use crate::feed::{ReadbackRing, VideoConsumer};
 use crate::frame_clock::{FrameClock, FrameTick, wait_until};
 use crate::graph::{CanvasGraph, RenderGraph};
 use crate::source::{SourceContext, SourceRegistry, SourceStatus, VideoSource};
@@ -34,6 +35,8 @@ pub struct CanvasStats {
     pub lagged: AtomicU64,
     /// CPU time spent recording the last frame, in nanoseconds.
     pub last_render_ns: AtomicU64,
+    /// Frames not delivered to an encoder (readback or encoder queue busy).
+    pub encoder_dropped: AtomicU64,
 }
 
 /// The published output of one canvas. Shared with the UI and outputs.
@@ -123,6 +126,8 @@ struct CanvasSlot {
     inputs: [ConvertInput; OUTPUT_RING],
     sequence: u64,
     background: wgpu::Color,
+    /// NV12 readback for encoders (only while a consumer is attached).
+    readback: Option<ReadbackRing>,
 }
 
 /// Owns sources and canvas renderers. Used by the video thread and by headless rendering.
@@ -279,6 +284,7 @@ impl VideoCore {
             inputs,
             sequence: 0,
             background: background(cg),
+            readback: None,
         }
     }
 
@@ -380,22 +386,80 @@ impl VideoCore {
         self.outputs()
     }
 
+    /// Records NV12 conversion + readback when an encoder is attached to canvas `i`.
+    fn record_readback(
+        &mut self,
+        i: usize,
+        slot: usize,
+        consumers: &[VideoConsumer],
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> Option<usize> {
+        let Self {
+            gpu,
+            converter,
+            canvases,
+            ..
+        } = self;
+        let canvas = &mut canvases[i];
+        if !consumers.iter().any(|c| c.canvas == canvas.output.id) {
+            canvas.readback = None;
+            return None;
+        }
+        let (w, h) = (canvas.output.width, canvas.output.height);
+        if canvas
+            .readback
+            .as_ref()
+            .is_none_or(|r| r.width != w || r.height != h)
+        {
+            canvas.readback = ReadbackRing::new(gpu, w, h);
+        }
+        let ring = canvas.readback.as_mut()?;
+        let index = ring.record(converter, &canvas.inputs[slot], encoder);
+        if index.is_none() {
+            canvas
+                .output
+                .stats
+                .encoder_dropped
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        index
+    }
+
     /// Renders all canvases whose deadline has passed. Returns how many rendered.
-    fn render_due(&mut self, now: Timestamp) -> usize {
+    fn render_due(&mut self, now: Timestamp, consumers: &[VideoConsumer]) -> usize {
         let started = Instant::now();
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
         self.tick_sources(&mut encoder, now);
-        // Up to 64 canvases are tracked in a fixed array to stay allocation-free.
+        // Up to 64 canvases are tracked in fixed arrays to stay allocation-free.
         let mut ticks = [None::<(FrameTick, usize)>; 64];
+        let mut maps = [None::<(usize, Timestamp)>; 64];
         let count = self.canvases.len().min(ticks.len());
         for (i, due) in ticks.iter_mut().enumerate().take(count) {
             if self.canvases[i].clock.next_deadline() <= now {
                 let tick = self.canvases[i].clock.advance(now);
-                *due = Some((tick, self.render_canvas(i, &mut encoder)));
+                let slot = self.render_canvas(i, &mut encoder);
+                *due = Some((tick, slot));
+                maps[i] = self
+                    .record_readback(i, slot, consumers, &mut encoder)
+                    .map(|idx| (idx, tick.timestamp));
             }
         }
         self.gpu.queue.submit([encoder.finish()]);
+        for (canvas, map) in self.canvases.iter_mut().zip(maps) {
+            if let (Some(ring), Some((idx, ts))) = (&mut canvas.readback, map) {
+                ring.request_map(idx, ts);
+            }
+        }
         let _ = self.gpu.device.poll(wgpu::PollType::Poll);
+        for canvas in &mut self.canvases {
+            if let Some(ring) = &mut canvas.readback {
+                ring.deliver(
+                    consumers,
+                    canvas.output.id,
+                    &canvas.output.stats.encoder_dropped,
+                );
+            }
+        }
         let elapsed = started.elapsed().as_nanos() as u64;
         let mut rendered = 0;
         for (canvas, due) in self.canvases.iter_mut().zip(ticks) {
@@ -434,6 +498,7 @@ pub(crate) trait VideoSink: Send + Sync + 'static {
     fn graph(&self) -> Arc<RenderGraph>;
     fn publish(&self, outputs: Vec<Arc<CanvasOutput>>, statuses: HashMap<SourceId, SourceInfo>);
     fn shutdown_requested(&self) -> &AtomicBool;
+    fn consumers(&self) -> Arc<Vec<VideoConsumer>>;
 }
 
 /// Main loop of the video thread.
@@ -463,7 +528,7 @@ pub(crate) fn run(mut core: VideoCore, clock: EngineClock, sink: Arc<dyn VideoSi
             continue;
         };
         wait_until(&clock, deadline);
-        core.render_due(clock.now());
+        core.render_due(clock.now(), &sink.consumers());
     }
     // Let in-flight GPU work finish before resources drop.
     let _ = core.gpu.device.poll(wgpu::PollType::wait_indefinitely());

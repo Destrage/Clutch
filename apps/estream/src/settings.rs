@@ -88,6 +88,7 @@ pub struct Settings {
     pub layout: PanelLayout,
     pub snapping: bool,
     pub last_collection: Option<PathBuf>,
+    pub recording: estream_media::RecordingSettings,
 }
 
 impl Default for Settings {
@@ -99,6 +100,7 @@ impl Default for Settings {
             layout: PanelLayout::default(),
             snapping: true,
             last_collection: None,
+            recording: estream_media::RecordingSettings::default(),
         }
     }
 }

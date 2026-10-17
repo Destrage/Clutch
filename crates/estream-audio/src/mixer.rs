@@ -35,6 +35,11 @@ pub type SourceFactory =
 /// Receives the six track mixes every block (recording, streaming).
 pub trait TrackSink: Send {
     fn push(&mut self, timestamp: Timestamp, tracks: &[Block; TRACKS]);
+
+    /// Closed sinks are removed by the mixer.
+    fn is_closed(&self) -> bool {
+        false
+    }
 }
 
 /// Receives the monitor mix every block.
@@ -253,6 +258,7 @@ impl AudioCore {
         }
         self.master
             .store(self.tracks[0].peak(), self.tracks[0].rms());
+        self.sinks.retain(|s| !s.is_closed());
         for sink in &mut self.sinks {
             sink.push(now, &self.tracks);
         }

@@ -579,3 +579,44 @@ mod audio {
         assert!((peak + 12.0).abs() < 0.2, "{peak}");
     }
 }
+
+#[test]
+fn encoder_feed_delivers_nv12_frames_in_order() {
+    let engine =
+        Engine::start(Project::new_default(320, 180, Rational::fps(30)), config()).unwrap();
+    add_fullscreen(
+        &engine,
+        "test_pattern",
+        serde_json::json!({ "width": 320, "height": 180 }),
+    );
+    let canvas = engine.snapshot().canvases[0].id;
+    let (tx, rx) = crossbeam_channel::bounded(16);
+    let id = engine.add_video_consumer(canvas, tx);
+    let start = Instant::now();
+    let mut frames = Vec::new();
+    while start.elapsed() < Duration::from_millis(1100) {
+        if let Ok(f) = rx.recv_timeout(Duration::from_millis(100)) {
+            frames.push((
+                f.timestamp,
+                f.width,
+                f.height,
+                f.y()[10 * 320 + 10],
+                f.data.len(),
+            ));
+        }
+    }
+    engine.remove_video_consumer(id);
+    assert!(
+        frames.len() >= 28,
+        "~30 frames in 1 s, got {}",
+        frames.len()
+    );
+    assert!(
+        frames.windows(2).all(|w| w[1].0 > w[0].0),
+        "timestamps increase"
+    );
+    let (_, w, h, y, len) = frames[frames.len() - 1];
+    assert_eq!((w, h, len), (320, 180, 320 * 180 * 3 / 2));
+    // Top-left of the test pattern is a 75% white bar: Y = 16 + 219 * 0.75 ≈ 180.
+    assert!((y as i32 - 180).abs() <= 3, "Y = {y}");
+}

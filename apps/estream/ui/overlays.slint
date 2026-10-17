@@ -1,7 +1,7 @@
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
-import { PaletteEntry, Preset, SourceType } from "types.slint";
-import { Button, Icon, Badge } from "widgets.slint";
+import { PaletteEntry, Preset, SourceType, SettingsForm } from "types.slint";
+import { Button, Icon, Badge, TextField, NumberField, Select, Toggle, SectionTitle } from "widgets.slint";
 import { KindIcon } from "panels.slint";
 
 // Full-window scrim with a centered card. Clicking the scrim calls `dismiss`.
@@ -9,6 +9,7 @@ component Modal inherits Rectangle {
     in property <length> card-width: 520px;
     in property <length> card-top: -1px;
     in property <bool> dismissable: true;
+    out property <length> inner-width: card.width;
     callback dismiss();
 
     background: Theme.scrim;
@@ -399,6 +400,191 @@ export component Toast inherits Rectangle {
             color: #f1f3f7;
             font-size: Theme.font-m;
             vertical-alignment: center;
+        }
+    }
+}
+
+component SettingRow inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> hint;
+    spacing: 12px;
+    VerticalLayout {
+        width: 170px;
+        alignment: center;
+        Text { text: root.label; color: Theme.text; font-size: Theme.font-m; }
+        if root.hint != "": Text { text: root.hint; color: Theme.text-faint; font-size: Theme.font-xs; wrap: word-wrap; }
+    }
+    @children
+}
+
+export component SettingsDialog inherits Modal {
+    in property <SettingsForm> form;
+    callback set(string, float);
+    callback set-text(string, string);
+    callback browse();
+
+    card-width: 640px;
+    card-top: 40px;
+
+    FocusScope {
+        height: 0px;
+        init => { self.focus(); }
+        key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                root.dismiss();
+                return EventResult.accept;
+            }
+            return EventResult.reject;
+        }
+    }
+    HorizontalLayout {
+        padding: 18px;
+        padding-bottom: 4px;
+        Text { text: "Settings"; color: Theme.text; font-size: Theme.font-xl; font-weight: 700; horizontal-stretch: 1; }
+        Button { text: "Done"; kind: "primary"; clicked => { root.dismiss(); } }
+    }
+    scroller := Flickable {
+        height: min(content.preferred-height, 640px);
+        width: root.inner-width;
+        content-width: root.inner-width;
+        content-height: content.preferred-height;
+        content := VerticalLayout {
+            width: root.inner-width;
+            padding: 18px;
+            padding-top: 8px;
+            spacing: 12px;
+
+            SectionTitle { text: "RECORDING"; }
+            SettingRow {
+                label: "Folder";
+                TextField { text: root.form.folder; label: "Recording folder"; accepted(t) => { root.set-text("folder", t); } }
+                Button { text: "Browse…"; clicked => { root.browse(); } }
+            }
+            SettingRow {
+                label: "File name";
+                hint: "Date codes like %Y-%m-%d %H-%M-%S";
+                TextField { text: root.form.filename; label: "File name pattern"; accepted(t) => { root.set-text("filename", t); } }
+            }
+            SettingRow {
+                label: "Format";
+                Select {
+                    label: "Format";
+                    options: ["MKV (crash-safe)", "Fragmented MP4 (crash-safe)", "MP4", "MOV"];
+                    current-index: root.form.container;
+                    selected(i) => { root.set("container", i); }
+                }
+            }
+            SettingRow {
+                label: "Remux to MP4";
+                hint: "After an MKV recording stops";
+                Toggle { checked: root.form.auto-remux; toggled(v) => { root.set("auto-remux", v ? 1 : 0); } }
+            }
+
+            SectionTitle { text: "VIDEO ENCODER"; }
+            SettingRow {
+                label: "Codec";
+                Select {
+                    label: "Codec";
+                    options: ["H.264", "HEVC (H.265)", "AV1"];
+                    current-index: root.form.codec;
+                    selected(i) => { root.set("codec", i); }
+                }
+            }
+            SettingRow {
+                label: "Encoder";
+                hint: "Automatic uses your GPU when possible";
+                Select {
+                    label: "Encoder";
+                    options: root.form.encoders;
+                    current-index: root.form.encoder;
+                    selected(i) => { root.set("encoder", i); }
+                }
+            }
+            SettingRow {
+                label: "Rate control";
+                Select {
+                    label: "Rate control";
+                    options: ["Constant bitrate (CBR)", "Variable bitrate (VBR)", "Constant quality"];
+                    current-index: root.form.rate-control;
+                    selected(i) => { root.set("rate-control", i); }
+                }
+            }
+            if root.form.rate-control != 2: SettingRow {
+                label: "Bitrate";
+                NumberField { label: ""; value: root.form.bitrate; minimum: 500; maximum: 150000; step: 500; suffix: "kbps"; changed(v) => { root.set("bitrate", v); } }
+            }
+            if root.form.rate-control == 2: SettingRow {
+                label: "Quality";
+                hint: "Lower is better; 18–24 is visually lossless";
+                NumberField { label: ""; value: root.form.quality; minimum: 1; maximum: 51; changed(v) => { root.set("quality", v); } }
+            }
+            SettingRow {
+                label: "Preset";
+                Select {
+                    label: "Preset";
+                    options: ["Performance", "Balanced", "Quality"];
+                    current-index: root.form.preset;
+                    selected(i) => { root.set("preset", i); }
+                }
+            }
+            SettingRow {
+                label: "Keyframe interval";
+                NumberField { label: ""; value: root.form.keyframe; minimum: 1; maximum: 10; suffix: "s"; changed(v) => { root.set("keyframe", v); } }
+            }
+
+            SectionTitle { text: "AUDIO"; }
+            SettingRow {
+                label: "Codec";
+                Select {
+                    label: "Audio codec";
+                    options: ["AAC", "Opus"];
+                    current-index: root.form.audio-codec;
+                    selected(i) => { root.set("audio-codec", i); }
+                }
+            }
+            SettingRow {
+                label: "Bitrate per track";
+                NumberField { label: ""; value: root.form.audio-bitrate; minimum: 64; maximum: 512; step: 32; suffix: "kbps"; changed(v) => { root.set("audio-bitrate", v); } }
+            }
+            SettingRow {
+                label: "Tracks to record";
+                HorizontalLayout {
+                    spacing: 4px;
+                    for t in [0, 1, 2, 3, 4, 5]: Rectangle {
+                        property <bool> on: mod(floor(root.form.tracks / pow(2, t)), 2) == 1;
+                        width: 28px;
+                        height: 26px;
+                        border-radius: Theme.radius-s;
+                        background: on ? Theme.accent : Theme.surface-3;
+                        accessible-role: checkbox;
+                        accessible-label: "Record track " + (t + 1);
+                        accessible-checked: on;
+                        Text { text: t + 1; color: on ? Theme.on-accent : Theme.text-muted; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                        TouchArea {
+                            mouse-cursor: MouseCursor.pointer;
+                            clicked => { root.set("tracks", on ? root.form.tracks - pow(2, t) : root.form.tracks + pow(2, t)); }
+                        }
+                    }
+                }
+            }
+
+            SectionTitle { text: "REPLAY BUFFER"; }
+            SettingRow {
+                label: "Length";
+                NumberField { label: ""; value: root.form.replay-seconds; minimum: 5; maximum: 300; step: 5; suffix: "s"; changed(v) => { root.set("replay-seconds", v); } }
+            }
+
+            SectionTitle { text: "APPEARANCE"; }
+            SettingRow {
+                label: "Theme";
+                Select {
+                    label: "Theme";
+                    options: ["Dark", "Light", "Follow system"];
+                    current-index: root.form.theme;
+                    selected(i) => { root.set("theme", i); }
+                }
+            }
+            Text { text: root.form.ffmpeg; color: Theme.text-faint; font-size: Theme.font-xs; }
         }
     }
 }

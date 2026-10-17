@@ -35,6 +35,11 @@ pub enum Action {
     ThemeSystem,
     ResetLayout,
     Deselect,
+    ToggleRecording,
+    ToggleReplay,
+    SaveReplay,
+    RevealOutput,
+    OpenSettings,
 }
 
 /// Keyboard shortcut. `key` is the lowercase character, or a named key.
@@ -159,6 +164,11 @@ actions! {
     ThemeLight, "theme.light", "Theme: Light", "Appearance", None, true;
     ThemeSystem, "theme.system", "Theme: Follow system", "Appearance", None, true;
     ResetLayout, "layout.reset", "Reset layout", "View", None, true;
+    ToggleRecording, "record.toggle", "Start / stop recording", "Output", None, true;
+    ToggleReplay, "replay.toggle", "Start / stop replay buffer", "Output", None, true;
+    SaveReplay, "replay.save", "Save replay", "Output", Some(Shortcut::ctrl_shift('r')), true;
+    RevealOutput, "output.reveal", "Show last recording in folder", "Output", None, true;
+    OpenSettings, "settings", "Settings…", "General", Some(Shortcut::ctrl(',')), true;
     Deselect, "selection.clear", "Clear selection", "Edit", Some(Shortcut::key(Key::Escape)), false;
 }
 

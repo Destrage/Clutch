@@ -10,6 +10,7 @@ pub mod audio;
 pub mod command;
 pub mod diagnostics;
 pub mod engine;
+pub mod feed;
 /// Drift-free frame scheduling (re-exported from stream-core).
 pub mod frame_clock {
     pub use estream_core::frame_clock::*;
@@ -22,6 +23,7 @@ pub mod video;
 
 pub use command::{CanvasPatch, Change, Command, CommandError, ItemPatch};
 pub use engine::{Engine, EngineConfig, EngineError, Event, Origin, Subscription};
+pub use feed::VideoFrame;
 pub use properties::{PropKind, Property, PropertySchema, SelectOption};
 pub use source::{
     SourceContext, SourceError, SourceFrame, SourceRegistry, SourceStatus, SourceType, VideoSource,

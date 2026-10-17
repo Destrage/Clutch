@@ -1,0 +1,4 @@
+# Build configuration for FFmpeg bindings (see openspec/changes/add-recording).
+[env]
+FFMPEG_DIR = { value = "third_party/ffmpeg", relative = true }
+LIBCLANG_PATH = "C:\\Program Files\\LLVM\\bin"

@@ -14,6 +14,7 @@ estream-capture = { path = "../../crates/estream-capture" }
 estream-core.workspace = true
 estream-engine.workspace = true
 estream-gpu.workspace = true
+estream-media = { path = "../../crates/estream-media" }
 estream-project.workspace = true
 anyhow.workspace = true
 rfd.workspace = true

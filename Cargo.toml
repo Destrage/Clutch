@@ -43,6 +43,7 @@ cpal = "0.18.2"
 rubato = "5.0.1"
 rtrb = "0.4.0"
 nnnoiseless = { version = "0.5.2", default-features = false }
+ffmpeg-next = "9.0.0"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
