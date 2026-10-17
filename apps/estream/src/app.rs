@@ -631,6 +631,9 @@ impl App {
                 w.set_transition_busy(engine.is_transitioning(canvas));
             }
             w.set_media_inspect(self.media_inspect());
+            let (browser, status) = self.browser_inspect();
+            w.set_browser_selected(browser);
+            w.set_browser_status(status.into());
             let infos = engine.source_infos();
             if self
                 .last_infos
@@ -2655,6 +2658,43 @@ impl App {
         }
     }
 
+    // ------------------------------------------------------------ browser sources
+
+    /// The id of the selected source if it is a browser source.
+    fn selected_browser(&self) -> Option<String> {
+        let snapshot = self.engine.as_ref()?.snapshot();
+        let source = self
+            .current_source(&snapshot)
+            .and_then(|id| snapshot.source(id))
+            .filter(|s| s.kind == "browser")?;
+        Some(source.id.to_string())
+    }
+
+    /// Whether a browser source is selected, and its page status.
+    fn browser_inspect(&self) -> (bool, String) {
+        use estream_capture::media::browser::{HelperState, host};
+        let Some(id) = self.selected_browser() else {
+            return (false, String::new());
+        };
+        let status = match host().page(&id) {
+            None => return (true, String::new()),
+            Some((_, HelperState::Missing(e), _)) => e,
+            Some((_, HelperState::Restarting, _)) => "Browser stopped; restarting…".into(),
+            Some((page, _, _)) => match (page.error, page.loaded) {
+                (Some(e), _) => e,
+                (None, true) => "Page loaded".into(),
+                (None, false) => "Loading…".into(),
+            },
+        };
+        (true, status)
+    }
+
+    pub fn browser_reload(&mut self) {
+        if let Some(id) = self.selected_browser() {
+            estream_capture::media::browser::reload(&id);
+        }
+    }
+
     // ------------------------------------------------------------ video filters
 
     /// Inspector rows for the selected source's video filters.
@@ -4094,6 +4134,7 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     on!(on_vfilter_code, |a, id| a.vfilter_code(&id));
     on!(on_media_control, |a, c| a.media_control(&c));
     on!(on_media_seek, |a, f| a.media_seek(f));
+    on!(on_browser_reload, |a| a.browser_reload());
     on!(on_canvas_select, |a, id| a.canvas_select(&id));
     on!(on_canvas_add, |a, i| a.canvas_add(i));
     on!(on_canvas_remove, |a, id| a.canvas_remove(&id));

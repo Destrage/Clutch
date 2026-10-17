@@ -57,6 +57,9 @@ export component AppWindow inherits Window {
     in property <MediaInspect> media-inspect;
     callback media-control(string);
     callback media-seek(float);
+    in property <bool> browser-selected;
+    in property <string> browser-status;
+    callback browser-reload();
     in property <[string]> video-filter-kinds;
     callback vfilter-add(int);
     callback vfilter-remove(string);
@@ -373,6 +376,9 @@ export component AppWindow inherits Window {
                     media: root.media-inspect;
                     media-control(c) => { root.media-control(c); }
                     media-seek(f) => { root.media-seek(f); }
+                    browser: root.browser-selected;
+                    browser-status: root.browser-status;
+                    browser-reload => { root.browser-reload(); }
                     video-filter-kinds: root.video-filter-kinds;
                     vfilter-add(i) => { root.vfilter-add(i); }
                     vfilter-remove(id) => { root.vfilter-remove(id); }

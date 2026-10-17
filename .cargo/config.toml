@@ -1,4 +1,7 @@
-# Build configuration for FFmpeg bindings (see openspec/changes/add-recording).
 [env]
+# Bundled FFmpeg 9 (LGPL, shared). See third_party/ (git-ignored).
 FFMPEG_DIR = { value = "third_party/ffmpeg", relative = true }
+# Chromium Embedded Framework for the browser helper; downloaded here on first build.
+CEF_PATH = { value = "third_party/cef", relative = true }
+# Clang for bindgen (installed by `winget install LLVM.LLVM`).
 LIBCLANG_PATH = "C:\\Program Files\\LLVM\\bin"

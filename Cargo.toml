@@ -12,6 +12,7 @@ rust-version = "1.90"
 [workspace.dependencies]
 estream-audio = { path = "crates/estream-audio" }
 estream-core = { path = "crates/estream-core" }
+estream-shm = { path = "crates/estream-shm" }
 estream-gpu = { path = "crates/estream-gpu" }
 estream-project = { path = "crates/estream-project" }
 estream-engine = { path = "crates/estream-engine" }

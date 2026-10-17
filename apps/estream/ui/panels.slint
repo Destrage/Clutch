@@ -741,6 +741,9 @@ export component InspectorPanel inherits Panel {
     in property <MediaInspect> media;
     callback media-control(string);
     callback media-seek(float);
+    in property <bool> browser: false;
+    in property <string> browser-status;
+    callback browser-reload();
     in property <[string]> video-filter-kinds;
     callback vfilter-add(int);
     callback vfilter-remove(string);
@@ -1035,6 +1038,17 @@ export component InspectorPanel inherits Panel {
                     set-index(i) => { root.prop-index(prop.key, i); }
                     browse => { root.prop-browse(prop.key); }
                     commit => { root.commit(); }
+                }
+            }
+
+            // Browser page status and refresh
+            if root.browser: VerticalLayout {
+                spacing: 8px;
+                SectionTitle { text: "PAGE"; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: root.browser-status; color: Theme.text-muted; font-size: Theme.font-xs; vertical-alignment: center; horizontal-stretch: 1; wrap: word-wrap; }
+                    Button { text: "Refresh"; icon: Icons.refresh; has-icon: true; tooltip: "Reload the page"; clicked => { root.browser-reload(); } }
                 }
             }
 
