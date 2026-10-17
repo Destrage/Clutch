@@ -214,7 +214,8 @@ fn audio_graph(project: &Project, view: &ViewState, now: Timestamp) -> AudioGrap
             }
         }
     }
-    if let Some(canvas) = project.canvases.first() {
+    // Every canvas's program (a source on several canvases is mixed once).
+    for canvas in &project.canvases {
         let leaving = view
             .transitions
             .get(&canvas.id)
@@ -303,5 +304,31 @@ mod tests {
                 .layout(Crop::NONE, estream_core::Size::new(1.0, 1.0))
                 .matrix;
         assert_eq!(origin.transform_point2(Vec2::ZERO), Vec2::new(110.0, 50.0));
+    }
+
+    #[test]
+    fn audio_follows_every_canvas_and_mixes_shared_sources_once() {
+        use estream_project::{Canvas, Scene};
+        let mut p = Project::new_default(1920, 1080, Rational::fps(60));
+        let cam = SourceDef::new("Cam", "audio_test_tone", serde_json::Value::Null);
+        let music = SourceDef::new("Music", "audio_test_tone", serde_json::Value::Null);
+        let mut vertical = Canvas::new("Vertical", 1080, 1920, Rational::fps(30));
+        let mut v_scene = Scene::new("V", vertical.id);
+        v_scene.items = vec![SceneItem::source(cam.id), SceneItem::source(music.id)];
+        vertical.active_scene = Some(v_scene.id);
+        p.scenes[0].items = vec![SceneItem::source(cam.id)];
+        p.canvases.push(vertical);
+        p.scenes.push(v_scene);
+        p.sources = vec![cam.clone(), music.clone()];
+
+        let g = RenderGraph::build(&p, 1);
+        let ids: Vec<SourceId> = g.audio.nodes.iter().map(|n| n.source).collect();
+        assert_eq!(
+            ids,
+            vec![cam.id, music.id],
+            "camera once, music from the vertical canvas"
+        );
+        assert_eq!(g.canvases.len(), 2);
+        assert_eq!(g.canvases[1].items.len(), 2);
     }
 }

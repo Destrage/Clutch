@@ -92,9 +92,8 @@ impl Session {
     ) -> Result<Self, MediaError> {
         crate::init();
         let snapshot = engine.snapshot();
-        let canvas = snapshot
-            .canvases
-            .first()
+        let canvas = resolve_canvas(engine, settings.canvas)
+            .and_then(|id| snapshot.canvas(id))
             .ok_or_else(|| MediaError::Engine("there is no canvas to record".into()))?;
         let fps = canvas.fps;
         // Pick the encoder up front so problems are reported immediately.
@@ -448,50 +447,122 @@ fn replay_container(settings: &RecordingSettings) -> Container {
     }
 }
 
-/// A running recording.
+/// The canvas a recording setting refers to, falling back to the first canvas when the
+/// stored id isn't in this collection.
+pub(crate) fn resolve_canvas(engine: &Engine, wanted: Option<CanvasId>) -> Option<CanvasId> {
+    let snapshot = engine.snapshot();
+    wanted
+        .filter(|id| snapshot.canvas(*id).is_some())
+        .or_else(|| snapshot.canvases.first().map(|c| c.id))
+}
+
+/// A running recording (one file per recorded canvas).
 pub struct Recording {
-    session: Session,
+    /// Main canvas first.
+    sessions: Vec<(Session, PathBuf)>,
+    /// The main file.
     pub path: PathBuf,
     settings: RecordingSettings,
 }
 
 impl Recording {
     pub fn start(engine: &Engine, settings: &RecordingSettings) -> Result<Self, MediaError> {
-        let path = settings.next_path("", settings.container);
-        let session = Session::start(engine, settings, Kind::File(path.clone()))?;
-        tracing::info!(path = %path.display(), "recording started");
+        let snapshot = engine.snapshot();
+        let main = resolve_canvas(engine, settings.canvas)
+            .ok_or_else(|| MediaError::Engine("there is no canvas to record".into()))?;
+        let mut canvases = vec![main];
+        if settings.all_canvases {
+            canvases.extend(
+                snapshot
+                    .canvases
+                    .iter()
+                    .map(|c| c.id)
+                    .filter(|c| *c != main),
+            );
+        }
+        let mut sessions = Vec::new();
+        for (i, canvas) in canvases.into_iter().enumerate() {
+            // Extra canvases get their name in the file name.
+            let suffix = match (i, snapshot.canvas(canvas)) {
+                (0, _) | (_, None) => String::new(),
+                (_, Some(c)) => format!(" ({})", c.name),
+            };
+            let path = settings.next_path(&suffix, settings.container);
+            let per_canvas = RecordingSettings {
+                canvas: Some(canvas),
+                ..settings.clone()
+            };
+            match Session::start(engine, &per_canvas, Kind::File(path.clone())) {
+                Ok(session) => {
+                    tracing::info!(path = %path.display(), "recording started");
+                    sessions.push((session, path));
+                }
+                Err(e) => {
+                    // Don't leave half a recording running.
+                    for (s, _) in sessions {
+                        let _ = s.stop(engine);
+                    }
+                    return Err(e);
+                }
+            }
+        }
+        let path = sessions[0].1.clone();
         Ok(Self {
-            session,
+            sessions,
             path,
             settings: settings.clone(),
         })
     }
 
+    /// Statistics of the main canvas's recording.
     pub fn stats(&self) -> &Arc<OutputStats> {
-        &self.session.stats
+        &self.sessions[0].0.stats
+    }
+
+    /// Number of files being written.
+    pub fn file_count(&self) -> usize {
+        self.sessions.len()
     }
 
     pub fn elapsed(&self) -> Duration {
-        self.session.started.elapsed()
+        self.sessions[0].0.started.elapsed()
     }
 
-    /// Updates the dropped-frame counter from the engine.
+    /// Updates the dropped-frame counters from the engine.
     pub fn poll(&self, engine: &Engine) {
-        self.session.update_dropped(engine);
+        for (s, _) in &self.sessions {
+            s.update_dropped(engine);
+        }
     }
 
-    /// Stops and finalizes the file. Returns the final path (the MP4 if remuxed).
+    /// Stops and finalizes the main file. Returns its final path (the MP4 if remuxed).
     pub fn stop(self, engine: &Engine) -> Result<PathBuf, MediaError> {
-        self.session.stop(engine)?;
-        tracing::info!(path = %self.path.display(), "recording stopped");
-        if self.settings.auto_remux && self.settings.container == Container::Mkv {
-            let mp4 = self.path.with_extension("mp4");
-            match remux(&self.path, &mp4, Container::Mp4) {
-                Ok(()) => return Ok(mp4),
-                Err(e) => tracing::warn!(error = %e, "remux to MP4 failed; keeping MKV"),
+        self.stop_all(engine)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| MediaError::Engine("nothing was recorded".into()))
+    }
+
+    /// Stops every canvas's recording. Returns the final paths, main canvas first.
+    pub fn stop_all(self, engine: &Engine) -> Result<Vec<PathBuf>, MediaError> {
+        let mut result = Ok(());
+        let mut paths = Vec::new();
+        for (session, path) in self.sessions {
+            if let Err(e) = session.stop(engine) {
+                result = Err(e);
             }
+            tracing::info!(path = %path.display(), "recording stopped");
+            let mut final_path = path.clone();
+            if self.settings.auto_remux && self.settings.container == Container::Mkv {
+                let mp4 = path.with_extension("mp4");
+                match remux(&path, &mp4, Container::Mp4) {
+                    Ok(()) => final_path = mp4,
+                    Err(e) => tracing::warn!(error = %e, "remux to MP4 failed; keeping MKV"),
+                }
+            }
+            paths.push(final_path);
         }
-        Ok(self.path)
+        result.map(|()| paths)
     }
 }
 

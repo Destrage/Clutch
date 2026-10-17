@@ -477,6 +477,16 @@ component DestinationEditor inherits VerticalLayout {
             edited(t) => { root.set-text("stream-key", t); }
         }
     }
+    if root.form.canvas-names.length > 1: SettingRow {
+        label: "Canvas";
+        hint: "Which canvas this destination streams";
+        Select {
+            label: "Destination canvas";
+            options: root.form.canvas-names;
+            current-index: root.form.dest-canvas;
+            selected(i) => { root.set("dest-canvas", i); }
+        }
+    }
     SettingRow {
         label: "Video";
         Select {
@@ -620,6 +630,16 @@ export component SettingsDialog inherits Modal {
                 label: "File name";
                 hint: "Date codes like %Y-%m-%d %H-%M-%S";
                 TextField { text: root.form.filename; label: "File name pattern"; accepted(t) => { root.set-text("filename", t); } }
+            }
+            if root.form.canvas-names.length > 1: SettingRow {
+                label: "Canvas";
+                hint: "Also used by the replay buffer";
+                Select {
+                    label: "Canvas to record";
+                    options: root.form.rec-canvas-names;
+                    current-index: root.form.rec-canvas;
+                    selected(i) => { root.set("rec-canvas", i); }
+                }
             }
             SettingRow {
                 label: "Format";

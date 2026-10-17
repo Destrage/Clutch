@@ -2,10 +2,10 @@
 
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
-import { SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SourceType, PropRow, MixerStrip, AudioInspect, SettingsForm, LiveRow, DestinationRow, VideoFilterRow, MediaInspect } from "types.slint";
+import { CanvasTab, SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SourceType, PropRow, MixerStrip, AudioInspect, SettingsForm, LiveRow, DestinationRow, VideoFilterRow, MediaInspect } from "types.slint";
 import { VSplitter, HSplitter, TooltipLayer, Hint } from "widgets.slint";
 import { Preview } from "preview.slint";
-import { TopBar, ScenesPanel, SourcesPanel, InspectorPanel, MixerPanel, StatusBar, TransitionColumn, ProgramView } from "panels.slint";
+import { TopBar, ScenesPanel, SourcesPanel, InspectorPanel, MixerPanel, StatusBar, TransitionColumn, ProgramView, CanvasTabs } from "panels.slint";
 import { CommandPalette, AddSourceDialog, SetupWizard, RecoveryPrompt, Toast, SettingsDialog, LivePanel, ShaderDialog } from "overlays.slint";
 
 export { Theme }
@@ -29,6 +29,13 @@ export component AppWindow inherits Window {
     in property <image> preview-frame;
     // Studio mode and transitions
     in property <bool> studio-mode;
+    in property <[CanvasTab]> canvas-tabs;
+    in property <[string]> canvas-presets;
+    in-out property <string> renaming-canvas;
+    callback canvas-select(string);
+    callback canvas-add(int);
+    callback canvas-remove(string);
+    callback canvas-rename(string, string);
     in property <image> program-frame;
     in property <int> transition-kind;
     in property <int> transition-direction;
@@ -246,6 +253,16 @@ export component AppWindow inherits Window {
 
                 VerticalLayout {
                     horizontal-stretch: 1;
+                    spacing: 6px;
+                    CanvasTabs {
+                        tabs: root.canvas-tabs;
+                        presets: root.canvas-presets;
+                        renaming <=> root.renaming-canvas;
+                        select(id) => { root.canvas-select(id); main-keys.focus(); }
+                        add(i) => { root.canvas-add(i); }
+                        remove(id) => { root.canvas-remove(id); }
+                        rename(id, name) => { root.canvas-rename(id, name); main-keys.focus(); }
+                    }
                     Rectangle {
                         vertical-stretch: 1;
                         border-radius: Theme.radius-l;

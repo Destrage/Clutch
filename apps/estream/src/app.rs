@@ -6,9 +6,9 @@ use crate::interact::{self, Drag, DragKind, Handle, ItemGeom, Modifiers};
 use crate::presets::{self, PRESETS};
 use crate::settings::{PanelLayout, Paths, Settings, ThemeMode, WindowState};
 use crate::ui::{
-    AppWindow, AudioInspect, CanvasBox, DestinationRow, FilterParamRow, FilterRow, Guide, Inspect,
-    LayerRow, LiveRow, MediaInspect, MixerStrip, PaletteEntry, Preset, PropRow, SceneRow,
-    SettingsForm, SourceType, Theme, VideoFilterRow,
+    AppWindow, AudioInspect, CanvasBox, CanvasTab, DestinationRow, FilterParamRow, FilterRow,
+    Guide, Inspect, LayerRow, LiveRow, MediaInspect, MixerStrip, PaletteEntry, Preset, PropRow,
+    SceneRow, SettingsForm, SourceType, Theme, VideoFilterRow,
 };
 use estream_core::{BlendMode, BoundsMode, CanvasId, ItemId, Rgba8, SceneId, SourceId};
 use estream_engine::{
@@ -90,6 +90,8 @@ pub struct App {
     last_preview_sequence: u64,
     /// What the shader editor is editing.
     shader_target: ShaderTarget,
+    /// Canvas shown and edited in the studio (`None` = the first).
+    current_canvas: Option<CanvasId>,
     /// Last file written by a recording or replay save, for "Show in folder".
     last_output: Option<std::path::PathBuf>,
 }
@@ -388,6 +390,7 @@ impl App {
             preview_scene: None,
             last_preview_sequence: 0,
             shader_target: ShaderTarget::Transition,
+            current_canvas: None,
             last_output: None,
         };
         window.set_scenes(ModelRc::from(app.scenes_model.clone()));
@@ -598,7 +601,8 @@ impl App {
                     .map_err(|e| tracing::error!(error = %e, "preview texture rejected"))
                     .ok()
             };
-            if let Some(canvas) = engine.snapshot().canvases.first().map(|c| c.id) {
+            let snapshot = engine.snapshot();
+            if let Some(canvas) = self.canvas_of(&snapshot).map(|c| c.id) {
                 // Program: the main view normally, the Program view in studio mode.
                 if let Some(output) = engine.canvas_output(canvas)
                     && let Some(frame) = output.latest()
@@ -691,7 +695,7 @@ impl App {
         let Some(w) = self.window() else { return };
         let Some(engine) = &self.engine else { return };
         let snapshot = engine.snapshot();
-        let Some(canvas) = snapshot.canvases.first() else {
+        let Some(canvas) = self.canvas_of(&snapshot) else {
             return;
         };
         let Some(output) = engine.canvas_output(canvas.id) else {
@@ -778,6 +782,13 @@ impl App {
 
     // ------------------------------------------------------------ model → UI
 
+    /// The canvas being edited: the selected one, or the first if it no longer exists.
+    fn canvas_of<'a>(&self, snapshot: &'a Project) -> Option<&'a estream_project::Canvas> {
+        self.current_canvas
+            .and_then(|id| snapshot.canvas(id))
+            .or_else(|| snapshot.canvases.first())
+    }
+
     /// The scene being edited: the Preview scene in studio mode, else the program scene.
     fn edit_scene(&self, canvas: &estream_project::Canvas, snapshot: &Project) -> Option<SceneId> {
         match self.preview_scene {
@@ -788,7 +799,7 @@ impl App {
 
     fn canvas_and_scene(&self) -> Option<(Arc<Project>, CanvasId, Option<SceneId>)> {
         let snapshot = self.engine.as_ref()?.snapshot();
-        let canvas = snapshot.canvases.first()?;
+        let canvas = self.canvas_of(&snapshot)?;
         let (id, edit) = (canvas.id, self.edit_scene(canvas, &snapshot));
         Some((snapshot, id, edit))
     }
@@ -798,13 +809,14 @@ impl App {
         let Some(w) = self.window() else { return };
         let Some(engine) = &self.engine else { return };
         let snapshot = engine.snapshot();
-        let Some(canvas) = snapshot.canvases.first() else {
+        let Some(canvas) = self.canvas_of(&snapshot) else {
             return;
         };
         let editing = self.edit_scene(canvas, &snapshot);
         let scene = editing.and_then(|id| snapshot.scene(id));
         let infos = engine.source_infos();
         self.refresh_transition(&w, &snapshot);
+        self.refresh_canvases(&w, &snapshot);
 
         if let Some(sel) = self.selection
             && scene.is_none_or(|s| s.find_item(sel).is_none())
@@ -1193,7 +1205,7 @@ impl App {
             self.toast("Create a scene first".into(), true);
             return;
         };
-        let Some(canvas) = snapshot.canvases.first() else {
+        let Some(canvas) = self.canvas_of(&snapshot) else {
             return;
         };
         let canvas_size = Vec2::new(canvas.width as f32, canvas.height as f32);
@@ -1276,6 +1288,150 @@ impl App {
         if let Some(w) = self.window() {
             w.set_settings_open(true);
         }
+    }
+
+    // ------------------------------------------------------------ canvases
+
+    fn refresh_canvases(&self, w: &AppWindow, snapshot: &Project) {
+        let current = self.canvas_of(snapshot).map(|c| c.id);
+        let tabs: Vec<CanvasTab> = snapshot
+            .canvases
+            .iter()
+            .map(|c| {
+                let fps = c.fps.as_f64();
+                let fps = if (fps - fps.round()).abs() < 0.01 {
+                    format!("{fps:.0}")
+                } else {
+                    format!("{fps:.2}")
+                };
+                CanvasTab {
+                    id: id_str(c.id),
+                    name: c.name.clone().into(),
+                    info: format!("{} × {} · {fps} fps", c.width, c.height).into(),
+                    active: Some(c.id) == current,
+                }
+            })
+            .collect();
+        w.set_canvas_tabs(ModelRc::new(VecModel::from(tabs)));
+        let mut presets = vec![SharedString::from("+ Add canvas…")];
+        presets.extend(PRESETS.iter().map(|p| SharedString::from(p.label)));
+        w.set_canvas_presets(ModelRc::new(VecModel::from(presets)));
+    }
+
+    /// Switches the canvas shown and edited in the studio.
+    pub fn canvas_select(&mut self, id: &str) {
+        let Some(engine) = &self.engine else { return };
+        let snapshot = engine.snapshot();
+        let Some(new) = parse_id(id)
+            .map(CanvasId)
+            .filter(|c| snapshot.canvas(*c).is_some())
+        else {
+            return;
+        };
+        let old = self.canvas_of(&snapshot).map(|c| c.id);
+        if old == Some(new) {
+            return;
+        }
+        if self.studio {
+            // The Preview follows the canvas being edited.
+            if let Some(old) = old {
+                engine.set_preview_scene(old, None);
+            }
+            self.preview_scene = snapshot.canvas(new).and_then(|c| c.active_scene);
+            engine.set_preview_scene(new, self.preview_scene);
+        }
+        self.current_canvas = Some(new);
+        self.selection = None;
+        self.drag = None;
+        self.last_sequence = 0;
+        self.last_preview_sequence = 0;
+        self.refresh();
+    }
+
+    /// Adds a canvas from preset `index` with one empty scene, and selects it.
+    pub fn canvas_add(&mut self, index: i32) {
+        let Some(preset) = PRESETS.get(index.max(0) as usize) else {
+            return;
+        };
+        let Some(engine) = &self.engine else { return };
+        let snapshot = engine.snapshot();
+        let base = if preset.height > preset.width {
+            "Vertical"
+        } else if preset.height == preset.width {
+            "Square"
+        } else {
+            "Canvas"
+        };
+        let name = unique_name(base, snapshot.canvases.iter().map(|c| c.name.as_str()));
+        let canvas =
+            estream_project::Canvas::new(name.clone(), preset.width, preset.height, preset.fps);
+        let id = canvas.id;
+        let scene = Scene::new(format!("{name} scene"), id);
+        let scene_id = scene.id;
+        if self.exec(Command::Batch {
+            commands: vec![
+                Command::AddCanvas {
+                    canvas,
+                    index: usize::MAX,
+                },
+                Command::AddScene {
+                    scene,
+                    index: usize::MAX,
+                },
+                Command::SetActiveScene {
+                    canvas: id,
+                    scene: Some(scene_id),
+                },
+            ],
+        }) {
+            self.toast(
+                format!("Added {name} ({} × {})", preset.width, preset.height),
+                false,
+            );
+            self.canvas_select(&id_str(id));
+        }
+    }
+
+    pub fn canvas_remove(&mut self, id: &str) {
+        let Some(engine) = &self.engine else { return };
+        let snapshot = engine.snapshot();
+        if snapshot.canvases.len() < 2 {
+            self.toast("A collection needs at least one canvas".into(), true);
+            return;
+        }
+        let Some(canvas) = parse_id(id).map(CanvasId).and_then(|c| snapshot.canvas(c)) else {
+            return;
+        };
+        let (cid, name) = (canvas.id, canvas.name.clone());
+        if self.studio {
+            engine.set_preview_scene(cid, None);
+        }
+        if self.exec(Command::RemoveCanvas { canvas: cid }) {
+            if self.current_canvas == Some(cid) {
+                self.current_canvas = None;
+                self.selection = None;
+                self.last_sequence = 0;
+            }
+            self.toast(format!("Removed “{name}” — Ctrl+Z to undo"), false);
+            self.refresh();
+        }
+    }
+
+    pub fn canvas_rename(&mut self, id: &str, name: &str) {
+        let name = name.trim();
+        let Some(canvas) = parse_id(id).map(CanvasId) else {
+            return;
+        };
+        if name.is_empty() {
+            return;
+        }
+        self.exec(Command::UpdateCanvas {
+            canvas,
+            patch: estream_engine::CanvasPatch {
+                name: Some(name.to_owned()),
+                ..Default::default()
+            },
+        });
     }
 
     // ------------------------------------------------------------ studio mode & transitions
@@ -1664,10 +1820,20 @@ impl App {
     fn toggle_recording(&mut self) {
         let Some(engine) = &self.engine else { return };
         if let Some(rec) = self.recording.take() {
-            match rec.stop(engine) {
-                Ok(path) => {
-                    self.toast(format!("Saved {}", path.display()), false);
-                    self.last_output = Some(path);
+            match rec.stop_all(engine) {
+                Ok(paths) => {
+                    let message = match paths.as_slice() {
+                        [one] => format!("Saved {}", one.display()),
+                        many => format!(
+                            "Saved {} files (one per canvas) in {}",
+                            many.len(),
+                            many.first()
+                                .and_then(|p| p.parent())
+                                .map_or(String::new(), |d| d.display().to_string())
+                        ),
+                    };
+                    self.toast(message, false);
+                    self.last_output = paths.into_iter().next();
                 }
                 Err(e) => self.toast(format!("Recording failed: {e}"), true),
             }
@@ -1948,6 +2114,11 @@ impl App {
         {
             self.dest_selected = (!self.settings.destinations.is_empty()).then_some(0);
         }
+        let (canvas_ids, canvas_labels) = self.canvas_choices();
+        let index_of = |c: Option<CanvasId>| {
+            c.and_then(|c| canvas_ids.iter().position(|x| *x == c))
+                .unwrap_or(0) as i32
+        };
         use estream_media::{AudioCodec, Container, Preset, RateControl, VideoCodec, encode};
         let r = &self.settings.recording;
         let encoders = encode::available(r.codec);
@@ -2002,13 +2173,56 @@ impl App {
                 ThemeMode::System => 2,
             },
             ffmpeg: format!("FFmpeg libavutil {}", estream_media::version()).into(),
+            canvas_names: ModelRc::new(VecModel::from(canvas_labels.clone())),
+            rec_canvas: if r.all_canvases {
+                canvas_ids.len() as i32
+            } else {
+                index_of(r.canvas)
+            },
+            rec_canvas_names: ModelRc::new(VecModel::from(
+                canvas_labels
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::once(SharedString::from("All canvases")))
+                    .collect::<Vec<_>>(),
+            )),
+            dest_canvas: self
+                .dest_selected
+                .and_then(|i| self.settings.destinations.get(i))
+                .map_or(0, |d| index_of(d.stream.canvas)),
             ..stream_form(&self.settings.destinations, self.dest_selected)
         });
+    }
+
+    /// The current collection's canvases (ids and names), for output canvas pickers.
+    fn canvas_choices(&self) -> (Vec<CanvasId>, Vec<SharedString>) {
+        let Some(engine) = &self.engine else {
+            return (Vec::new(), Vec::new());
+        };
+        let snapshot = engine.snapshot();
+        snapshot
+            .canvases
+            .iter()
+            .map(|c| {
+                (
+                    c.id,
+                    SharedString::from(format!("{} ({} × {})", c.name, c.width, c.height)),
+                )
+            })
+            .unzip()
     }
 
     pub fn settings_set(&mut self, field: &str, value: f32) {
         use estream_media::{AudioCodec, Container, Preset, RateControl, VideoCodec, encode};
         let i = value.round().max(0.0) as usize;
+        let (canvas_ids, _) = self.canvas_choices();
+        if field == "dest-canvas"
+            && let Some(d) = self
+                .dest_selected
+                .and_then(|i| self.settings.destinations.get_mut(i))
+        {
+            d.stream.canvas = canvas_ids.get(i).copied();
+        }
         // Destination list.
         let live_configs: Vec<usize> = self.stream_dests.iter().map(|d| d.config).collect();
         match field {
@@ -2105,6 +2319,11 @@ impl App {
             "tracks" => r.tracks = (value.round() as i32).clamp(1, 63) as u8,
             "replay-seconds" => r.replay_seconds = value.clamp(5.0, 300.0) as u32,
             "auto-remux" => r.auto_remux = value > 0.5,
+            "rec-canvas" => {
+                let ids = &canvas_ids;
+                r.all_canvases = i >= ids.len();
+                r.canvas = ids.get(i).copied();
+            }
             "theme" => {
                 self.settings.theme = match i {
                     1 => ThemeMode::Light,
@@ -3049,7 +3268,7 @@ impl App {
         let Some(scene) = snapshot.scene(scene_id) else {
             return;
         };
-        let Some(canvas) = snapshot.canvases.first() else {
+        let Some(canvas) = self.canvas_of(&snapshot) else {
             return;
         };
         let canvas_size = Vec2::new(canvas.width as f32, canvas.height as f32);
@@ -3875,6 +4094,10 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     on!(on_vfilter_code, |a, id| a.vfilter_code(&id));
     on!(on_media_control, |a, c| a.media_control(&c));
     on!(on_media_seek, |a, f| a.media_seek(f));
+    on!(on_canvas_select, |a, id| a.canvas_select(&id));
+    on!(on_canvas_add, |a, i| a.canvas_add(i));
+    on!(on_canvas_remove, |a, id| a.canvas_remove(&id));
+    on!(on_canvas_rename, |a, id, name| a.canvas_rename(&id, &name));
     on!(on_settings_browse, |a| a.settings_browse());
 
     {

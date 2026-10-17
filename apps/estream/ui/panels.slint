@@ -1,6 +1,6 @@
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
-import { SceneRow, LayerRow, Inspect, PropRow, MixerStrip, AudioInspect, FilterRow, VideoFilterRow, MediaInspect } from "types.slint";
+import { CanvasTab, SceneRow, LayerRow, Inspect, PropRow, MixerStrip, AudioInspect, FilterRow, VideoFilterRow, MediaInspect } from "types.slint";
 import {
     Button, IconButton, Icon, TextField, TextArea, NumberField, Toggle, Slider, Select, Panel,
     PanelHeader, SectionTitle, Badge, EmptyState, Hint,
@@ -1389,4 +1389,94 @@ export component StatusBar inherits Rectangle {
         }
         Text { text: root.message; color: Theme.text-faint; font-size: Theme.font-xs; vertical-alignment: center; }
     }
+}
+
+/// One tab per canvas above the preview, plus a picker to add canvases.
+export component CanvasTabs inherits HorizontalLayout {
+    in property <[CanvasTab]> tabs;
+    in property <[string]> presets;
+    in-out property <string> renaming;
+    callback select(string);
+    callback add(int);
+    callback remove(string);
+    callback rename(string, string);
+
+    spacing: 4px;
+    height: 34px;
+    for ct in root.tabs: Rectangle {
+        property <bool> hovered: tab-ta.has-hover;
+        width: tab-row.preferred-width;
+        border-radius: Theme.radius-m;
+        background: ct.active ? Theme.surface-2 : hovered ? Theme.hover : transparent;
+        border-width: ct.active ? 1px : 0px;
+        border-color: Theme.border;
+        accessible-role: tab;
+        accessible-label: ct.name;
+        accessible-item-selected: ct.active;
+        tab-ta := TouchArea {
+            mouse-cursor: MouseCursor.pointer;
+            clicked => { root.select(ct.id); }
+            double-clicked => { root.renaming = ct.id; }
+        }
+        tab-row := HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 6px;
+            spacing: 8px;
+            if root.renaming == ct.id: VerticalLayout {
+                alignment: center;
+                TextField {
+                    width: 140px;
+                    text: ct.name;
+                    label: "Canvas name";
+                    init => { self.focus(); }
+                    accepted(t) => {
+                        root.rename(ct.id, t);
+                        root.renaming = "";
+                    }
+                    changed has-focus => {
+                        if (!self.has-focus && root.renaming == ct.id) {
+                            root.rename(ct.id, self.text);
+                            root.renaming = "";
+                        }
+                    }
+                }
+            }
+            if root.renaming != ct.id: Text {
+                text: ct.name;
+                color: ct.active ? Theme.text : Theme.text-muted;
+                font-size: Theme.font-s;
+                font-weight: ct.active ? 600 : 400;
+                vertical-alignment: center;
+            }
+            if root.renaming != ct.id: Text {
+                text: ct.info;
+                color: Theme.text-faint;
+                font-size: Theme.font-xs;
+                vertical-alignment: center;
+            }
+            VerticalLayout {
+                alignment: center;
+                IconButton {
+                    icon: Icons.x;
+                    tooltip: "Remove canvas " + ct.name;
+                    size: 20px;
+                    icon-size: 11px;
+                    enabled: root.tabs.length > 1;
+                    opacity: (hovered || ct.active) && root.tabs.length > 1 ? 1 : 0;
+                    clicked => { root.remove(ct.id); }
+                }
+            }
+        }
+    }
+    VerticalLayout {
+        alignment: center;
+        Select {
+            width: 150px;
+            label: "Add canvas";
+            options: root.presets;
+            current-index: 0;
+            selected(i) => { if (i > 0) { root.add(i - 1); } }
+        }
+    }
+    Rectangle { horizontal-stretch: 1; }
 }

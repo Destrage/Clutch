@@ -1,5 +1,14 @@
 // Data passed between Rust and the UI.
 
+/// A canvas tab above the preview.
+export struct CanvasTab {
+    id: string,
+    name: string,
+    /// e.g. "1080 × 1920 · 30 fps"
+    info: string,
+    active: bool,
+}
+
 export struct SceneRow {
     id: string,
     name: string,
@@ -220,6 +229,13 @@ export struct SettingsForm {
     tracks: int,
     replay-seconds: float,
     auto-remux: bool,
+    /// Canvas names (current collection), for the recording and destination pickers.
+    canvas-names: [string],
+    /// Recording canvas index; `canvas-names.length` means all canvases.
+    rec-canvas: int,
+    /// `canvas-names` plus "All canvases".
+    rec-canvas-names: [string],
+    dest-canvas: int,
     theme: int,
     ffmpeg: string,
     // Streaming: destination list, then the editor for the selected one

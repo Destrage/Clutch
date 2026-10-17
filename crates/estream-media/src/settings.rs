@@ -1,5 +1,6 @@
 //! Recording settings (stored in app settings, like an OBS profile).
 
+use estream_core::CanvasId;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -120,6 +121,10 @@ pub struct RecordingSettings {
     pub replay_seconds: u32,
     /// Remux MKV recordings to MP4 after they stop.
     pub auto_remux: bool,
+    /// Canvas to record (`None` = the first canvas). Also used for the replay buffer.
+    pub canvas: Option<CanvasId>,
+    /// Record every canvas at once (one file each).
+    pub all_canvases: bool,
 }
 
 impl Default for RecordingSettings {
@@ -141,6 +146,8 @@ impl Default for RecordingSettings {
             tracks: 0b1,
             replay_seconds: 30,
             auto_remux: false,
+            canvas: None,
+            all_canvases: false,
         }
     }
 }
@@ -291,6 +298,8 @@ pub struct StreamSettings {
     pub max_retries: u32,
     /// Queued video beyond this is dropped (at keyframe boundaries).
     pub drop_threshold_ms: u32,
+    /// Canvas to stream (`None` = the first canvas).
+    pub canvas: Option<CanvasId>,
 }
 
 impl Default for StreamSettings {
@@ -310,6 +319,7 @@ impl Default for StreamSettings {
             retry_delay_seconds: 2,
             max_retries: 25,
             drop_threshold_ms: 700,
+            canvas: None,
         }
     }
 }
@@ -367,6 +377,7 @@ impl StreamSettings {
             audio_codec: protocol.audio_codec(),
             audio_bitrate_kbps: self.audio_bitrate_kbps,
             tracks: 1 << self.audio_track.min(5),
+            canvas: self.canvas,
             ..Default::default()
         }
     }
