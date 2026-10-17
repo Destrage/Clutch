@@ -10,6 +10,7 @@ pub enum Output {
     Stream,
     Record,
     ReplayBuffer,
+    VirtualCam,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

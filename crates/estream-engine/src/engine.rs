@@ -250,6 +250,38 @@ enum Request {
 
 /// Handle to a running engine. Dropping it shuts the engine down cleanly
 /// (saving the collection if a path is configured).
+/// Attaches and detaches video consumers without borrowing the [`Engine`].
+#[derive(Clone)]
+pub struct VideoTap {
+    shared: Arc<Shared>,
+}
+
+impl VideoTap {
+    /// Delivers NV12 frames of `canvas` to `tx` until [`VideoTap::remove`] is called.
+    pub fn add(&self, canvas: CanvasId, tx: crossbeam_channel::Sender<VideoFrame>) -> u64 {
+        let id = self.shared.next_consumer.fetch_add(1, Ordering::Relaxed);
+        self.shared.consumers.rcu(|list| {
+            let mut list = (**list).clone();
+            list.push(VideoConsumer {
+                id,
+                canvas,
+                tx: tx.clone(),
+            });
+            list
+        });
+        id
+    }
+
+    pub fn remove(&self, id: u64) {
+        self.shared.consumers.rcu(|list| {
+            list.iter()
+                .filter(|c| c.id != id)
+                .cloned()
+                .collect::<Vec<_>>()
+        });
+    }
+}
+
 pub struct Engine {
     requests: Sender<Request>,
     shared: Arc<Shared>,
@@ -520,26 +552,19 @@ impl Engine {
         canvas: CanvasId,
         tx: crossbeam_channel::Sender<VideoFrame>,
     ) -> u64 {
-        let id = self.shared.next_consumer.fetch_add(1, Ordering::Relaxed);
-        self.shared.consumers.rcu(|list| {
-            let mut list = (**list).clone();
-            list.push(VideoConsumer {
-                id,
-                canvas,
-                tx: tx.clone(),
-            });
-            list
-        });
-        id
+        self.video_tap().add(canvas, tx)
     }
 
     pub fn remove_video_consumer(&self, id: u64) {
-        self.shared.consumers.rcu(|list| {
-            list.iter()
-                .filter(|c| c.id != id)
-                .cloned()
-                .collect::<Vec<_>>()
-        });
+        self.video_tap().remove(id);
+    }
+
+    /// A handle other threads can keep to attach and detach video consumers later (e.g. an
+    /// output that only wants frames while someone is watching).
+    pub fn video_tap(&self) -> VideoTap {
+        VideoTap {
+            shared: self.shared.clone(),
+        }
     }
 
     /// Level meters for the sources being mixed and the master mix.

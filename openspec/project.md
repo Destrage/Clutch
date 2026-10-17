@@ -168,7 +168,7 @@ Each change below gets its own `openspec/changes/<id>/` when work starts. ✅ = 
 | 3 – Pro | ✅ `add-multi-canvas` | Multiple canvases (vertical + horizontal), per-canvas outputs | Beyond OBS |
 | 3 | ✅ `add-browser-source` | Out-of-process CEF, transparent overlays, custom CSS, audio | Parity + isolation |
 | 3 | ✅ `add-remote-api` | obs-websocket v5 compatible server | Parity (ecosystem compatible) |
-| 3 | `add-virtual-camera` | Virtual webcam output (Windows/macOS/Linux) | Parity |
+| 3 | ✅ `add-virtual-camera` | Virtual webcam output (Windows/macOS/Linux) | Parity |
 | 3 | `add-hotkeys-macros` | Global hotkeys, macros and triggers (scene switch on window focus, timers…) | Beyond OBS (built-in Advanced Scene Switcher) |
 | 3 | `add-stats-health` | Stats dock, network health, encoder overload hints, auto-quality fallback | Better |
 | 4 – Ecosystem | `add-plugin-system` | WASM plugin host (sources, filters, docks, commands) | Better (sandboxed) |

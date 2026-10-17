@@ -92,6 +92,9 @@ pub const REQUESTS: &[&str] = &[
     "GetSceneItemBlendMode",
     "SetSceneItemBlendMode",
     "GetVirtualCamStatus",
+    "StartVirtualCam",
+    "StopVirtualCam",
+    "ToggleVirtualCam",
     "GetStreamStatus",
     "ToggleStream",
     "StartStream",
@@ -459,7 +462,7 @@ fn output_json(studio: &dyn Studio, output: Output) -> Value {
             "outputDuration": s.duration.as_millis() as u64,
             "outputBytes": s.bytes,
         }),
-        Output::ReplayBuffer => json!({ "outputActive": s.active }),
+        Output::ReplayBuffer | Output::VirtualCam => json!({ "outputActive": s.active }),
     }
 }
 
@@ -1481,18 +1484,17 @@ pub fn handle(
         }
 
         // ------------------------------------------------------------ outputs
-        "GetVirtualCamStatus" => Ok(json!({ "outputActive": false })),
-        "StartVirtualCam" | "StopVirtualCam" | "ToggleVirtualCam" => Err(RequestError::new(
-            st::OUTPUT_DISABLED,
-            "eStream has no virtual camera yet",
-        )),
+        "GetVirtualCamStatus" => Ok(output_json(studio, Output::VirtualCam)),
+        "StartVirtualCam" => set_output(studio, Output::VirtualCam, true).map(|_| Value::Null),
+        "StopVirtualCam" => set_output(studio, Output::VirtualCam, false).map(|_| Value::Null),
         "GetStreamStatus" => Ok(output_json(studio, Output::Stream)),
         "GetRecordStatus" => Ok(output_json(studio, Output::Record)),
         "GetReplayBufferStatus" => Ok(output_json(studio, Output::ReplayBuffer)),
-        "ToggleStream" | "ToggleRecord" | "ToggleReplayBuffer" => {
+        "ToggleStream" | "ToggleRecord" | "ToggleReplayBuffer" | "ToggleVirtualCam" => {
             let output = match request_type {
                 "ToggleStream" => Output::Stream,
                 "ToggleRecord" => Output::Record,
+                "ToggleVirtualCam" => Output::VirtualCam,
                 _ => Output::ReplayBuffer,
             };
             let active = !studio.output_status(output).active;

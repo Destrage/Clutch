@@ -1606,6 +1606,7 @@ dependencies = [
  "estream-gpu",
  "estream-media",
  "estream-project",
+ "estream-vcam",
  "fastrand",
  "getrandom 0.3.4",
  "glam",
@@ -1749,6 +1750,7 @@ dependencies = [
  "estream-engine",
  "estream-gpu",
  "estream-project",
+ "estream-vcam",
  "ffmpeg-next",
  "serde",
  "serde_json",
@@ -1773,6 +1775,17 @@ name = "estream-shm"
 version = "0.1.0"
 dependencies = [
  "windows",
+]
+
+[[package]]
+name = "estream-vcam"
+version = "0.1.0"
+dependencies = [
+ "estream-shm",
+ "png",
+ "thiserror 2.0.21",
+ "windows",
+ "windows-core",
 ]
 
 [[package]]

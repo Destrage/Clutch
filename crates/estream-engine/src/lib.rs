@@ -23,7 +23,7 @@ pub mod source;
 pub mod video;
 
 pub use command::{CanvasPatch, Change, Command, CommandError, ItemPatch};
-pub use engine::{Engine, EngineConfig, EngineError, Event, Origin, Subscription};
+pub use engine::{Engine, EngineConfig, EngineError, Event, Origin, Subscription, VideoTap};
 pub use feed::VideoFrame;
 pub use properties::{PropKind, Property, PropertySchema, SelectOption};
 pub use source::{

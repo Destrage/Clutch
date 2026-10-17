@@ -470,16 +470,17 @@ pub struct StatePoller {
 struct Seen {
     studio: bool,
     preview: Option<SceneId>,
-    outputs: [OutputStatus; 3],
+    outputs: [OutputStatus; 4],
     last_replay: Option<PathBuf>,
     transitioning: bool,
     last_recording: Option<PathBuf>,
 }
 
-const OUTPUTS: [(Output, &str); 3] = [
+const OUTPUTS: [(Output, &str); 4] = [
     (Output::Stream, "StreamStateChanged"),
     (Output::Record, "RecordStateChanged"),
     (Output::ReplayBuffer, "ReplayBufferStateChanged"),
+    (Output::VirtualCam, "VirtualcamStateChanged"),
 ];
 
 impl StatePoller {

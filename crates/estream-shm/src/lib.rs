@@ -61,6 +61,52 @@ impl Mapping {
         Self::map(handle, len)
     }
 
+    /// Creates a region other sessions and accounts can open: `sddl` is its security
+    /// descriptor, e.g. `D:(A;;GA;;;SY)(A;;GA;;;IU)`. Use a `Global\` name to share across
+    /// sessions (the creator needs `SeCreateGlobalPrivilege`, which services have).
+    #[cfg(windows)]
+    pub fn create_with_sddl(name: &str, len: usize, sddl: &str) -> Result<Self, ShmError> {
+        use windows::Win32::Foundation::{HLOCAL, INVALID_HANDLE_VALUE, LocalFree};
+        use windows::Win32::Security::Authorization::{
+            ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+        };
+        use windows::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
+        use windows::Win32::System::Memory::{CreateFileMappingW, PAGE_READWRITE};
+        let mut descriptor = PSECURITY_DESCRIPTOR::default();
+        // SAFETY: valid SDDL string; the descriptor is freed below.
+        unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                &windows::core::HSTRING::from(sddl),
+                SDDL_REVISION_1,
+                &mut descriptor,
+                None,
+            )
+        }
+        .map_err(|e| ShmError::Os(e.to_string()))?;
+        let attributes = SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: descriptor.0,
+            bInheritHandle: false.into(),
+        };
+        let wide = windows::core::HSTRING::from(name);
+        // SAFETY: plain Win32 call; the handle is owned by the mapping.
+        let handle = unsafe {
+            CreateFileMappingW(
+                INVALID_HANDLE_VALUE,
+                Some(&attributes),
+                PAGE_READWRITE,
+                (len as u64 >> 32) as u32,
+                len as u32,
+                &wide,
+            )
+        };
+        // SAFETY: allocated by ConvertStringSecurityDescriptorToSecurityDescriptorW.
+        unsafe {
+            let _ = LocalFree(Some(HLOCAL(descriptor.0)));
+        }
+        Self::map(handle.map_err(|e| ShmError::Os(e.to_string()))?, len)
+    }
+
     /// Opens an existing region created by another process.
     #[cfg(windows)]
     pub fn open(name: &str, len: usize) -> Result<Self, ShmError> {
@@ -110,30 +156,30 @@ impl Mapping {
         self.len == 0
     }
 
-    fn atomic_u64(&self, offset: usize) -> &AtomicU64 {
+    pub fn atomic_u64(&self, offset: usize) -> &AtomicU64 {
         debug_assert!(offset + 8 <= self.len && offset.is_multiple_of(8));
         // SAFETY: in bounds and 8-byte aligned (mappings are page aligned).
         unsafe { &*(self.ptr.add(offset) as *const AtomicU64) }
     }
 
-    fn read_u32(&self, offset: usize) -> u32 {
+    pub fn read_u32(&self, offset: usize) -> u32 {
         // SAFETY: in bounds; header fields are written before readers are told the name.
         unsafe { std::ptr::read_volatile(self.ptr.add(offset) as *const u32) }
     }
 
-    fn write_u32(&self, offset: usize, value: u32) {
+    pub fn write_u32(&self, offset: usize, value: u32) {
         // SAFETY: in bounds.
         unsafe { std::ptr::write_volatile(self.ptr.add(offset) as *mut u32, value) }
     }
 
-    fn bytes(&self, offset: usize, len: usize) -> &[u8] {
+    pub fn bytes(&self, offset: usize, len: usize) -> &[u8] {
         assert!(offset + len <= self.len);
         // SAFETY: in bounds; concurrent writes are detected by the seqlock/ring protocol.
         unsafe { std::slice::from_raw_parts(self.ptr.add(offset), len) }
     }
 
     #[allow(clippy::mut_from_ref)]
-    fn bytes_mut(&self, offset: usize, len: usize) -> &mut [u8] {
+    pub fn bytes_mut(&self, offset: usize, len: usize) -> &mut [u8] {
         assert!(offset + len <= self.len);
         // SAFETY: in bounds; only the single writer process calls this.
         unsafe { std::slice::from_raw_parts_mut(self.ptr.add(offset), len) }

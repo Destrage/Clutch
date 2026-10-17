@@ -752,6 +752,36 @@ export component SettingsDialog inherits Modal {
                 NumberField { label: ""; value: root.form.replay-seconds; minimum: 5; maximum: 300; step: 5; suffix: "s"; changed(v) => { root.set("replay-seconds", v); } }
             }
 
+            SectionTitle { text: "VIRTUAL CAMERA"; }
+            Text {
+                text: "Shows a canvas as “eStream Virtual Camera” in Zoom, Teams, Discord, Meet and other apps (Windows 11).";
+                color: Theme.text-faint;
+                font-size: Theme.font-s;
+                wrap: word-wrap;
+            }
+            SettingRow {
+                label: "Canvas";
+                Select {
+                    label: "Virtual camera canvas";
+                    options: root.form.canvas-names;
+                    current-index: root.form.vcam-canvas;
+                    selected(i) => { root.set("vcam-canvas", i); }
+                }
+            }
+            SettingRow {
+                label: "Camera component";
+                hint: root.form.vcam-status;
+                HorizontalLayout {
+                    alignment: start;
+                    Button {
+                        text: root.form.vcam-installed ? "Reinstall" : "Install";
+                        kind: "ghost";
+                        tooltip: "Registers the camera with Windows (asks for permission)";
+                        clicked => { root.set("vcam-install", 0); }
+                    }
+                }
+            }
+
             SectionTitle { text: "REMOTE CONTROL"; }
             Text {
                 text: "Lets Stream Deck, Touch Portal, Streamer.bot and other obs-websocket tools control eStream.";

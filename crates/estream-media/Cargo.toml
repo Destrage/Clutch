@@ -15,6 +15,7 @@ estream-core.workspace = true
 estream-engine.workspace = true
 chrono.workspace = true
 crossbeam-channel.workspace = true
+estream-vcam.workspace = true
 ffmpeg-next.workspace = true
 serde.workspace = true
 serde_json.workspace = true

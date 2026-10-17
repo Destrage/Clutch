@@ -93,6 +93,8 @@ pub struct Settings {
     pub destinations: Vec<DestinationConfig>,
     /// The obs-websocket compatible remote control server.
     pub remote: RemoteSettings,
+    /// Canvas shown by the virtual camera (`None` = the first canvas).
+    pub vcam_canvas: Option<estream_core::CanvasId>,
     /// Single-stream settings from before multistream; read once, migrated, never written.
     #[serde(rename = "stream", skip_serializing)]
     legacy_stream: Option<estream_media::StreamSettings>,
@@ -196,6 +198,7 @@ impl Default for Settings {
             recording: estream_media::RecordingSettings::default(),
             destinations: Vec::new(),
             remote: RemoteSettings::default(),
+            vcam_canvas: None,
             legacy_stream: None,
             legacy_key: None,
         }

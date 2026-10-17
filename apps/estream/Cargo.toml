@@ -17,6 +17,7 @@ estream-engine.workspace = true
 estream-gpu.workspace = true
 estream-media = { path = "../../crates/estream-media" }
 estream-project.workspace = true
+estream-vcam.workspace = true
 anyhow.workspace = true
 rfd.workspace = true
 dirs.workspace = true

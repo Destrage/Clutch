@@ -113,6 +113,8 @@ export component AppWindow inherits Window {
     in property <bool> recording;
     in property <string> record-time;
     in property <bool> replay-active;
+    in property <int> vcam-state;
+    in property <string> vcam-tooltip;
     in property <int> stream-state;
     in property <string> stream-time;
     in property <string> stream-info;
@@ -218,6 +220,9 @@ export component AppWindow inherits Window {
                 recording: root.recording;
                 record-time: root.record-time;
                 replay-active: root.replay-active;
+                vcam-state: root.vcam-state;
+                vcam-tooltip: root.vcam-tooltip;
+                toggle-vcam => { root.action("vcam.toggle"); }
                 stream-state: root.stream-state;
                 stream-time: root.stream-time;
                 toggle-stream => { root.action("stream.toggle"); }

@@ -16,6 +16,10 @@ export component TopBar inherits Rectangle {
     in property <string> record-time;
     in property <bool> replay-active;
     in property <int> stream-state;
+    /// 0 off, 1 starting or installing, 2 on, 3 in use by an app.
+    in property <int> vcam-state;
+    in property <string> vcam-tooltip;
+    callback toggle-vcam();
     in property <string> stream-time;
     callback open-palette();
     callback toggle-stream();
@@ -169,6 +173,34 @@ export component TopBar inherits Rectangle {
                 icon: Icons.settings;
                 tooltip: "Settings (Ctrl+,)";
                 clicked => { root.open-settings(); }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: vcam-button.width;
+                height: vcam-button.height;
+                vcam-button := IconButton {
+                    icon: Icons.camera;
+                    toggled: root.vcam-state >= 2;
+                    tooltip: root.vcam-tooltip;
+                    clicked => { root.toggle-vcam(); }
+                }
+                // Live dot while an app is receiving the camera.
+                if root.vcam-state == 3: Rectangle {
+                    x: parent.width - 9px;
+                    y: 3px;
+                    width: 7px;
+                    height: 7px;
+                    border-radius: 3.5px;
+                    background: Theme.live;
+                }
+                // Pulsing ring while starting or installing.
+                if root.vcam-state == 1: Rectangle {
+                    border-radius: Theme.radius-s;
+                    border-width: 1px;
+                    border-color: Theme.accent.with-alpha(0.4 + 0.4 * Math.sin(animation-tick() / 300ms * 1rad));
+                }
             }
         }
         VerticalLayout {

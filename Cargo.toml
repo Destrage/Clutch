@@ -17,6 +17,7 @@ estream-gpu = { path = "crates/estream-gpu" }
 estream-project = { path = "crates/estream-project" }
 estream-engine = { path = "crates/estream-engine" }
 estream-api = { path = "crates/estream-api" }
+estream-vcam = { path = "crates/estream-vcam" }
 
 anyhow = "1.0.104"
 arc-swap = "1.9.2"
@@ -56,4 +57,8 @@ unwrap_used = "warn"
 expect_used = "warn"
 
 [profile.dev.package."*"]
+opt-level = 2
+
+# The camera source runs inside Windows' Frame Server; keep it fast in dev builds too.
+[profile.dev.package.estream-vcam]
 opt-level = 2

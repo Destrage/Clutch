@@ -17,7 +17,7 @@ struct FakeStudio {
     engine: Engine,
     studio: bool,
     preview: Option<SceneId>,
-    active: [bool; 3],
+    active: [bool; 4],
     last_replay: Option<PathBuf>,
     pressed: Vec<String>,
 }
@@ -27,6 +27,7 @@ fn index(o: Output) -> usize {
         Output::Stream => 0,
         Output::Record => 1,
         Output::ReplayBuffer => 2,
+        Output::VirtualCam => 3,
     }
 }
 
@@ -127,7 +128,7 @@ fn studio() -> FakeStudio {
         engine,
         studio: false,
         preview: None,
-        active: [false; 3],
+        active: [false; 4],
         last_replay: None,
         pressed: Vec::new(),
     }

@@ -104,6 +104,12 @@ pub struct App {
     api_error: String,
     /// Restart the server at this time (debounces typing in the port and password fields).
     remote_restart_at: Option<Instant>,
+    /// The virtual camera, while on.
+    vcam: Option<estream_media::vcam::VirtualCamOutput>,
+    /// A running install of the camera component: its result, and whether to start after.
+    vcam_install: Option<(std::sync::mpsc::Receiver<Result<(), String>>, bool)>,
+    /// Last camera failure shown (not repeated every tick).
+    vcam_error_shown: bool,
 }
 
 /// What the shader editor dialog applies to.
@@ -407,6 +413,9 @@ impl App {
             api: None,
             api_error: String::new(),
             remote_restart_at: None,
+            vcam: None,
+            vcam_install: None,
+            vcam_error_shown: false,
         };
         window.set_scenes(ModelRc::from(app.scenes_model.clone()));
         window.set_layers(ModelRc::from(app.layers_model.clone()));
@@ -547,6 +556,8 @@ impl App {
             collection_path: Some(self.collection.clone()),
             ..Default::default()
         };
+        // The camera follows the collection (it reads from the engine being replaced).
+        let had_vcam = self.vcam.take().map(|cam| cam.stop()).is_some();
         match Engine::start(project, config) {
             Ok(engine) => {
                 self.subscription = Some(engine.subscribe());
@@ -562,6 +573,9 @@ impl App {
                     w.invoke_zoom_fit();
                 }
                 self.refresh();
+                if had_vcam {
+                    self.start_vcam();
+                }
             }
             Err(e) => self.toast(format!("Engine failed to start: {e}"), true),
         }
@@ -576,6 +590,9 @@ impl App {
         // Remote clients hear about it first (ExitStarted), then their sessions close.
         if let Some(api) = self.api.take() {
             api.shutdown();
+        }
+        if let Some(cam) = self.vcam.take() {
+            cam.stop();
         }
         // Finish files cleanly before the engine goes away.
         if let Some(engine) = &self.engine {
@@ -706,6 +723,7 @@ impl App {
         if self.stats_at.elapsed() >= Duration::from_millis(500) {
             self.update_stats();
             w.set_remote_status(self.remote_status().into());
+            self.update_vcam();
             self.update_outputs();
         }
         if self.toast_until.is_some_and(|t| Instant::now() >= t) {
@@ -2226,6 +2244,9 @@ impl App {
             remote_port: self.settings.remote.port as f32,
             remote_auth: self.settings.remote.auth,
             remote_password: self.settings.remote.password.clone().into(),
+            vcam_canvas: index_of(self.vcam_canvas()),
+            vcam_status: self.vcam_status().1.into(),
+            vcam_installed: self.vcam_status().0,
             ..stream_form(&self.settings.destinations, self.dest_selected)
         });
     }
@@ -2375,6 +2396,13 @@ impl App {
             "remote-apply" if self.remote_restart_at.is_some() => {
                 self.remote_restart_at = Some(Instant::now());
             }
+            "vcam-canvas" => {
+                self.settings.vcam_canvas = canvas_ids.get(i).copied();
+                if let (Some(cam), Some(canvas)) = (&self.vcam, self.vcam_canvas()) {
+                    cam.set_canvas(canvas);
+                }
+            }
+            "vcam-install" => self.install_vcam(false),
             "remote-generate" => {
                 self.settings.remote.generate_password();
                 self.remote_restart_at = Some(Instant::now());
@@ -2712,6 +2740,140 @@ impl App {
             && let Some(duration) = player.status().duration
         {
             player.seek(duration.mul_f32(fraction.clamp(0.0, 1.0)));
+        }
+    }
+
+    // ------------------------------------------------------------ virtual camera
+
+    /// The canvas the virtual camera shows (the configured one if it still exists).
+    fn vcam_canvas(&self) -> Option<CanvasId> {
+        let snapshot = self.engine.as_ref()?.snapshot();
+        self.settings
+            .vcam_canvas
+            .filter(|c| snapshot.canvas(*c).is_some())
+            .or_else(|| snapshot.canvases.first().map(|c| c.id))
+    }
+
+    fn toggle_vcam(&mut self) {
+        if let Some(cam) = self.vcam.take() {
+            cam.stop();
+            self.toast("Virtual camera off".into(), false);
+            self.update_vcam();
+            return;
+        }
+        if self.vcam_install.is_some() {
+            return; // waiting for the permission prompt
+        }
+        if !estream_vcam::control::supported() {
+            self.toast("The virtual camera needs Windows 11".into(), true);
+            return;
+        }
+        match estream_vcam::control::registration() {
+            estream_vcam::control::Registration::Installed => self.start_vcam(),
+            _ => self.install_vcam(true),
+        }
+    }
+
+    /// Registers the camera component (shows Windows' permission prompt) on a helper thread.
+    fn install_vcam(&mut self, start_after: bool) {
+        let Some(dll) = estream_vcam::control::dll_path() else {
+            self.toast("estream_vcam.dll is missing next to eStream".into(), true);
+            return;
+        };
+        if self.vcam_install.is_some() {
+            return;
+        }
+        self.toast(
+            "Windows will ask for permission once to install eStream's virtual camera".into(),
+            false,
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        let spawned = std::thread::Builder::new()
+            .name("estream-vcam-install".into())
+            .spawn(move || {
+                let _ = tx.send(estream_vcam::control::install(&dll).map_err(|e| e.to_string()));
+            });
+        if spawned.is_ok() {
+            self.vcam_install = Some((rx, start_after));
+        }
+        self.update_vcam();
+    }
+
+    fn start_vcam(&mut self) {
+        let (Some(engine), Some(canvas)) = (&self.engine, self.vcam_canvas()) else {
+            return;
+        };
+        self.vcam_error_shown = false;
+        self.vcam = Some(estream_media::vcam::VirtualCamOutput::start(engine, canvas));
+        self.toast(
+            "Virtual camera on — pick “eStream Virtual Camera” in your call app".into(),
+            false,
+        );
+        self.update_vcam();
+    }
+
+    /// Install results, camera failures and the top bar button.
+    fn update_vcam(&mut self) {
+        use estream_media::vcam::VcamState;
+        if let Some((rx, start_after)) = &self.vcam_install
+            && let Ok(result) = rx.try_recv()
+        {
+            let start_after = *start_after;
+            self.vcam_install = None;
+            match result {
+                Ok(()) if start_after => self.start_vcam(),
+                Ok(()) => self.toast("Virtual camera installed".into(), false),
+                Err(e) => self.toast(format!("Couldn't install the virtual camera: {e}"), true),
+            }
+            self.refresh_settings_form();
+        }
+        let state = self.vcam.as_ref().map(|c| c.state());
+        if let Some(VcamState::Failed(e)) = &state {
+            if !self.vcam_error_shown {
+                self.vcam_error_shown = true;
+                self.toast(format!("The virtual camera stopped: {e}"), true);
+            }
+            self.vcam = None;
+        }
+        let Some(w) = self.window() else { return };
+        let (code, tip) = match (&state, self.vcam_install.is_some()) {
+            (_, true) => (1, "Installing the virtual camera…"),
+            (Some(VcamState::Starting), _) => (1, "Starting the virtual camera…"),
+            (Some(VcamState::On), _) => {
+                (2, "Virtual camera on (no app is using it) — click to stop")
+            }
+            (Some(VcamState::InUse), _) => (3, "Virtual camera in use — click to stop"),
+            _ => (0, "Start virtual camera"),
+        };
+        w.set_vcam_state(code);
+        w.set_vcam_tooltip(tip.into());
+    }
+
+    /// Settings: what the camera component's install looks like.
+    fn vcam_status(&self) -> (bool, String) {
+        use estream_vcam::control::{self, Registration};
+        if !control::supported() {
+            return (false, "Needs Windows 11.".into());
+        }
+        if control::dll_path().is_none() {
+            return (
+                false,
+                "estream_vcam.dll wasn't found next to eStream.".into(),
+            );
+        }
+        match control::registration() {
+            Registration::Installed => (true, "Installed.".into()),
+            Registration::Missing => (
+                false,
+                "Not installed yet. It installs the first time you start the camera.".into(),
+            ),
+            Registration::Elsewhere(p) => (
+                true,
+                format!(
+                    "Installed for another copy of eStream ({}). Reinstall to use this one.",
+                    p.display()
+                ),
+            ),
         }
     }
 
@@ -3725,6 +3887,7 @@ impl App {
             Action::ToggleReplay => self.toggle_replay(),
             Action::ToggleStream => self.toggle_stream(),
             Action::ToggleStudio => self.toggle_studio(),
+            Action::ToggleVirtualCamera => self.toggle_vcam(),
             Action::TransitionGo => self.studio_go("go"),
             Action::TransitionCut => self.studio_go("cut"),
             Action::TransitionShader => self.open_shader_editor(),
@@ -4113,6 +4276,12 @@ impl estream_api::Studio for App {
                 active: self.replay.is_some(),
                 ..Default::default()
             },
+            Output::VirtualCam => OutputStatus {
+                active: self.vcam.as_ref().is_some_and(|c| {
+                    !matches!(c.state(), estream_media::vcam::VcamState::Failed(_))
+                }),
+                ..Default::default()
+            },
         }
     }
 
@@ -4130,12 +4299,25 @@ impl estream_api::Studio for App {
             Output::Stream => self.toggle_stream(),
             Output::Record => self.toggle_recording(),
             Output::ReplayBuffer => self.toggle_replay(),
+            Output::VirtualCam => {
+                // Installing needs Windows' permission prompt: only from eStream itself.
+                let installed = estream_vcam::control::registration()
+                    == estream_vcam::control::Registration::Installed;
+                if active && !installed {
+                    return Err(
+                        "install the virtual camera in eStream first (Settings → Virtual camera)"
+                            .into(),
+                    );
+                }
+                self.toggle_vcam();
+            }
         }
         if active && !running(self) {
             return Err(match output {
                 Output::Stream => "couldn't go live (check the stream destinations in eStream)",
                 Output::Record => "couldn't start recording (see eStream for details)",
                 Output::ReplayBuffer => "couldn't start the replay buffer",
+                Output::VirtualCam => "couldn't start the virtual camera (needs Windows 11)",
             }
             .into());
         }
