@@ -2,7 +2,7 @@
 
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
-import { SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SourceType, PropRow, MixerStrip, AudioInspect, SettingsForm, LiveRow, DestinationRow } from "types.slint";
+import { SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SourceType, PropRow, MixerStrip, AudioInspect, SettingsForm, LiveRow, DestinationRow, VideoFilterRow } from "types.slint";
 import { VSplitter, HSplitter, TooltipLayer, Hint } from "widgets.slint";
 import { Preview } from "preview.slint";
 import { TopBar, ScenesPanel, SourcesPanel, InspectorPanel, MixerPanel, StatusBar, TransitionColumn, ProgramView } from "panels.slint";
@@ -42,6 +42,17 @@ export component AppWindow inherits Window {
     callback studio-go(string);
     callback shader-apply(string);
     callback shader-example();
+    in property <string> shader-title: "Custom transition shader";
+    in property <string> shader-help;
+    in property <[VideoFilterRow]> video-filters;
+    in property <[string]> video-filter-kinds;
+    callback vfilter-add(int);
+    callback vfilter-remove(string);
+    callback vfilter-toggle(string, bool);
+    callback vfilter-param(string, string, float);
+    callback vfilter-move(string, bool);
+    callback vfilter-browse(string);
+    callback vfilter-code(string);
     in property <float> canvas-w: 1920;
     in property <float> canvas-h: 1080;
     in property <CanvasBox> selection-box;
@@ -334,6 +345,15 @@ export component AppWindow inherits Window {
                     filter-toggle(id, v) => { root.filter-toggle(id, v); }
                     filter-param(id, k, v) => { root.filter-param(id, k, v); }
                     filter-move(id, up) => { root.filter-move(id, up); }
+                    video-filters: root.video-filters;
+                    video-filter-kinds: root.video-filter-kinds;
+                    vfilter-add(i) => { root.vfilter-add(i); }
+                    vfilter-remove(id) => { root.vfilter-remove(id); }
+                    vfilter-toggle(id, v) => { root.vfilter-toggle(id, v); }
+                    vfilter-param(id, k, v) => { root.vfilter-param(id, k, v); }
+                    vfilter-move(id, up) => { root.vfilter-move(id, up); }
+                    vfilter-browse(id) => { root.vfilter-browse(id); }
+                    vfilter-code(id) => { root.vfilter-code(id); }
                 }
             }
             StatusBar {
@@ -381,6 +401,8 @@ export component AppWindow inherits Window {
     if root.shader-open: ShaderDialog {
         code: root.shader-code;
         error: root.shader-error;
+        title: root.shader-title;
+        help: root.shader-help;
         apply(code) => { root.shader-apply(code); }
         example => { root.shader-example(); }
         dismiss => { root.shader-open = false; main-keys.focus(); }

@@ -823,6 +823,8 @@ export component LivePanel inherits Rectangle {
 export component ShaderDialog inherits Modal {
     in property <string> code;
     in property <string> error;
+    in property <string> title: "Custom transition shader";
+    in property <string> help;
     callback apply(string);
     callback example();
 
@@ -836,7 +838,7 @@ export component ShaderDialog inherits Modal {
         padding: 18px;
         padding-bottom: 4px;
         spacing: 8px;
-        Text { text: "Custom transition shader"; color: Theme.text; font-size: Theme.font-xl; font-weight: 700; horizontal-stretch: 1; vertical-alignment: center; }
+        Text { text: root.title; color: Theme.text; font-size: Theme.font-xl; font-weight: 700; horizontal-stretch: 1; vertical-alignment: center; }
         Button { text: "Load example"; kind: "ghost"; clicked => { root.example(); } }
     }
     VerticalLayout {
@@ -844,7 +846,7 @@ export component ShaderDialog inherits Modal {
         padding-top: 4px;
         spacing: 10px;
         Text {
-            text: "Write fn transition(uv: vec2<f32>, progress: f32) -> vec4<f32> in WGSL. Available: from_color(uv), to_color(uv), resolution(), ease(t), over(a, b). Colors are linear and premultiplied.";
+            text: root.help;
             color: Theme.text-muted;
             font-size: Theme.font-s;
             wrap: word-wrap;

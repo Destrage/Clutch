@@ -1,6 +1,6 @@
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
-import { SceneRow, LayerRow, Inspect, PropRow, MixerStrip, AudioInspect, FilterRow } from "types.slint";
+import { SceneRow, LayerRow, Inspect, PropRow, MixerStrip, AudioInspect, FilterRow, VideoFilterRow } from "types.slint";
 import {
     Button, IconButton, Icon, TextField, TextArea, NumberField, Toggle, Slider, Select, Panel,
     PanelHeader, SectionTitle, Badge, EmptyState, Hint,
@@ -704,6 +704,15 @@ export component InspectorPanel inherits Panel {
     callback filter-toggle(string, bool);
     callback filter-param(string, string, float);
     callback filter-move(string, bool);
+    in property <[VideoFilterRow]> video-filters;
+    in property <[string]> video-filter-kinds;
+    callback vfilter-add(int);
+    callback vfilter-remove(string);
+    callback vfilter-toggle(string, bool);
+    callback vfilter-param(string, string, float);
+    callback vfilter-move(string, bool);
+    callback vfilter-browse(string);
+    callback vfilter-code(string);
     callback commit();
     callback action(string);
     callback prop-flag(string, bool);
@@ -991,7 +1000,83 @@ export component InspectorPanel inherits Panel {
                     browse => { root.prop-browse(prop.key); }
                     commit => { root.commit(); }
                 }
-            }        }
+            }
+
+            // Video filters of the selected item's source
+            if !root.sel.group && !root.sel.no-video && root.video-filter-kinds.length > 0: VerticalLayout {
+                spacing: 8px;
+                HorizontalLayout {
+                    SectionTitle { text: "VIDEO FILTERS"; horizontal-stretch: 1; vertical-alignment: center; }
+                    Select {
+                        width: 150px;
+                        label: "Add video filter";
+                        options: root.video-filter-kinds;
+                        current-index: 0;
+                        selected(i) => { if (i > 0) { root.vfilter-add(i - 1); } }
+                    }
+                }
+                if root.video-filters.length == 0: Text {
+                    text: "No filters. Try a chroma key for green screens or color correction to match cameras.";
+                    color: Theme.text-faint;
+                    font-size: Theme.font-xs;
+                    wrap: word-wrap;
+                }
+                for filter in root.video-filters: Rectangle {
+                    border-radius: Theme.radius-m;
+                    background: Theme.surface-2;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    height: vfilter-body.preferred-height;
+                    vfilter-body := VerticalLayout {
+                        padding: 8px;
+                        spacing: 6px;
+                        HorizontalLayout {
+                            spacing: 2px;
+                            Toggle { checked: filter.enabled; toggled(v) => { root.vfilter-toggle(filter.id, v); } }
+                            Text { text: filter.name; color: filter.enabled ? Theme.text : Theme.text-faint; font-size: Theme.font-s; font-weight: 600; vertical-alignment: center; horizontal-stretch: 1; }
+                            IconButton { icon: Icons.chevron-up; tooltip: "Move up"; size: 22px; icon-size: 12px; clicked => { root.vfilter-move(filter.id, true); } }
+                            IconButton { icon: Icons.chevron-down; tooltip: "Move down"; size: 22px; icon-size: 12px; clicked => { root.vfilter-move(filter.id, false); } }
+                            IconButton { icon: Icons.trash; tooltip: "Remove filter"; size: 22px; icon-size: 12px; clicked => { root.vfilter-remove(filter.id); } }
+                        }
+                        if filter.file-label != "": HorizontalLayout {
+                            spacing: 8px;
+                            Text { text: filter.file-label; color: Theme.text-muted; font-size: Theme.font-xs; vertical-alignment: center; width: 96px; wrap: word-wrap; }
+                            Text {
+                                text: filter.file != "" ? filter.file : "No file chosen";
+                                color: filter.file != "" ? Theme.text : Theme.text-faint;
+                                font-size: Theme.font-xs;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                                overflow: elide;
+                            }
+                            Button { text: "Browse…"; kind: "ghost"; clicked => { root.vfilter-browse(filter.id); } }
+                        }
+                        if filter.code: Button {
+                            text: "Edit shader…";
+                            has-icon: true;
+                            icon: Icons.sparkles;
+                            kind: "ghost";
+                            clicked => { root.vfilter-code(filter.id); }
+                        }
+                        for param in filter.params: HorizontalLayout {
+                            spacing: 8px;
+                            Text { text: param.label; color: Theme.text-muted; font-size: Theme.font-xs; vertical-alignment: center; width: 96px; }
+                            NumberField {
+                                label: "";
+                                value: param.value;
+                                minimum: param.minimum;
+                                maximum: param.maximum;
+                                step: param.step;
+                                decimals: param.step < 0.1 ? 2 : param.step < 1 ? 1 : 0;
+                                suffix: param.unit;
+                                changed(v) => { root.vfilter-param(filter.id, param.key, v); }
+                                committed => { root.commit(); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

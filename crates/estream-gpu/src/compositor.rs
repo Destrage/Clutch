@@ -189,6 +189,11 @@ impl Compositor {
         })
     }
 
+    /// Layout of a source binding (texture + sampler); filters read and produce this too.
+    pub fn source_layout(&self) -> &wgpu::BindGroupLayout {
+        &self.source_layout
+    }
+
     fn pipeline(&self, mode: BlendMode) -> &wgpu::RenderPipeline {
         let index = BlendMode::ALL
             .iter()

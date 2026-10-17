@@ -2,15 +2,16 @@
 //! renders each canvas on its own frame clock, and publishes the results.
 
 use crate::feed::{ReadbackRing, VideoConsumer};
+use crate::filters::Filters;
 use crate::frame_clock::{FrameClock, FrameTick, wait_until};
 use crate::graph::{CanvasGraph, FlatItem, RenderGraph};
 use crate::source::{SourceContext, SourceRegistry, SourceStatus, VideoSource};
 use estream_core::color::srgb_to_linear;
 use estream_core::{CanvasId, EngineClock, Rgba8, SourceId, Timestamp};
 use estream_gpu::{
-    BuiltinKind, CANVAS_FORMAT, CanvasRenderer, Compositor, ConvertInput, DrawItem, GpuContext,
-    OutputConverter, TransitionParams, TransitionRenderer, TransitionShader, TransitionTargets,
-    wgpu,
+    BuiltinKind, CANVAS_FORMAT, CanvasRenderer, Compositor, ConvertInput, DrawItem, FilterOutput,
+    GpuContext, OutputConverter, TransitionParams, TransitionRenderer, TransitionShader,
+    TransitionTargets, wgpu,
 };
 use estream_project::TransitionKind;
 use glam::Vec2;
@@ -163,23 +164,32 @@ impl StudioPreview {
 /// Collects drawable items for `flats` into `out` (sources without a frame draw nothing).
 fn push_items<'a>(
     sources: &'a HashMap<SourceId, SourceSlot>,
+    filters: &'a Filters,
     flats: &[FlatItem],
     out: &mut Vec<DrawItem<'a>>,
 ) {
     for flat in flats {
-        let Some(frame) = sources
-            .get(&flat.source)
-            .and_then(|s| s.instance.as_deref())
-            .and_then(|s| s.frame())
-        else {
+        // The filtered frame if the source has filters, else the raw frame.
+        let frame = match filters.output(flat.source) {
+            Some(f) => Some((
+                f.binding,
+                estream_core::Size::new(f.width as f32, f.height as f32),
+            )),
+            None => sources
+                .get(&flat.source)
+                .and_then(|s| s.instance.as_deref())
+                .and_then(|s| s.frame())
+                .map(|f| (f.binding, f.size)),
+        };
+        let Some((binding, size)) = frame else {
             continue;
         };
-        let layout = flat.transform.layout(flat.crop, frame.size);
+        let layout = flat.transform.layout(flat.crop, size);
         if layout.size.x <= 0.0 || layout.size.y <= 0.0 {
             continue;
         }
         out.push(DrawItem {
-            binding: frame.binding,
+            binding,
             matrix: flat.parent * layout.matrix,
             uv_min: layout.uv_min,
             uv_max: layout.uv_max,
@@ -260,12 +270,15 @@ pub struct VideoCore {
     scratch: Vec<DrawItem<'static>>,
     scratch_extra: Vec<DrawItem<'static>>,
     transitions: TransitionRenderer,
+    filters: Filters,
 }
 
 impl VideoCore {
     pub fn new(gpu: GpuContext, registry: SourceRegistry) -> Self {
+        let compositor = Compositor::new(&gpu);
         Self {
-            compositor: Compositor::new(&gpu),
+            filters: Filters::new(&gpu, compositor.clone()),
+            compositor,
             converter: OutputConverter::new(&gpu),
             transitions: TransitionRenderer::new(&gpu),
             gpu,
@@ -406,6 +419,7 @@ impl VideoCore {
             }
             self.canvases.push(slot);
         }
+        self.filters.sync(&self.gpu, &graph.sources);
         self.graph = graph;
     }
 
@@ -468,6 +482,22 @@ impl VideoCore {
                 instance.tick(&ctx, encoder, now);
             }
         }
+        // Video filters run on the fresh source frames.
+        let Self {
+            gpu,
+            sources,
+            filters,
+            ..
+        } = self;
+        filters.run(gpu, encoder, now.0 as f32 / 1e9, |id| {
+            let frame = sources.get(&id)?.instance.as_deref()?.frame()?;
+            Some(FilterOutput {
+                binding: frame.binding,
+                width: frame.size.width.round().max(1.0) as u32,
+                height: frame.size.height.round().max(1.0) as u32,
+                texture: None,
+            })
+        });
     }
 
     /// Renders canvas `index` for the frame at `now` into its next output slot (and the
@@ -488,6 +518,7 @@ impl VideoCore {
             scratch,
             scratch_extra,
             transitions,
+            filters,
             ..
         } = self;
         let canvas = &mut canvases[index];
@@ -498,7 +529,7 @@ impl VideoCore {
         let slot = ((canvas.sequence + 1) % OUTPUT_RING as u64) as usize;
 
         let mut items = reuse(scratch);
-        push_items(sources, &cg.items, &mut items);
+        push_items(sources, filters, &cg.items, &mut items);
         let running = cg
             .transition
             .as_ref()
@@ -516,7 +547,7 @@ impl VideoCore {
                     .from_renderer
                     .get_or_insert_with(|| CanvasRenderer::new(gpu, compositor.clone()));
                 let mut from = reuse(scratch_extra);
-                push_items(sources, &t.from, &mut from);
+                push_items(sources, filters, &t.from, &mut from);
                 from_renderer.render(
                     gpu,
                     encoder,
@@ -560,7 +591,7 @@ impl VideoCore {
         if let (Some(preview), Some(flats)) = (&mut canvas.preview, &cg.preview) {
             let pslot = ((preview.sequence + 1) % OUTPUT_RING as u64) as usize;
             let mut items = reuse(scratch_extra);
-            push_items(sources, flats, &mut items);
+            push_items(sources, filters, flats, &mut items);
             preview.renderer.render(
                 gpu,
                 encoder,

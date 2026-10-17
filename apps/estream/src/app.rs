@@ -8,7 +8,7 @@ use crate::settings::{PanelLayout, Paths, Settings, ThemeMode, WindowState};
 use crate::ui::{
     AppWindow, AudioInspect, CanvasBox, DestinationRow, FilterParamRow, FilterRow, Guide, Inspect,
     LayerRow, LiveRow, MixerStrip, PaletteEntry, Preset, PropRow, SceneRow, SettingsForm,
-    SourceType, Theme,
+    SourceType, Theme, VideoFilterRow,
 };
 use estream_core::{BlendMode, BoundsMode, CanvasId, ItemId, Rgba8, SceneId, SourceId};
 use estream_engine::{
@@ -88,9 +88,22 @@ pub struct App {
     studio: bool,
     preview_scene: Option<SceneId>,
     last_preview_sequence: u64,
+    /// What the shader editor is editing.
+    shader_target: ShaderTarget,
     /// Last file written by a recording or replay save, for "Show in folder".
     last_output: Option<std::path::PathBuf>,
 }
+
+/// What the shader editor dialog applies to.
+#[derive(Clone, Debug, PartialEq)]
+enum ShaderTarget {
+    Transition,
+    /// A custom video filter: (source, filter id).
+    Filter(SourceId, String),
+}
+
+const TRANSITION_SHADER_HELP: &str = "Write fn transition(uv: vec2<f32>, progress: f32) -> vec4<f32> in WGSL. Available: from_color(uv), to_color(uv), resolution(), ease(t), over(a, b). Colors are linear and premultiplied.";
+const FILTER_SHADER_HELP: &str = "Write fn effect(uv: vec2<f32>) -> vec4<f32> in WGSL. Available: source(uv), size(), time(), param(0u..3u) (the four sliders), to_srgb(c), to_linear(c), luma(c). Colors are linear with straight alpha.";
 
 /// A live destination as the app tracks it.
 struct LiveDest {
@@ -374,6 +387,7 @@ impl App {
             studio: false,
             preview_scene: None,
             last_preview_sequence: 0,
+            shader_target: ShaderTarget::Transition,
             last_output: None,
         };
         window.set_scenes(ModelRc::from(app.scenes_model.clone()));
@@ -885,6 +899,7 @@ impl App {
         w.set_inspect(inspect);
         w.set_audio_inspect(self.audio_inspect(&snapshot));
         self.refresh_props(&snapshot);
+        self.refresh_video_filters(&w, &snapshot);
         self.update_mixer();
         w.set_hover_box(self.hover_box());
     }
@@ -1424,7 +1439,14 @@ impl App {
             estream_project::TransitionKind::Shader { code } => code.clone(),
             _ => estream_gpu::EXAMPLE_CUSTOM_TRANSITION.to_owned(),
         };
+        self.shader_target = ShaderTarget::Transition;
+        self.show_shader_dialog("Custom transition shader", TRANSITION_SHADER_HELP, code);
+    }
+
+    fn show_shader_dialog(&self, title: &str, help: &str, code: String) {
         if let Some(w) = self.window() {
+            w.set_shader_title(title.into());
+            w.set_shader_help(help.into());
             w.set_shader_code(code.into());
             w.set_shader_error("".into());
             w.set_shader_open(true);
@@ -1432,31 +1454,63 @@ impl App {
     }
 
     pub fn shader_example(&mut self) {
+        let example = match self.shader_target {
+            ShaderTarget::Transition => estream_gpu::EXAMPLE_CUSTOM_TRANSITION,
+            ShaderTarget::Filter(..) => estream_gpu::EXAMPLE_CUSTOM_FILTER,
+        };
         if let Some(w) = self.window() {
-            w.set_shader_code(estream_gpu::EXAMPLE_CUSTOM_TRANSITION.into());
+            w.set_shader_code(example.into());
             w.set_shader_error("".into());
         }
     }
 
-    /// Validates and applies a custom transition shader; errors stay in the dialog.
+    /// Validates and applies the shader being edited; errors stay in the dialog.
     pub fn shader_apply(&mut self, code: &str) {
         let Some(engine) = &self.engine else { return };
-        let duration_ms = match engine.snapshot().transition.duration_ms {
-            0 => 800,
-            d => d,
+        let (command, done) = match &self.shader_target {
+            ShaderTarget::Transition => {
+                let duration_ms = match engine.snapshot().transition.duration_ms {
+                    0 => 800,
+                    d => d,
+                };
+                let transition = estream_project::Transition {
+                    kind: estream_project::TransitionKind::Shader {
+                        code: code.to_owned(),
+                    },
+                    duration_ms,
+                };
+                (
+                    Command::SetTransition { transition },
+                    "Custom transition applied",
+                )
+            }
+            ShaderTarget::Filter(source, id) => {
+                let Some(def) = engine.snapshot().source(*source).cloned() else {
+                    return;
+                };
+                let mut filters = def.filters.clone();
+                let Some(f) = filters.iter_mut().find(|f| &f.id == id) else {
+                    return;
+                };
+                if !f.settings.is_object() {
+                    f.settings = serde_json::json!({});
+                }
+                f.settings["code"] = serde_json::Value::from(code);
+                (
+                    Command::SetSourceFilters {
+                        source: *source,
+                        filters,
+                    },
+                    "Custom filter applied",
+                )
+            }
         };
-        let transition = estream_project::Transition {
-            kind: estream_project::TransitionKind::Shader {
-                code: code.to_owned(),
-            },
-            duration_ms,
-        };
-        let result = engine.execute(Command::SetTransition { transition });
+        let result = engine.execute(command);
         let Some(w) = self.window() else { return };
         match result {
             Ok(_) => {
                 w.set_shader_open(false);
-                self.toast("Custom transition applied".into(), false);
+                self.toast(done.into(), false);
                 self.refresh();
             }
             Err(e) => {
@@ -2236,6 +2290,211 @@ impl App {
                 }
             }
         });
+    }
+
+    // ------------------------------------------------------------ video filters
+
+    /// Inspector rows for the selected source's video filters.
+    fn refresh_video_filters(&self, w: &AppWindow, snapshot: &Project) {
+        use estream_gpu::filter::{self, KINDS};
+        let source = self
+            .current_source(snapshot)
+            .and_then(|id| snapshot.source(id))
+            .filter(|s| {
+                self.engine
+                    .as_ref()
+                    .and_then(|e| e.registry().get(&s.kind))
+                    .is_some_and(|t| t.has_video())
+            });
+        let Some(source) = source else {
+            w.set_video_filter_kinds(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
+            w.set_video_filters(ModelRc::new(VecModel::from(Vec::<VideoFilterRow>::new())));
+            return;
+        };
+        let mut kinds = vec![SharedString::from("+ Add filter…")];
+        kinds.extend(KINDS.iter().map(|k| SharedString::from(k.name)));
+        w.set_video_filter_kinds(ModelRc::new(VecModel::from(kinds)));
+        let rows: Vec<VideoFilterRow> = source
+            .filters
+            .iter()
+            .filter_map(|f| {
+                let info = filter::kind(&f.kind)?;
+                let value = |key: &str, default: f32| {
+                    f.settings
+                        .get(key)
+                        .and_then(|v| v.as_f64())
+                        .map_or(default, |v| v as f32)
+                };
+                let params: Vec<FilterParamRow> = info
+                    .params
+                    .iter()
+                    .map(|p| FilterParamRow {
+                        key: p.key.into(),
+                        label: p.label.into(),
+                        value: value(p.key, p.default),
+                        minimum: p.min,
+                        maximum: p.max,
+                        step: p.step,
+                        unit: p.unit.into(),
+                    })
+                    .collect();
+                let file = f
+                    .settings
+                    .get("file")
+                    .and_then(|v| v.as_str())
+                    .map(|p| {
+                        std::path::Path::new(p)
+                            .file_name()
+                            .map_or(p.to_owned(), |n| n.to_string_lossy().into_owned())
+                    })
+                    .unwrap_or_default();
+                Some(VideoFilterRow {
+                    id: f.id.clone().into(),
+                    name: info.name.into(),
+                    enabled: f.enabled,
+                    params: ModelRc::new(VecModel::from(params)),
+                    file_label: info.file.map_or("", |f| f.label).into(),
+                    file: file.into(),
+                    code: info.code,
+                })
+            })
+            .collect();
+        w.set_video_filters(ModelRc::new(VecModel::from(rows)));
+    }
+
+    /// Applies `change` to the selected source's video filters (one undoable step).
+    fn update_video_filters(&mut self, change: impl FnOnce(&mut Vec<estream_project::FilterDef>)) {
+        let Some((snapshot, _, _)) = self.canvas_and_scene() else {
+            return;
+        };
+        let Some(source) = self.current_source(&snapshot) else {
+            return;
+        };
+        let Some(def) = snapshot.source(source) else {
+            return;
+        };
+        let mut filters = def.filters.clone();
+        change(&mut filters);
+        if filters != def.filters {
+            self.exec(Command::SetSourceFilters { source, filters });
+        }
+    }
+
+    pub fn vfilter_add(&mut self, index: i32) {
+        let Some(kind) = estream_gpu::filter::KINDS.get(index.max(0) as usize) else {
+            return;
+        };
+        let id = uuid::Uuid::now_v7().to_string();
+        let settings = if kind.code {
+            serde_json::json!({ "code": estream_gpu::EXAMPLE_CUSTOM_FILTER })
+        } else {
+            serde_json::json!({})
+        };
+        self.update_video_filters(|f| {
+            f.push(estream_project::FilterDef {
+                id: id.clone(),
+                kind: kind.kind.into(),
+                enabled: true,
+                settings,
+            })
+        });
+        // Filters that need a file ask for it right away.
+        if kind.file.is_some() {
+            self.vfilter_browse(&id);
+        }
+    }
+
+    pub fn vfilter_remove(&mut self, id: &str) {
+        self.update_video_filters(|f| f.retain(|x| x.id != id));
+    }
+
+    pub fn vfilter_toggle(&mut self, id: &str, enabled: bool) {
+        self.update_video_filters(|f| {
+            if let Some(x) = f.iter_mut().find(|x| x.id == id) {
+                x.enabled = enabled;
+            }
+        });
+    }
+
+    pub fn vfilter_param(&mut self, id: &str, key: &str, value: f32) {
+        self.update_video_filters(|f| {
+            if let Some(x) = f.iter_mut().find(|x| x.id == id) {
+                if !x.settings.is_object() {
+                    x.settings = serde_json::json!({});
+                }
+                x.settings[key] = serde_json::Value::from(value as f64);
+            }
+        });
+    }
+
+    pub fn vfilter_move(&mut self, id: &str, up: bool) {
+        self.update_video_filters(|f| {
+            if let Some(i) = f.iter().position(|x| x.id == id) {
+                let j = if up {
+                    i.checked_sub(1)
+                } else {
+                    (i + 1 < f.len()).then_some(i + 1)
+                };
+                if let Some(j) = j {
+                    f.swap(i, j);
+                }
+            }
+        });
+    }
+
+    pub fn vfilter_browse(&mut self, id: &str) {
+        let Some((snapshot, _, _)) = self.canvas_and_scene() else {
+            return;
+        };
+        let Some(def) = self
+            .current_source(&snapshot)
+            .and_then(|s| snapshot.source(s))
+            .and_then(|s| s.filters.iter().find(|f| f.id == id))
+        else {
+            return;
+        };
+        let Some(file) = estream_gpu::filter::kind(&def.kind).and_then(|k| k.file) else {
+            return;
+        };
+        let Some(path) = rfd::FileDialog::new()
+            .set_title(file.label)
+            .add_filter(file.label, file.extensions)
+            .pick_file()
+        else {
+            return;
+        };
+        let path = path.to_string_lossy().into_owned();
+        self.update_video_filters(|f| {
+            if let Some(x) = f.iter_mut().find(|x| x.id == id) {
+                if !x.settings.is_object() {
+                    x.settings = serde_json::json!({});
+                }
+                x.settings["file"] = serde_json::Value::from(path);
+            }
+        });
+    }
+
+    pub fn vfilter_code(&mut self, id: &str) {
+        let Some((snapshot, _, _)) = self.canvas_and_scene() else {
+            return;
+        };
+        let Some(source) = self.current_source(&snapshot) else {
+            return;
+        };
+        let Some(def) = snapshot
+            .source(source)
+            .and_then(|s| s.filters.iter().find(|f| f.id == id))
+        else {
+            return;
+        };
+        let code = def
+            .settings
+            .get("code")
+            .and_then(|c| c.as_str())
+            .unwrap_or(estream_gpu::EXAMPLE_CUSTOM_FILTER)
+            .to_owned();
+        self.shader_target = ShaderTarget::Filter(source, id.to_owned());
+        self.show_shader_dialog("Custom filter shader", FILTER_SHADER_HELP, code);
     }
 
     pub fn mixer_select(&mut self, id: &str) {
@@ -3463,6 +3722,13 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     on!(on_studio_go, |a, m| a.studio_go(&m));
     on!(on_shader_apply, |a, c| a.shader_apply(&c));
     on!(on_shader_example, |a| a.shader_example());
+    on!(on_vfilter_add, |a, i| a.vfilter_add(i));
+    on!(on_vfilter_remove, |a, id| a.vfilter_remove(&id));
+    on!(on_vfilter_toggle, |a, id, v| a.vfilter_toggle(&id, v));
+    on!(on_vfilter_param, |a, id, k, v| a.vfilter_param(&id, &k, v));
+    on!(on_vfilter_move, |a, id, up| a.vfilter_move(&id, up));
+    on!(on_vfilter_browse, |a, id| a.vfilter_browse(&id));
+    on!(on_vfilter_code, |a, id| a.vfilter_code(&id));
     on!(on_settings_browse, |a| a.settings_browse());
 
     {

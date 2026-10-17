@@ -137,6 +137,19 @@ export struct FilterParamRow {
     unit: string,
 }
 
+/// A video filter in the inspector.
+export struct VideoFilterRow {
+    id: string,
+    name: string,
+    enabled: bool,
+    params: [FilterParamRow],
+    /// Label of the file it needs ("" if none) and the chosen file's name.
+    file-label: string,
+    file: string,
+    /// Takes WGSL code (custom shader).
+    code: bool,
+}
+
 export struct FilterRow {
     id: string,
     name: string,

@@ -245,6 +245,9 @@ pub struct SourceDef {
     /// Mixer settings (used by source types that produce audio).
     #[serde(default, skip_serializing_if = "AudioConfig::is_default")]
     pub audio: AudioConfig,
+    /// Video filters, applied in order wherever the source appears.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub filters: Vec<FilterDef>,
 }
 
 /// How a source is monitored (heard locally by the streamer).
@@ -259,9 +262,9 @@ pub enum Monitoring {
     MonitorAndOutput,
 }
 
-/// One audio filter in a source's chain.
+/// One filter in a source's audio or video chain.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct AudioFilterDef {
+pub struct FilterDef {
     pub id: String,
     pub kind: String,
     #[serde(default = "yes")]
@@ -269,6 +272,9 @@ pub struct AudioFilterDef {
     #[serde(default)]
     pub settings: serde_json::Value,
 }
+
+/// Audio filters use the common filter shape.
+pub type AudioFilterDef = FilterDef;
 
 /// Per-source mixer settings.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -330,6 +336,7 @@ impl SourceDef {
             kind: kind.into(),
             settings,
             audio: AudioConfig::default(),
+            filters: Vec::new(),
         }
     }
 }

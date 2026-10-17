@@ -94,62 +94,18 @@ struct Uniform {
 
 /// Assembles the full module for a custom transition.
 fn custom_source(code: &str) -> String {
-    format!("{PRELUDE}\n{code}\n{EPILOGUE}")
-}
-
-fn prelude_lines() -> usize {
-    PRELUDE.lines().count() + 1
+    crate::user_shader::assemble(PRELUDE, code, EPILOGUE)
 }
 
 /// Checks a custom transition before use. The error names the line in the user's code.
 pub fn validate_custom_transition(code: &str) -> Result<(), String> {
-    let source = custom_source(code);
-    let user_lines = code.lines().count().max(1);
-    let locate = |line: Option<u32>, message: String| -> String {
-        let Some(line) = line.map(|l| l as usize) else {
-            return message;
-        };
-        let first = prelude_lines() + 1;
-        if line >= first && line < first + user_lines {
-            format!("Line {}: {message}", line - first + 1)
-        } else if line >= first + user_lines {
-            format!(
-                "{message}\nThe shader must define \
-                 fn transition(uv: vec2<f32>, progress: f32) -> vec4<f32>"
-            )
-        } else {
-            message
-        }
-    };
-    let module = naga::front::wgsl::parse_str(&source).map_err(|e| {
-        let line = e.location(&source).map(|l| l.line_number);
-        let labels: Vec<String> = e.labels().map(|(_, label)| label.to_string()).collect();
-        let mut message = e.message().to_string();
-        if let Some(label) = labels.into_iter().find(|l| !l.is_empty()) {
-            message = format!("{message} ({label})");
-        }
-        locate(line, message)
-    })?;
-    naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
+    crate::user_shader::validate(
+        PRELUDE,
+        code,
+        EPILOGUE,
+        "transition",
+        "fn transition(uv: vec2<f32>, progress: f32) -> vec4<f32>",
     )
-    .validate(&module)
-    .map_err(|e| {
-        let line = e.location(&source).map(|l| l.line_number);
-        locate(line, e.as_inner().to_string())
-    })?;
-    if !module
-        .functions
-        .iter()
-        .any(|(_, f)| f.name.as_deref() == Some("transition"))
-    {
-        return Err(
-            "The shader must define fn transition(uv: vec2<f32>, progress: f32) -> vec4<f32>"
-                .into(),
-        );
-    }
-    Ok(())
 }
 
 /// Pipelines and layouts for transitions. One per device; custom pipelines are cached.
@@ -272,7 +228,7 @@ impl TransitionRenderer {
     /// Compiles (once) the pipeline for custom `code`. `false` if the code is invalid,
     /// in which case [`render`](Self::render) falls back to a fade.
     pub fn prepare_custom(&mut self, gpu: &GpuContext, code: &str) -> bool {
-        let key = hash(code);
+        let key = crate::user_shader::hash(code);
         if let Some(entry) = self.custom.get(&key) {
             return entry.is_some();
         }
@@ -350,10 +306,12 @@ impl TransitionRenderer {
     ) {
         let (pipeline, kind) = match shader {
             TransitionShader::Builtin(kind) => (&self.builtin, kind.index()),
-            TransitionShader::Custom(code) => match self.custom.get(&hash(code)) {
-                Some(Some(p)) => (p, 0),
-                _ => (&self.builtin, BuiltinKind::Fade.index()),
-            },
+            TransitionShader::Custom(code) => {
+                match self.custom.get(&crate::user_shader::hash(code)) {
+                    Some(Some(p)) => (p, 0),
+                    _ => (&self.builtin, BuiltinKind::Fade.index()),
+                }
+            }
         };
         let uniform = Uniform {
             progress: params.progress,
@@ -386,13 +344,6 @@ impl TransitionRenderer {
         pass.set_bind_group(0, &targets.bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
-}
-
-fn hash(code: &str) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    code.hash(&mut h);
-    h.finish()
 }
 
 #[cfg(test)]

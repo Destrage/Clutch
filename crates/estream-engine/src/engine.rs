@@ -731,6 +731,16 @@ impl Control {
                 None => Ok(()),
             },
             Command::Batch { commands } => commands.iter().try_for_each(|c| self.validate(c)),
+            Command::SetSourceFilters { filters, .. } => filters.iter().try_for_each(|f| {
+                let info = estream_gpu::filter::kind(&f.kind)
+                    .ok_or_else(|| CommandError::Invalid(format!("unknown filter '{}'", f.kind)))?;
+                match f.settings.get("code").and_then(|c| c.as_str()) {
+                    Some(code) if info.code => {
+                        estream_gpu::validate_custom_filter(code).map_err(CommandError::Invalid)
+                    }
+                    _ => Ok(()),
+                }
+            }),
             Command::SetTransition { transition } => match &transition.kind {
                 TransitionKind::Shader { code } => {
                     estream_gpu::validate_custom_transition(code).map_err(CommandError::Invalid)

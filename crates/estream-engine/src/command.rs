@@ -5,8 +5,8 @@ use estream_core::{
     BlendMode, CanvasId, Crop, ItemId, ItemTransform, Rational, Rgba8, SceneId, SourceId,
 };
 use estream_project::{
-    AudioConfig, Canvas, ItemContent, Project, ProjectAudio, Scene, SceneItem, SourceDef,
-    Transition,
+    AudioConfig, Canvas, FilterDef, ItemContent, Project, ProjectAudio, Scene, SceneItem,
+    SourceDef, Transition,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -142,6 +142,11 @@ pub enum Command {
         source: SourceId,
         audio: AudioConfig,
     },
+    /// Replaces a source's video filter chain.
+    SetSourceFilters {
+        source: SourceId,
+        filters: Vec<FilterDef>,
+    },
     /// Replaces project-wide audio settings (monitoring device).
     SetProjectAudio {
         audio: ProjectAudio,
@@ -239,6 +244,7 @@ pub enum CoalesceKey {
     Canvas(CanvasId),
     SourceSettings(SourceId),
     SourceAudio(SourceId),
+    SourceFilters(SourceId),
 }
 
 #[derive(Debug)]
@@ -261,6 +267,7 @@ impl Command {
             Command::UpdateCanvas { canvas, .. } => Some(CoalesceKey::Canvas(*canvas)),
             Command::SetSourceSettings { source, .. } => Some(CoalesceKey::SourceSettings(*source)),
             Command::UpdateSourceAudio { source, .. } => Some(CoalesceKey::SourceAudio(*source)),
+            Command::SetSourceFilters { source, .. } => Some(CoalesceKey::SourceFilters(*source)),
             _ => None,
         }
     }
@@ -524,6 +531,19 @@ impl Command {
                 let old = std::mem::replace(&mut s.audio, audio);
                 Ok(applied(
                     UpdateSourceAudio { source, audio: old },
+                    Change::SourceChanged { source },
+                ))
+            }
+            SetSourceFilters { source, filters } => {
+                let s = project
+                    .source_mut(source)
+                    .ok_or(CommandError::NoSource(source))?;
+                let old = std::mem::replace(&mut s.filters, filters);
+                Ok(applied(
+                    SetSourceFilters {
+                        source,
+                        filters: old,
+                    },
                     Change::SourceChanged { source },
                 ))
             }
