@@ -267,3 +267,60 @@ export struct SettingsForm {
     vcam-status: string,
     vcam-installed: bool,
 }
+
+/// One macro in the automation list.
+export struct MacroRow {
+    id: string,
+    name: string,
+    enabled: bool,
+    /// Its triggers in words ("Ctrl+F9 · When stream starts").
+    summary: string,
+    running: bool,
+}
+
+/// One trigger of the selected macro.
+export struct TriggerRow {
+    /// "hotkey" | "focus" | "interval" | "scene" | "output"
+    kind: string,
+    /// Hotkey chord or window pattern.
+    text: string,
+    /// Interval seconds.
+    number: float,
+    /// Scene or output index.
+    index: int,
+    /// Output: true = starts, false = stops.
+    flag: bool,
+    /// Hotkey taken by another program.
+    conflict: bool,
+}
+
+/// One step of the selected macro.
+export struct StepRow {
+    /// "scene" | "visible" | "mute" | "output" | "replay" | "studio" | "action" | "wait"
+    kind: string,
+    /// Scene, source, output or action index.
+    index: int,
+    /// 0 on, 1 off, 2 toggle.
+    mode: int,
+    /// Scene: cut instead of the transition.
+    flag: bool,
+    /// Wait milliseconds.
+    number: float,
+}
+
+export struct AutomationForm {
+    macros: [MacroRow],
+    selected: int,
+    name: string,
+    enabled: bool,
+    triggers: [TriggerRow],
+    steps: [StepRow],
+    scene-names: [string],
+    source-names: [string],
+    output-names: [string],
+    action-names: [string],
+    /// Trigger whose hotkey is being recorded (-1 = none).
+    recording: int,
+    error: string,
+    running: bool,
+}

@@ -46,6 +46,7 @@ pub enum Action {
     SaveReplay,
     RevealOutput,
     OpenSettings,
+    OpenAutomation,
 }
 
 /// Keyboard shortcut. `key` is the lowercase character, or a named key.
@@ -181,6 +182,7 @@ actions! {
     SaveReplay, "replay.save", "Save replay", "Output", Some(Shortcut::ctrl_shift('r')), true;
     RevealOutput, "output.reveal", "Show last recording in folder", "Output", None, true;
     OpenSettings, "settings", "Settings…", "General", Some(Shortcut::ctrl(',')), true;
+    OpenAutomation, "automation", "Automation: hotkeys and macros…", "General", None, true;
     Deselect, "selection.clear", "Clear selection", "Edit", Some(Shortcut::key(Key::Escape)), false;
 }
 

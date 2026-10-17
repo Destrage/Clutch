@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 estream-api.workspace = true
+estream-automation.workspace = true
 estream-capture = { path = "../../crates/estream-capture" }
 estream-core.workspace = true
 estream-engine.workspace = true

@@ -155,6 +155,10 @@ pub enum Command {
     SetTransition {
         transition: Transition,
     },
+    /// Replaces the collection's macros and triggers.
+    SetAutomation {
+        automation: estream_project::Automation,
+    },
     AddItem {
         scene: SceneId,
         parent: Option<ItemId>,
@@ -188,6 +192,8 @@ pub enum Command {
 pub enum Change {
     /// The program transition settings changed.
     TransitionChanged,
+    /// Macros or triggers changed.
+    AutomationChanged,
     CanvasAdded {
         canvas: CanvasId,
     },
@@ -245,6 +251,7 @@ pub enum CoalesceKey {
     SourceSettings(SourceId),
     SourceAudio(SourceId),
     SourceFilters(SourceId),
+    Automation,
 }
 
 #[derive(Debug)]
@@ -268,6 +275,7 @@ impl Command {
             Command::SetSourceSettings { source, .. } => Some(CoalesceKey::SourceSettings(*source)),
             Command::UpdateSourceAudio { source, .. } => Some(CoalesceKey::SourceAudio(*source)),
             Command::SetSourceFilters { source, .. } => Some(CoalesceKey::SourceFilters(*source)),
+            Command::SetAutomation { .. } => Some(CoalesceKey::Automation),
             _ => None,
         }
     }
@@ -552,6 +560,13 @@ impl Command {
                 Ok(Applied {
                     inverse: SetTransition { transition: old },
                     changes: vec![Change::TransitionChanged],
+                })
+            }
+            SetAutomation { automation } => {
+                let old = std::mem::replace(&mut project.automation, automation);
+                Ok(Applied {
+                    inverse: SetAutomation { automation: old },
+                    changes: vec![Change::AutomationChanged],
                 })
             }
             SetProjectAudio { audio } => {
@@ -929,6 +944,22 @@ mod tests {
         .apply(&mut p)
         .unwrap_err();
         assert_eq!(err, CommandError::Cycle);
+    }
+
+    #[test]
+    fn set_automation_is_undoable() {
+        let (mut p, _) = project();
+        let mut automation = estream_project::Automation::default();
+        automation.macros.push(estream_project::Macro::new("BRB"));
+        let applied = Command::SetAutomation {
+            automation: automation.clone(),
+        }
+        .apply(&mut p)
+        .unwrap();
+        assert_eq!(p.automation, automation);
+        assert_eq!(applied.changes, vec![Change::AutomationChanged]);
+        applied.inverse.apply(&mut p).unwrap();
+        assert!(p.automation.is_empty());
     }
 
     #[test]

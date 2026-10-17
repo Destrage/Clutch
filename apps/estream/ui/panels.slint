@@ -20,6 +20,7 @@ export component TopBar inherits Rectangle {
     in property <int> vcam-state;
     in property <string> vcam-tooltip;
     callback toggle-vcam();
+    callback open-automation();
     in property <string> stream-time;
     callback open-palette();
     callback toggle-stream();
@@ -165,6 +166,14 @@ export component TopBar inherits Rectangle {
                 icon: Theme.dark ? Icons.sun : Icons.moon;
                 tooltip: Theme.dark ? "Switch to light theme" : "Switch to dark theme";
                 clicked => { root.toggle-theme(); }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            IconButton {
+                icon: Icons.zap;
+                tooltip: "Automation: hotkeys, macros and triggers";
+                clicked => { root.open-automation(); }
             }
         }
         VerticalLayout {

@@ -1600,6 +1600,7 @@ dependencies = [
  "anyhow",
  "dirs",
  "estream-api",
+ "estream-automation",
  "estream-capture",
  "estream-core",
  "estream-engine",
@@ -1657,6 +1658,20 @@ dependencies = [
  "serde",
  "serde_json",
  "tracing",
+]
+
+[[package]]
+name = "estream-automation"
+version = "0.1.0"
+dependencies = [
+ "crossbeam-channel",
+ "estream-api",
+ "estream-core",
+ "estream-engine",
+ "estream-project",
+ "serde_json",
+ "tracing",
+ "windows",
 ]
 
 [[package]]

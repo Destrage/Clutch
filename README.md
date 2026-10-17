@@ -11,6 +11,7 @@ A modern streaming and recording studio written from scratch in Rust. It is an a
 - video filters;
 - multiple canvases (for example horizontal and vertical at the same time);
 - a virtual camera for Zoom, Teams, Discord, Meet and other apps (Windows 11);
+- automation: macros started by global hotkeys, a window coming to the front, timers, scenes or outputs;
 
 Windows 10/11 (x64) is the supported platform today.
 
@@ -81,6 +82,25 @@ To try requests by hand:
 cargo run -p estream-api --example obs-cli -- --password <password> GetSceneList SetCurrentProgramScene '{"sceneName":"Scene"}'
 ```
 
+## Automation
+
+Click the lightning button in the top bar. A **macro** is a list of steps, such as:
+- switch scene;
+- show, hide or mute a source;
+- start or stop an output;
+- save a replay;
+- run any command palette action;
+- wait.
+
+It runs when one of its **triggers** fires:
+- a global hotkey, which works while a game has focus;
+- a window coming to the front (match on program name or title, e.g. `valorant`);
+- every N seconds;
+- a scene going live;
+- an output starting or stopping.
+
+Macros are saved with the scene collection, and every change they make can be undone. Remote controls see macros as obs-websocket hotkeys (`GetHotkeyList`, `TriggerHotkeyByName`).
+
 ## Virtual camera
 
 Click the camera button in the top bar, then pick **eStream Virtual Camera** in your call app. Windows lists it as "eStream Virtual Camera (Windows Virtual Camera)". It needs Windows 11.
@@ -122,6 +142,7 @@ crates/estream-media    FFmpeg encoding, recording, streaming, media player
 crates/estream-shm      shared-memory frames and audio between processes
 crates/estream-api      remote control server (obs-websocket v5 protocol)
 crates/estream-vcam     virtual camera: the Media Foundation camera source DLL and its controls
+crates/estream-automation  macros, triggers and global hotkeys
 openspec/               specs and change proposals (start with openspec/project.md)
 ```
 

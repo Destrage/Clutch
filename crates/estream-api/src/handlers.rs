@@ -28,6 +28,7 @@ pub const REQUESTS: &[&str] = &[
     "BroadcastCustomEvent",
     "Sleep",
     "GetHotkeyList",
+    "TriggerHotkeyByName",
     "GetSceneCollectionList",
     "GetProfileList",
     "GetVideoSettings",
@@ -582,7 +583,15 @@ pub fn handle(
                 "webSocketSessionOutgoingMessages": session.outgoing.load(Relaxed),
             }))
         }
-        "GetHotkeyList" => Ok(json!({ "hotkeys": [] })),
+        // eStream's macros stand in for OBS hotkeys (Stream Deck "hotkey" buttons).
+        "GetHotkeyList" => Ok(json!({ "hotkeys": studio.macro_names() })),
+        "TriggerHotkeyByName" => {
+            let name = a.str("hotkeyName")?;
+            studio
+                .run_macro(name)
+                .map(|_| Value::Null)
+                .map_err(|e| RequestError::new(st::RESOURCE_NOT_FOUND, e))
+        }
         "GetSceneCollectionList" => {
             let name = studio.collection_name();
             Ok(json!({ "currentSceneCollectionName": name, "sceneCollections": [name] }))

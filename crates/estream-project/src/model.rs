@@ -16,6 +16,9 @@ pub struct Project {
     /// Transition used when the program scene changes.
     #[serde(default)]
     pub transition: crate::Transition,
+    /// Macros and their triggers.
+    #[serde(default, skip_serializing_if = "crate::Automation::is_empty")]
+    pub automation: crate::Automation,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -353,6 +356,7 @@ impl Project {
             sources: Vec::new(),
             audio: ProjectAudio::default(),
             transition: crate::Transition::default(),
+            automation: crate::Automation::default(),
         }
     }
 

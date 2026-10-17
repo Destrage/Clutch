@@ -81,4 +81,14 @@ pub trait Studio {
     fn media_seek(&mut self, source: SourceId, position: Duration) -> Result<(), String>;
     /// A source's action button (e.g. a browser source's refresh).
     fn press_input_button(&mut self, source: SourceId, property: &str) -> Result<(), String>;
+
+    /// Macro names (obs-websocket "hotkeys").
+    fn macro_names(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Runs the macro with this name.
+    fn run_macro(&mut self, name: &str) -> Result<(), String> {
+        Err(format!("no macro named “{name}”"))
+    }
 }

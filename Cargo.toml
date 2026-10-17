@@ -17,6 +17,7 @@ estream-gpu = { path = "crates/estream-gpu" }
 estream-project = { path = "crates/estream-project" }
 estream-engine = { path = "crates/estream-engine" }
 estream-api = { path = "crates/estream-api" }
+estream-automation = { path = "crates/estream-automation" }
 estream-vcam = { path = "crates/estream-vcam" }
 
 anyhow = "1.0.104"

@@ -5,7 +5,7 @@ import { Button, IconButton, Icon, Badge, TextField, TextArea, NumberField, Sele
 import { KindIcon } from "panels.slint";
 
 // Full-window scrim with a centered card. Clicking the scrim calls `dismiss`.
-component Modal inherits Rectangle {
+export component Modal inherits Rectangle {
     in property <length> card-width: 520px;
     in property <length> card-top: -1px;
     in property <bool> dismissable: true;

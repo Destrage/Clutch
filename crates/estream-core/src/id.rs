@@ -59,6 +59,12 @@ define_id!(
     "item"
 );
 define_id!(
+    /// Identifies an automation macro.
+    MacroId,
+    "macro"
+);
+
+define_id!(
     /// Identifies a source.
     SourceId,
     "source"

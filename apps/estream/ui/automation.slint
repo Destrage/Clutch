@@ -1,0 +1,426 @@
+// Automation: macros (steps) started by triggers (hotkeys, window focus, timers, events).
+
+import { Theme } from "theme.slint";
+import { Icons } from "icons.slint";
+import { AutomationForm, MacroRow, TriggerRow, StepRow } from "types.slint";
+import { Button, IconButton, TextField, NumberField, Select, Toggle, SectionTitle, EmptyState } from "widgets.slint";
+import { Modal } from "overlays.slint";
+
+component Label inherits Text {
+    width: 118px;
+    color: Theme.text-muted;
+    font-size: Theme.font-s;
+    vertical-alignment: center;
+    overflow: elide;
+}
+
+component TriggerEditor inherits HorizontalLayout {
+    in property <TriggerRow> entry;
+    in property <int> index;
+    in property <bool> recording;
+    in property <AutomationForm> form;
+    callback edit(string, int, float);
+    callback edit-text(string, int, string);
+    callback record(int);
+
+    spacing: 8px;
+    height: 30px;
+    Label {
+        text: entry.kind == "hotkey" ? "Hotkey"
+            : entry.kind == "focus" ? "Window focused"
+            : entry.kind == "interval" ? "Every"
+            : entry.kind == "scene" ? "Scene goes live"
+            : "Output";
+    }
+    if entry.kind == "hotkey": HorizontalLayout {
+        spacing: 8px;
+        horizontal-stretch: 1;
+        Button {
+            text: root.recording ? "Press the keys… (Esc cancels)" : entry.text == "" ? "Set hotkey" : entry.text;
+            kind: root.recording ? "primary" : "default";
+            tooltip: "Click, then press the key combination";
+            clicked => { root.record(root.index); }
+        }
+        if entry.conflict: Text {
+            text: "Another program already uses this hotkey";
+            color: Theme.live;
+            font-size: Theme.font-xs;
+            vertical-alignment: center;
+        }
+        Rectangle { horizontal-stretch: 1; }
+    }
+    if entry.kind == "focus": TextField {
+        label: "Window";
+        placeholder: "Program or window title, e.g. valorant";
+        text: entry.text;
+        edited(t) => { root.edit-text("trigger-pattern", root.index, t); }
+    }
+    if entry.kind == "interval": HorizontalLayout {
+        horizontal-stretch: 1;
+        NumberField {
+            width: 120px;
+            label: "";
+            value: entry.number;
+            minimum: 1;
+            maximum: 86400;
+            suffix: "s";
+            changed(v) => { root.edit("trigger-seconds", root.index, v); }
+        }
+        Rectangle { horizontal-stretch: 1; }
+    }
+    if entry.kind == "scene": Select {
+        label: "Scene";
+        options: form.scene-names;
+        current-index: entry.index;
+        selected(i) => { root.edit("trigger-scene", root.index, i); }
+    }
+    if entry.kind == "output": HorizontalLayout {
+        spacing: 8px;
+        horizontal-stretch: 1;
+        Select {
+            label: "Output";
+            options: form.output-names;
+            current-index: entry.index;
+            selected(i) => { root.edit("trigger-output", root.index, i); }
+        }
+        Select {
+            width: 110px;
+            label: "When";
+            options: ["starts", "stops"];
+            current-index: entry.flag ? 0 : 1;
+            selected(i) => { root.edit("trigger-started", root.index, i == 0 ? 1 : 0); }
+        }
+    }
+    IconButton {
+        icon: Icons.x;
+        tooltip: "Remove trigger";
+        clicked => { root.edit("trigger-remove", root.index, 0); }
+    }
+}
+
+component StepEditor inherits HorizontalLayout {
+    in property <StepRow> entry;
+    in property <int> index;
+    in property <int> count;
+    in property <AutomationForm> form;
+    callback edit(string, int, float);
+
+    spacing: 8px;
+    height: 30px;
+    Text {
+        width: 18px;
+        text: (root.index + 1) + ".";
+        color: Theme.text-faint;
+        font-size: Theme.font-s;
+        vertical-alignment: center;
+    }
+    Label {
+        width: 100px;
+        text: entry.kind == "scene" ? "Switch to"
+            : entry.kind == "visible" ? "Show / hide"
+            : entry.kind == "mute" ? "Mute"
+            : entry.kind == "output" ? "Output"
+            : entry.kind == "replay" ? "Save replay"
+            : entry.kind == "studio" ? "Studio: go"
+            : entry.kind == "action" ? "Action"
+            : "Wait";
+    }
+    if entry.kind == "scene": HorizontalLayout {
+        spacing: 8px;
+        horizontal-stretch: 1;
+        Select {
+            label: "Scene";
+            options: form.scene-names;
+            current-index: entry.index;
+            selected(i) => { root.edit("step-scene", root.index, i); }
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            VerticalLayout {
+                alignment: center;
+                Toggle { checked: entry.flag; toggled(v) => { root.edit("step-cut", root.index, v ? 1 : 0); } }
+            }
+            Text { text: "Cut"; color: Theme.text-muted; font-size: Theme.font-s; vertical-alignment: center; }
+        }
+    }
+    if entry.kind == "visible" || entry.kind == "mute": HorizontalLayout {
+        spacing: 8px;
+        horizontal-stretch: 1;
+        Select {
+            label: "Source";
+            options: form.source-names;
+            current-index: entry.index;
+            selected(i) => { root.edit("step-source", root.index, i); }
+        }
+        Select {
+            width: 110px;
+            label: "Mode";
+            options: entry.kind == "mute" ? ["Mute", "Unmute", "Toggle"] : ["Show", "Hide", "Toggle"];
+            current-index: entry.mode;
+            selected(i) => { root.edit("step-mode", root.index, i); }
+        }
+    }
+    if entry.kind == "output": HorizontalLayout {
+        spacing: 8px;
+        horizontal-stretch: 1;
+        Select {
+            label: "Output";
+            options: form.output-names;
+            current-index: entry.index;
+            selected(i) => { root.edit("step-output", root.index, i); }
+        }
+        Select {
+            width: 110px;
+            label: "Mode";
+            options: ["Start", "Stop", "Toggle"];
+            current-index: entry.mode;
+            selected(i) => { root.edit("step-mode", root.index, i); }
+        }
+    }
+    if entry.kind == "replay" || entry.kind == "studio": Text {
+        horizontal-stretch: 1;
+        text: entry.kind == "replay" ? "Saves the replay buffer" : "Sends the Preview to Program";
+        color: Theme.text-faint;
+        font-size: Theme.font-s;
+        vertical-alignment: center;
+    }
+    if entry.kind == "action": Select {
+        label: "Action";
+        options: form.action-names;
+        current-index: entry.index;
+        selected(i) => { root.edit("step-action", root.index, i); }
+    }
+    if entry.kind == "wait": HorizontalLayout {
+        horizontal-stretch: 1;
+        NumberField {
+            width: 120px;
+            label: "";
+            value: entry.number;
+            minimum: 0;
+            maximum: 3600000;
+            step: 100;
+            suffix: "ms";
+            changed(v) => { root.edit("step-ms", root.index, v); }
+        }
+        Rectangle { horizontal-stretch: 1; }
+    }
+    IconButton {
+        icon: Icons.chevron-up;
+        tooltip: "Move up";
+        enabled: root.index > 0;
+        clicked => { root.edit("step-up", root.index, 0); }
+    }
+    IconButton {
+        icon: Icons.chevron-down;
+        tooltip: "Move down";
+        enabled: root.index + 1 < root.count;
+        clicked => { root.edit("step-down", root.index, 0); }
+    }
+    IconButton {
+        icon: Icons.x;
+        tooltip: "Remove step";
+        clicked => { root.edit("step-remove", root.index, 0); }
+    }
+}
+
+export component AutomationDialog inherits Modal {
+    in property <AutomationForm> form;
+    callback edit(string, int, float);
+    callback edit-text(string, int, string);
+    callback key(string, bool, bool, bool, bool);
+
+    card-width: 920px;
+    card-top: 40px;
+
+    keys := FocusScope {
+        height: 0px;
+        init => { self.focus(); }
+        key-pressed(e) => {
+            if (root.form.recording >= 0) {
+                root.key(e.text, e.modifiers.control, e.modifiers.alt, e.modifiers.shift, e.modifiers.meta);
+                return EventResult.accept;
+            }
+            if (e.text == Key.Escape) {
+                root.dismiss();
+                return EventResult.accept;
+            }
+            return EventResult.reject;
+        }
+    }
+    HorizontalLayout {
+        padding: 18px;
+        padding-bottom: 4px;
+        Text { text: "Automation"; color: Theme.text; font-size: Theme.font-xl; font-weight: 700; horizontal-stretch: 1; }
+        Button { text: "Done"; kind: "primary"; clicked => { root.dismiss(); } }
+    }
+    HorizontalLayout {
+        padding: 18px;
+        padding-top: 8px;
+        spacing: 18px;
+        height: 560px;
+
+        // Macro list
+        VerticalLayout {
+            width: 250px;
+            spacing: 4px;
+            Text {
+                text: "Macros run their steps when a trigger fires: a hotkey (works in games), a window coming to the front, a timer, a scene or an output.";
+                color: Theme.text-faint;
+                font-size: Theme.font-xs;
+                wrap: word-wrap;
+            }
+            Rectangle { height: 6px; }
+            Flickable {
+                vertical-stretch: 1;
+                VerticalLayout {
+                    alignment: start;
+                    spacing: 2px;
+                    for m[i] in root.form.macros: Rectangle {
+                        height: 48px;
+                        border-radius: Theme.radius-s;
+                        background: i == root.form.selected ? Theme.accent.with-alpha(0.14) : row-ta.has-hover ? Theme.hover : transparent;
+                        accessible-role: list-item;
+                        accessible-label: m.name;
+                        row-ta := TouchArea {
+                            mouse-cursor: MouseCursor.pointer;
+                            clicked => { root.edit("select", i, 0); }
+                        }
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            padding-right: 8px;
+                            spacing: 8px;
+                            VerticalLayout {
+                                alignment: center;
+                                Toggle { checked: m.enabled; toggled(v) => { root.edit("enable", i, v ? 1 : 0); } }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                horizontal-stretch: 1;
+                                Text { text: m.name; color: m.enabled ? Theme.text : Theme.text-faint; font-size: Theme.font-m; overflow: elide; }
+                                Text { text: m.summary; color: Theme.text-faint; font-size: Theme.font-xs; overflow: elide; }
+                            }
+                            if m.running: VerticalLayout {
+                                alignment: center;
+                                Rectangle { width: 7px; height: 7px; border-radius: 3.5px; background: Theme.accent; }
+                            }
+                        }
+                    }
+                }
+            }
+            HorizontalLayout {
+                alignment: start;
+                Button { text: "New macro"; has-icon: true; icon: Icons.plus; kind: "ghost"; clicked => { root.edit("add", 0, 0); } }
+            }
+        }
+
+        Rectangle { width: 1px; background: Theme.border; }
+
+        // Editor
+        if root.form.selected < 0: VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            EmptyState {
+                icon: Icons.zap;
+                title: "No macro selected";
+                body: "Create a macro, give it a trigger such as a hotkey, and add steps like “Switch to BRB” and “Mute Mic”.";
+            }
+        }
+        if root.form.selected >= 0: VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 10px;
+            HorizontalLayout {
+                spacing: 8px;
+                TextField {
+                    label: "Macro name";
+                    text: root.form.name;
+                    edited(t) => { root.edit-text("name", 0, t); }
+                }
+                Button {
+                    text: root.form.running ? "Running…" : "Run now";
+                    has-icon: true;
+                    icon: Icons.play;
+                    clicked => { root.edit("run", 0, 0); }
+                }
+                IconButton {
+                    icon: Icons.trash;
+                    tooltip: "Delete macro";
+                    clicked => { root.edit("remove", 0, 0); }
+                }
+            }
+            Flickable {
+                vertical-stretch: 1;
+                VerticalLayout {
+                    alignment: start;
+                    spacing: 6px;
+                    SectionTitle { text: "WHEN"; }
+                    if root.form.triggers.length == 0: Text {
+                        text: "No triggers: the macro only runs with “Run now” or from a remote control.";
+                        color: Theme.text-faint;
+                        font-size: Theme.font-s;
+                    }
+                    for t[i] in root.form.triggers: TriggerEditor {
+                        entry: t;
+                        index: i;
+                        form: root.form;
+                        recording: root.form.recording == i;
+                        edit(f, n, v) => { root.edit(f, n, v); }
+                        edit-text(f, n, s) => { root.edit-text(f, n, s); }
+                        record(n) => {
+                            keys.focus();
+                            root.edit("trigger-record", n, 0);
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 4px;
+                        alignment: start;
+                        Text { text: "Add trigger:"; color: Theme.text-muted; font-size: Theme.font-s; vertical-alignment: center; }
+                        Button { text: "Hotkey"; kind: "ghost"; clicked => { root.edit("trigger-add", 0, 0); } }
+                        Button { text: "Window"; kind: "ghost"; clicked => { root.edit("trigger-add", 1, 0); } }
+                        Button { text: "Timer"; kind: "ghost"; clicked => { root.edit("trigger-add", 2, 0); } }
+                        Button { text: "Scene live"; kind: "ghost"; clicked => { root.edit("trigger-add", 3, 0); } }
+                        Button { text: "Output"; kind: "ghost"; clicked => { root.edit("trigger-add", 4, 0); } }
+                    }
+
+                    Rectangle { height: 6px; }
+                    SectionTitle { text: "DO"; }
+                    if root.form.steps.length == 0: Text {
+                        text: "No steps yet.";
+                        color: Theme.text-faint;
+                        font-size: Theme.font-s;
+                    }
+                    for s[i] in root.form.steps: StepEditor {
+                        entry: s;
+                        index: i;
+                        count: root.form.steps.length;
+                        form: root.form;
+                        edit(f, n, v) => { root.edit(f, n, v); }
+                    }
+                    HorizontalLayout {
+                        spacing: 4px;
+                        alignment: start;
+                        Text { text: "Add step:"; color: Theme.text-muted; font-size: Theme.font-s; vertical-alignment: center; }
+                        Button { text: "Scene"; kind: "ghost"; clicked => { root.edit("step-add", 0, 0); } }
+                        Button { text: "Show/hide"; kind: "ghost"; clicked => { root.edit("step-add", 1, 0); } }
+                        Button { text: "Mute"; kind: "ghost"; clicked => { root.edit("step-add", 2, 0); } }
+                        Button { text: "Output"; kind: "ghost"; clicked => { root.edit("step-add", 3, 0); } }
+                    }
+                    HorizontalLayout {
+                        spacing: 4px;
+                        alignment: start;
+                        Rectangle { width: 62px; }
+                        Button { text: "Save replay"; kind: "ghost"; clicked => { root.edit("step-add", 4, 0); } }
+                        Button { text: "Studio go"; kind: "ghost"; clicked => { root.edit("step-add", 5, 0); } }
+                        Button { text: "Action"; kind: "ghost"; clicked => { root.edit("step-add", 6, 0); } }
+                        Button { text: "Wait"; kind: "ghost"; clicked => { root.edit("step-add", 7, 0); } }
+                    }
+                    if root.form.error != "": Text {
+                        text: "Last run: " + root.form.error;
+                        color: Theme.live;
+                        font-size: Theme.font-s;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+    }
+}

@@ -110,6 +110,12 @@ pub struct App {
     vcam_install: Option<(std::sync::mpsc::Receiver<Result<(), String>>, bool)>,
     /// Last camera failure shown (not repeated every tick).
     vcam_error_shown: bool,
+    /// Macros and triggers (taken out while it calls back into the app).
+    runner: Option<estream_automation::Runner>,
+    /// Macro open in the Automation dialog.
+    auto_selected: Option<estream_core::MacroId>,
+    /// Trigger whose hotkey is being recorded.
+    auto_recording: Option<usize>,
 }
 
 /// What the shader editor dialog applies to.
@@ -416,6 +422,9 @@ impl App {
             vcam: None,
             vcam_install: None,
             vcam_error_shown: false,
+            runner: Some(estream_automation::Runner::new(true)),
+            auto_selected: None,
+            auto_recording: None,
         };
         window.set_scenes(ModelRc::from(app.scenes_model.clone()));
         window.set_layers(ModelRc::from(app.layers_model.clone()));
@@ -725,6 +734,9 @@ impl App {
             w.set_remote_status(self.remote_status().into());
             self.update_vcam();
             self.update_outputs();
+            if w.get_automation_open() {
+                self.refresh_automation(); // running state, last errors
+            }
         }
         if self.toast_until.is_some_and(|t| Instant::now() >= t) {
             self.toast_until = None;
@@ -737,6 +749,7 @@ impl App {
             self.apply_theme();
         }
         self.tick_api();
+        self.tick_automation();
     }
 
     fn update_stats(&mut self) {
@@ -855,6 +868,9 @@ impl App {
     /// Rebuilds every UI model from the latest engine snapshot.
     pub fn refresh(&mut self) {
         let Some(w) = self.window() else { return };
+        if w.get_automation_open() {
+            self.refresh_automation(); // edits, undo and redo
+        }
         let Some(engine) = &self.engine else { return };
         let snapshot = engine.snapshot();
         let Some(canvas) = self.canvas_of(&snapshot) else {
@@ -2743,6 +2759,512 @@ impl App {
         }
     }
 
+    // ------------------------------------------------------------ automation
+
+    fn tick_automation(&mut self) {
+        if let Some(mut runner) = self.runner.take() {
+            runner.tick(self, Instant::now());
+            self.runner = Some(runner);
+        }
+    }
+
+    fn open_automation(&mut self) {
+        self.auto_recording = None;
+        self.refresh_automation();
+        if let Some(w) = self.window() {
+            w.set_automation_open(true);
+        }
+    }
+
+    /// Choices for the editors: scenes, sources and actions, in display order.
+    fn automation_pickers(snapshot: &Project) -> AutomationPickers {
+        let multi = snapshot.canvases.len() > 1;
+        let scenes: Vec<(SceneId, String)> = snapshot
+            .canvases
+            .iter()
+            .flat_map(|c| {
+                snapshot.scenes_of(c.id).map(move |s| {
+                    let name = if multi {
+                        format!("{} · {}", c.name, s.name)
+                    } else {
+                        s.name.clone()
+                    };
+                    (s.id, name)
+                })
+            })
+            .collect();
+        let sources = snapshot
+            .sources
+            .iter()
+            .map(|s| (s.id, s.name.clone()))
+            .collect();
+        let actions = actions::ACTIONS
+            .iter()
+            .filter(|a| a.in_palette && a.action != Action::OpenAutomation)
+            .map(|a| (a.id.to_owned(), format!("{} — {}", a.category, a.title)))
+            .collect();
+        AutomationPickers {
+            scenes,
+            sources,
+            actions,
+        }
+    }
+
+    fn refresh_automation(&mut self) {
+        use crate::ui::{AutomationForm, MacroRow, StepRow, TriggerRow};
+        use estream_project::{Step, Toggle, Trigger};
+        let Some(w) = self.window() else { return };
+        let Some(engine) = &self.engine else { return };
+        let snapshot = engine.snapshot();
+        let auto = &snapshot.automation;
+        if self.auto_selected.is_none_or(|id| auto.find(id).is_none()) {
+            self.auto_selected = auto.macros.first().map(|m| m.id);
+        }
+        let pickers = Self::automation_pickers(&snapshot);
+        let runner = self.runner.as_ref();
+        let rows: Vec<MacroRow> = auto
+            .macros
+            .iter()
+            .map(|m| MacroRow {
+                id: id_str(m.id),
+                name: m.name.clone().into(),
+                enabled: m.enabled,
+                summary: estream_automation::trigger_summary(m, &snapshot).into(),
+                running: runner.is_some_and(|r| r.is_running(m.id)),
+            })
+            .collect();
+        let selected = self.auto_selected.and_then(|id| auto.find(id));
+        let pos = |list: &[(SceneId, String)], id: SceneId| {
+            list.iter()
+                .position(|(s, _)| *s == id)
+                .map_or(-1, |i| i as i32)
+        };
+        let source_pos = |id: SourceId| {
+            pickers
+                .sources
+                .iter()
+                .position(|(s, _)| *s == id)
+                .map_or(-1, |i| i as i32)
+        };
+        let output_pos = |o: estream_project::OutputKind| {
+            estream_project::OutputKind::ALL
+                .iter()
+                .position(|k| *k == o)
+                .map_or(0, |i| i as i32)
+        };
+        let mode = |t: Toggle| Toggle::ALL.iter().position(|x| *x == t).unwrap_or(2) as i32;
+        let conflicts = runner.map(|r| r.conflicts().to_vec()).unwrap_or_default();
+        let triggers: Vec<TriggerRow> = selected
+            .map(|m| {
+                m.triggers
+                    .iter()
+                    .map(|t| {
+                        let mut row = TriggerRow::default();
+                        match t {
+                            Trigger::Hotkey { chord } => {
+                                row.kind = "hotkey".into();
+                                row.text = if chord.is_empty() {
+                                    SharedString::new()
+                                } else {
+                                    chord.to_string().into()
+                                };
+                                row.conflict = m.enabled && conflicts.contains(chord);
+                            }
+                            Trigger::WindowFocus { pattern } => {
+                                row.kind = "focus".into();
+                                row.text = pattern.clone().into();
+                            }
+                            Trigger::Interval { seconds } => {
+                                row.kind = "interval".into();
+                                row.number = *seconds as f32;
+                            }
+                            Trigger::SceneActivated { scene } => {
+                                row.kind = "scene".into();
+                                row.index = pos(&pickers.scenes, *scene);
+                            }
+                            Trigger::Output { output, started } => {
+                                row.kind = "output".into();
+                                row.index = output_pos(*output);
+                                row.flag = *started;
+                            }
+                        }
+                        row
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let steps: Vec<StepRow> = selected
+            .map(|m| {
+                m.steps
+                    .iter()
+                    .map(|s| {
+                        let mut row = StepRow::default();
+                        match s {
+                            Step::SwitchScene { scene, cut } => {
+                                row.kind = "scene".into();
+                                row.index = pos(&pickers.scenes, *scene);
+                                row.flag = *cut;
+                            }
+                            Step::SourceVisible { source, mode: m } => {
+                                row.kind = "visible".into();
+                                row.index = source_pos(*source);
+                                row.mode = mode(*m);
+                            }
+                            Step::SourceMute { source, mode: m } => {
+                                row.kind = "mute".into();
+                                row.index = source_pos(*source);
+                                row.mode = mode(*m);
+                            }
+                            Step::Output { output, mode: m } => {
+                                row.kind = "output".into();
+                                row.index = output_pos(*output);
+                                row.mode = mode(*m);
+                            }
+                            Step::SaveReplay => row.kind = "replay".into(),
+                            Step::StudioTransition => row.kind = "studio".into(),
+                            Step::Action { id } => {
+                                row.kind = "action".into();
+                                row.index = pickers
+                                    .actions
+                                    .iter()
+                                    .position(|(a, _)| a == id)
+                                    .map_or(-1, |i| i as i32);
+                            }
+                            Step::Wait { ms } => {
+                                row.kind = "wait".into();
+                                row.number = *ms as f32;
+                            }
+                        }
+                        row
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let strings = |v: Vec<String>| {
+            ModelRc::new(VecModel::from(
+                v.into_iter().map(SharedString::from).collect::<Vec<_>>(),
+            ))
+        };
+        w.set_automation_form(AutomationForm {
+            macros: ModelRc::new(VecModel::from(rows)),
+            selected: selected
+                .and_then(|m| auto.macros.iter().position(|x| x.id == m.id))
+                .map_or(-1, |i| i as i32),
+            name: selected.map(|m| m.name.clone()).unwrap_or_default().into(),
+            enabled: selected.is_some_and(|m| m.enabled),
+            triggers: ModelRc::new(VecModel::from(triggers)),
+            steps: ModelRc::new(VecModel::from(steps)),
+            scene_names: strings(pickers.scenes.iter().map(|(_, n)| n.clone()).collect()),
+            source_names: strings(pickers.sources.iter().map(|(_, n)| n.clone()).collect()),
+            output_names: strings(
+                estream_project::OutputKind::ALL
+                    .iter()
+                    .map(|o| o.label().to_owned())
+                    .collect(),
+            ),
+            action_names: strings(pickers.actions.iter().map(|(_, n)| n.clone()).collect()),
+            recording: self.auto_recording.map_or(-1, |i| i as i32),
+            error: selected
+                .and_then(|m| runner.and_then(|r| r.last_error(m.id)))
+                .unwrap_or_default()
+                .into(),
+            running: selected.is_some_and(|m| runner.is_some_and(|r| r.is_running(m.id))),
+        });
+    }
+
+    /// Applies `change` to the collection's automation (one undoable command).
+    fn change_automation(
+        &mut self,
+        change: impl FnOnce(&mut estream_project::Automation, &Project),
+    ) {
+        let Some(engine) = &self.engine else { return };
+        let snapshot = engine.snapshot();
+        let mut automation = snapshot.automation.clone();
+        change(&mut automation, &snapshot);
+        if automation != snapshot.automation {
+            self.exec(Command::SetAutomation { automation });
+        }
+        self.refresh_automation();
+    }
+
+    /// Applies `change` to the selected macro.
+    fn change_macro(
+        &mut self,
+        change: impl FnOnce(&mut estream_project::Macro, &AutomationPickers),
+    ) {
+        let Some(id) = self.auto_selected else { return };
+        self.change_automation(|auto, snapshot| {
+            let pickers = Self::automation_pickers(snapshot);
+            if let Some(m) = auto.macros.iter_mut().find(|m| m.id == id) {
+                change(m, &pickers);
+            }
+        });
+    }
+
+    pub fn automation_edit(&mut self, field: &str, index: i32, value: f32) {
+        use estream_project::{Chord, Macro, OutputKind, Step, Toggle, Trigger};
+        let i = index.max(0) as usize;
+        let n = value.round().max(0.0) as usize;
+        let toggle = |n: usize| Toggle::ALL.get(n).copied().unwrap_or_default();
+        let output = |n: usize| OutputKind::ALL.get(n).copied().unwrap_or_default();
+        match field {
+            "close" => self.auto_recording = None,
+            "select" => {
+                self.auto_recording = None;
+                self.auto_selected = self
+                    .engine
+                    .as_ref()
+                    .and_then(|e| e.snapshot().automation.macros.get(i).map(|m| m.id));
+                self.refresh_automation();
+            }
+            "add" => {
+                let mut m = Macro::new("");
+                let id = m.id;
+                self.change_automation(|auto, _| {
+                    m.name = unique_name("Macro", auto.macros.iter().map(|m| m.name.as_str()));
+                    m.triggers.push(Trigger::Hotkey {
+                        chord: Chord::default(),
+                    });
+                    auto.macros.push(m);
+                });
+                self.auto_selected = Some(id);
+                self.auto_recording = Some(0);
+                self.refresh_automation();
+            }
+            "remove" => {
+                let id = self.auto_selected.take();
+                self.change_automation(|auto, _| auto.macros.retain(|m| Some(m.id) != id));
+            }
+            "enable" => self.change_automation(|auto, _| {
+                if let Some(m) = auto.macros.get_mut(i) {
+                    m.enabled = value > 0.5;
+                }
+            }),
+            "run" => {
+                if let (Some(id), Some(mut runner)) = (self.auto_selected, self.runner.take()) {
+                    runner.run(self, id, Instant::now());
+                    self.runner = Some(runner);
+                }
+                self.refresh_automation();
+            }
+            "trigger-add" => {
+                self.change_macro(|m, p| {
+                    m.triggers.push(match index {
+                        0 => Trigger::Hotkey {
+                            chord: Chord::default(),
+                        },
+                        1 => Trigger::WindowFocus {
+                            pattern: String::new(),
+                        },
+                        2 => Trigger::Interval { seconds: 300 },
+                        3 => Trigger::SceneActivated {
+                            scene: p.scenes.first().map_or_else(SceneId::new, |s| s.0),
+                        },
+                        _ => Trigger::Output {
+                            output: OutputKind::Stream,
+                            started: true,
+                        },
+                    })
+                });
+                if index == 0 {
+                    let count = self.selected_macro().map_or(0, |m| m.triggers.len());
+                    self.auto_recording = count.checked_sub(1);
+                    self.refresh_automation();
+                }
+            }
+            "trigger-remove" => {
+                self.auto_recording = None;
+                self.change_macro(|m, _| {
+                    if i < m.triggers.len() {
+                        m.triggers.remove(i);
+                    }
+                })
+            }
+            "trigger-record" => {
+                self.auto_recording = Some(i);
+                self.refresh_automation();
+            }
+            "trigger-seconds" => self.change_macro(|m, _| {
+                if let Some(Trigger::Interval { seconds }) = m.triggers.get_mut(i) {
+                    *seconds = (value.round() as u32).max(1);
+                }
+            }),
+            "trigger-scene" => self.change_macro(|m, p| {
+                if let (Some(Trigger::SceneActivated { scene }), Some((id, _))) =
+                    (m.triggers.get_mut(i), p.scenes.get(n))
+                {
+                    *scene = *id;
+                }
+            }),
+            "trigger-output" => self.change_macro(|m, _| {
+                if let Some(Trigger::Output { output: o, .. }) = m.triggers.get_mut(i) {
+                    *o = output(n);
+                }
+            }),
+            "trigger-started" => self.change_macro(|m, _| {
+                if let Some(Trigger::Output { started, .. }) = m.triggers.get_mut(i) {
+                    *started = value > 0.5;
+                }
+            }),
+            "step-add" => self.change_macro(|m, p| {
+                let scene = p.scenes.first().map_or_else(SceneId::new, |s| s.0);
+                let source = p.sources.first().map_or_else(SourceId::new, |s| s.0);
+                m.steps.push(match index {
+                    0 => Step::SwitchScene { scene, cut: false },
+                    1 => Step::SourceVisible {
+                        source,
+                        mode: Toggle::Toggle,
+                    },
+                    2 => Step::SourceMute {
+                        source,
+                        mode: Toggle::Toggle,
+                    },
+                    3 => Step::Output {
+                        output: OutputKind::Record,
+                        mode: Toggle::Toggle,
+                    },
+                    4 => Step::SaveReplay,
+                    5 => Step::StudioTransition,
+                    6 => Step::Action {
+                        id: p.actions.first().map(|a| a.0.clone()).unwrap_or_default(),
+                    },
+                    _ => Step::Wait { ms: 1000 },
+                });
+            }),
+            "step-remove" => self.change_macro(|m, _| {
+                if i < m.steps.len() {
+                    m.steps.remove(i);
+                }
+            }),
+            "step-up" if i > 0 => self.change_macro(|m, _| {
+                if i < m.steps.len() {
+                    m.steps.swap(i, i - 1);
+                }
+            }),
+            "step-down" => self.change_macro(|m, _| {
+                if i + 1 < m.steps.len() {
+                    m.steps.swap(i, i + 1);
+                }
+            }),
+            "step-scene" => self.change_macro(|m, p| {
+                if let (Some(Step::SwitchScene { scene, .. }), Some((id, _))) =
+                    (m.steps.get_mut(i), p.scenes.get(n))
+                {
+                    *scene = *id;
+                }
+            }),
+            "step-cut" => self.change_macro(|m, _| {
+                if let Some(Step::SwitchScene { cut, .. }) = m.steps.get_mut(i) {
+                    *cut = value > 0.5;
+                }
+            }),
+            "step-source" => self.change_macro(|m, p| {
+                let Some((id, _)) = p.sources.get(n) else {
+                    return;
+                };
+                if let Some(Step::SourceVisible { source, .. } | Step::SourceMute { source, .. }) =
+                    m.steps.get_mut(i)
+                {
+                    *source = *id;
+                }
+            }),
+            "step-mode" => self.change_macro(|m, _| {
+                if let Some(
+                    Step::SourceVisible { mode, .. }
+                    | Step::SourceMute { mode, .. }
+                    | Step::Output { mode, .. },
+                ) = m.steps.get_mut(i)
+                {
+                    *mode = toggle(n);
+                }
+            }),
+            "step-output" => self.change_macro(|m, _| {
+                if let Some(Step::Output { output: o, .. }) = m.steps.get_mut(i) {
+                    *o = output(n);
+                }
+            }),
+            "step-action" => self.change_macro(|m, p| {
+                if let (Some(Step::Action { id }), Some((action, _))) =
+                    (m.steps.get_mut(i), p.actions.get(n))
+                {
+                    *id = action.clone();
+                }
+            }),
+            "step-ms" => self.change_macro(|m, _| {
+                if let Some(Step::Wait { ms }) = m.steps.get_mut(i) {
+                    *ms = value.round().max(0.0) as u32;
+                }
+            }),
+            _ => {}
+        }
+    }
+
+    pub fn automation_text(&mut self, field: &str, index: i32, text: &str) {
+        use estream_project::Trigger;
+        let i = index.max(0) as usize;
+        match field {
+            "name" if !text.trim().is_empty() => {
+                let name = text.trim().to_owned();
+                self.change_macro(|m, _| m.name = name);
+            }
+            "trigger-pattern" => {
+                let pattern = text.to_owned();
+                self.change_macro(|m, _| {
+                    if let Some(Trigger::WindowFocus { pattern: p }) = m.triggers.get_mut(i) {
+                        *p = pattern;
+                    }
+                });
+            }
+            _ => {}
+        }
+    }
+
+    /// A key press while recording a hotkey.
+    pub fn automation_key(&mut self, text: &str, ctrl: bool, alt: bool, shift: bool, meta: bool) {
+        use estream_project::Trigger;
+        let Some(index) = self.auto_recording else {
+            return;
+        };
+        if text == "\u{1b}" {
+            self.auto_recording = None;
+            self.refresh_automation();
+            return;
+        }
+        let Some(chord) =
+            estream_automation::hotkeys::chord_from_slint(text, ctrl, alt, shift, meta)
+        else {
+            return; // a modifier on its own: keep listening
+        };
+        // A bare letter would steal that key from every program; ask for a modifier.
+        let special = chord.key.starts_with('F') && chord.key.len() > 1
+            || chord.key.starts_with("Num")
+            || chord.key.starts_with("Media")
+            || matches!(chord.key.as_str(), "Pause" | "ScrollLock" | "Insert");
+        if !(ctrl || alt || meta || special) {
+            self.toast(
+                "Use Ctrl, Alt or Win with that key (it would block typing everywhere)".into(),
+                false,
+            );
+            return;
+        }
+        self.auto_recording = None;
+        self.change_macro(|m, _| {
+            if let Some(Trigger::Hotkey { chord: c }) = m.triggers.get_mut(index) {
+                *c = chord;
+            }
+        });
+    }
+
+    fn selected_macro(&self) -> Option<estream_project::Macro> {
+        let id = self.auto_selected?;
+        self.engine
+            .as_ref()?
+            .snapshot()
+            .automation
+            .find(id)
+            .cloned()
+    }
+
     // ------------------------------------------------------------ virtual camera
 
     /// The canvas the virtual camera shows (the configured one if it still exists).
@@ -3893,6 +4415,7 @@ impl App {
             Action::TransitionShader => self.open_shader_editor(),
             Action::SaveReplay => self.save_replay(),
             Action::RevealOutput => self.reveal_output(),
+            Action::OpenAutomation => self.open_automation(),
             Action::OpenSettings => {
                 self.refresh_settings_form();
                 w.set_settings_open(true);
@@ -4169,6 +4692,24 @@ impl App {
     }
 }
 
+/// Editor choices with the ids behind them.
+struct AutomationPickers {
+    scenes: Vec<(SceneId, String)>,
+    sources: Vec<(SourceId, String)>,
+    /// (action id, "Category — Title")
+    actions: Vec<(String, String)>,
+}
+
+impl estream_automation::Host for App {
+    fn run_action(&mut self, id: &str) -> bool {
+        if actions::by_id(id).is_none() {
+            return false;
+        }
+        self.run_id(id);
+        true
+    }
+}
+
 /// This machine's LAN address (what remote controllers on other devices connect to).
 fn local_ip() -> Option<String> {
     // Connecting a UDP socket sends nothing; it only picks the outgoing interface.
@@ -4396,6 +4937,27 @@ impl estream_api::Studio for App {
             .ok_or("the media source isn't loaded")?;
         player.seek(position);
         Ok(())
+    }
+
+    fn macro_names(&self) -> Vec<String> {
+        self.engine
+            .as_ref()
+            .map(|e| {
+                e.snapshot()
+                    .automation
+                    .macros
+                    .iter()
+                    .map(|m| m.name.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn run_macro(&mut self, name: &str) -> Result<(), String> {
+        let mut runner = self.runner.take().ok_or("macros are busy")?;
+        let result = runner.run_by_name(self, name, Instant::now());
+        self.runner = Some(runner);
+        result
     }
 
     fn press_input_button(&mut self, source: SourceId, property: &str) -> Result<(), String> {
@@ -4643,6 +5205,11 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     on!(on_mixer_fader, |a, id, v| a.mixer_fader(&id, v));
     on!(on_mixer_mute, |a, id| a.mixer_mute(&id));
     on!(on_settings_set, |a, k, v| a.settings_set(&k, v));
+    on!(on_automation_edit, |a, f, i, v| a.automation_edit(&f, i, v));
+    on!(on_automation_text, |a, f, i, s| a
+        .automation_text(&f, i, &s));
+    on!(on_automation_key, |a, t, c, al, s, m| a
+        .automation_key(&t, c, al, s, m));
     on!(on_settings_text, |a, k, v| a.settings_text(&k, &v));
     on!(on_live_toggle, |a, i| a.live_toggle(i.max(0) as usize));
     on!(on_transition_set, |a, k, v| a.transition_set(&k, v));
