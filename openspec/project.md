@@ -158,10 +158,10 @@ Each change below gets its own `openspec/changes/<id>/` when work starts. ✅ = 
 | 1 – Foundation | ✅ `add-engine-core` | Workspace, command bus, scene graph, wgpu compositor, frame clock, persistence, undo/redo | Parity + undo/redo |
 | 1 | ✅ `add-studio-shell` | Slint app, live preview with on-canvas editing, scenes/sources panels, properties, command palette | Better UX |
 | 1 | ✅ `add-video-sources` | Display, window, game capture (Windows), camera, image, color, text | Parity |
-| 1 | `add-audio-engine` | Device/app capture, mixer, meters, monitoring, 6 tracks, core filters | Parity + per-app capture |
-| 1 | `add-recording` | HW/SW encoders, MKV/MP4/fMP4, multi-track audio, remux, replay buffer | Parity + crash-safe fMP4 |
-| 2 – Go live | `add-streaming-outputs` | RTMP(S), Enhanced RTMP, SRT, WHIP; service presets; auto-reconnect | Parity + WHIP/eRTMP |
-| 2 | `add-multistream` | N simultaneous destinations with per-destination encoders | Beyond OBS |
+| 1 | ✅ `add-audio-engine` | Device/app capture, mixer, meters, monitoring, 6 tracks, core filters | Parity + per-app capture |
+| 1 | ✅ `add-recording` | HW/SW encoders, MKV/MP4/fMP4, multi-track audio, remux, replay buffer | Parity + crash-safe fMP4 |
+| 2 – Go live | ✅ `add-streaming-outputs` | RTMP(S), Enhanced RTMP, SRT, WHIP; service presets; auto-reconnect | Parity + WHIP/eRTMP |
+| 2 | ✅ `add-multistream` | N simultaneous destinations; shared or per-destination encoders | Beyond OBS |
 | 2 | `add-studio-mode-transitions` | Preview/Program, cut/fade/slide/stinger/shader transitions | Parity |
 | 2 | `add-video-filters` | Color correction, LUT, chroma/luma key, crop/pad, blur, mask, sharpen, custom WGSL shaders | Parity + shaders built in |
 | 2 | `add-media-sources` | Media files/playlists, image slideshow, VLC-like playlist | Parity |
