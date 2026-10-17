@@ -11,6 +11,8 @@ pub struct Project {
     /// All scenes, in display order (each belongs to one canvas).
     pub scenes: Vec<Scene>,
     pub sources: Vec<SourceDef>,
+    #[serde(default)]
+    pub audio: ProjectAudio,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -237,6 +239,80 @@ pub struct SourceDef {
     pub kind: String,
     #[serde(default)]
     pub settings: serde_json::Value,
+    /// Mixer settings (used by source types that produce audio).
+    #[serde(default, skip_serializing_if = "AudioConfig::is_default")]
+    pub audio: AudioConfig,
+}
+
+/// How a source is monitored (heard locally by the streamer).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Monitoring {
+    #[default]
+    Off,
+    /// Heard locally, not sent to outputs.
+    MonitorOnly,
+    /// Heard locally and sent to outputs.
+    MonitorAndOutput,
+}
+
+/// One audio filter in a source's chain.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AudioFilterDef {
+    pub id: String,
+    pub kind: String,
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub settings: serde_json::Value,
+}
+
+/// Per-source mixer settings.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AudioConfig {
+    pub volume_db: f32,
+    pub muted: bool,
+    /// 0 = left, 0.5 = center, 1 = right.
+    pub balance: f32,
+    pub mono: bool,
+    pub sync_offset_ms: u32,
+    pub monitoring: Monitoring,
+    /// Bitmask of output tracks 1–6 (bit 0 = track 1).
+    pub tracks: u8,
+    /// Mixed in every scene (like OBS's global audio devices).
+    pub global: bool,
+    pub filters: Vec<AudioFilterDef>,
+}
+
+impl Default for AudioConfig {
+    fn default() -> Self {
+        Self {
+            volume_db: 0.0,
+            muted: false,
+            balance: 0.5,
+            mono: false,
+            sync_offset_ms: 0,
+            monitoring: Monitoring::Off,
+            tracks: 0b11_1111,
+            global: false,
+            filters: Vec::new(),
+        }
+    }
+}
+
+impl AudioConfig {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Project-wide audio settings.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProjectAudio {
+    /// Monitoring output device id (empty = system default).
+    pub monitor_device: String,
 }
 
 impl SourceDef {
@@ -250,6 +326,7 @@ impl SourceDef {
             name: name.into(),
             kind: kind.into(),
             settings,
+            audio: AudioConfig::default(),
         }
     }
 }
@@ -264,6 +341,7 @@ impl Project {
             canvases: vec![canvas],
             scenes: vec![scene],
             sources: Vec::new(),
+            audio: ProjectAudio::default(),
         }
     }
 

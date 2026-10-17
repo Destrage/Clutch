@@ -1,6 +1,7 @@
 //! Immutable render graph: the flattened, render-ready view of a project that
 //! the engine thread hands to the video thread after every change.
 
+use estream_audio::{AudioGraph, AudioNode};
 use estream_core::{BlendMode, CanvasId, Crop, ItemTransform, Rational, Rgba8, SourceId};
 use estream_project::{ItemContent, Project, SceneItem, SourceDef};
 use glam::Affine2;
@@ -11,6 +12,8 @@ pub struct RenderGraph {
     pub canvases: Vec<CanvasGraph>,
     /// Every source in the project; all stay alive even when not on screen.
     pub sources: Vec<SourceDef>,
+    /// Sources to mix: global ones plus those visible in the active scene.
+    pub audio: AudioGraph,
 }
 
 #[derive(Clone, Debug)]
@@ -60,7 +63,51 @@ impl RenderGraph {
             revision,
             canvases,
             sources: project.sources.clone(),
+            audio: audio_graph(project),
         }
+    }
+}
+
+/// Global audio sources, then sources visible in the first canvas's active scene.
+fn audio_graph(project: &Project) -> AudioGraph {
+    let mut ids: Vec<SourceId> = project
+        .sources
+        .iter()
+        .filter(|s| s.audio.global)
+        .map(|s| s.id)
+        .collect();
+    fn visible(items: &[SceneItem], out: &mut Vec<SourceId>) {
+        for item in items.iter().filter(|i| i.visible) {
+            match &item.content {
+                ItemContent::Source { source } => {
+                    if !out.contains(source) {
+                        out.push(*source);
+                    }
+                }
+                ItemContent::Group { items } => visible(items, out),
+            }
+        }
+    }
+    if let Some(scene) = project
+        .canvases
+        .first()
+        .and_then(|c| c.active_scene)
+        .and_then(|id| project.scene(id))
+    {
+        visible(&scene.items, &mut ids);
+    }
+    AudioGraph {
+        nodes: ids
+            .into_iter()
+            .filter_map(|id| project.source(id))
+            .map(|s| AudioNode {
+                source: s.id,
+                kind: s.kind.clone(),
+                settings: s.settings.clone(),
+                config: s.audio.clone(),
+            })
+            .collect(),
+        monitor_device: project.audio.monitor_device.clone(),
     }
 }
 

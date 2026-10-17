@@ -444,3 +444,138 @@ fn invalid_source_settings_are_rejected_by_schema() {
             .is_err()
     );
 }
+
+mod audio {
+    use super::*;
+    use estream_engine::audio_engine::{Block, TRACKS, TrackSink, db};
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    struct Probe {
+        blocks: Arc<AtomicU64>,
+        last_peak: Arc<Mutex<f32>>,
+    }
+
+    impl TrackSink for Probe {
+        fn push(&mut self, _: Timestamp, tracks: &[Block; TRACKS]) {
+            self.blocks.fetch_add(1, Ordering::Relaxed);
+            if let Ok(mut p) = self.last_peak.lock() {
+                *p = tracks[0].peak()[0];
+            }
+        }
+    }
+
+    fn engine_with_tone() -> (
+        Engine,
+        estream_core::SourceId,
+        Arc<AtomicU64>,
+        Arc<Mutex<f32>>,
+    ) {
+        let engine = Engine::start(
+            Project::new_default(320, 180, Rational::fps(30)),
+            EngineConfig {
+                video: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let (source, _) = add_fullscreen(
+            &engine,
+            "audio_test_tone",
+            serde_json::json!({ "frequency": 1000.0, "level_db": 0.0 }),
+        );
+        let blocks = Arc::new(AtomicU64::new(0));
+        let last_peak = Arc::new(Mutex::new(0.0));
+        engine.add_track_sink(Box::new(Probe {
+            blocks: blocks.clone(),
+            last_peak: last_peak.clone(),
+        }));
+        (engine, source, blocks, last_peak)
+    }
+
+    #[test]
+    fn audio_runs_at_100_blocks_per_second() {
+        let (_engine, _, blocks, _) = engine_with_tone();
+        std::thread::sleep(Duration::from_millis(200));
+        let start = blocks.load(Ordering::Relaxed);
+        let t = Instant::now();
+        std::thread::sleep(Duration::from_secs(2));
+        let produced = blocks.load(Ordering::Relaxed) - start;
+        let expected = (t.elapsed().as_secs_f64() * 100.0).round() as u64;
+        assert!(
+            produced.abs_diff(expected) <= 2,
+            "{produced} blocks, expected {expected}"
+        );
+    }
+
+    #[test]
+    fn volume_change_meters_and_undoes() {
+        let (engine, source, _, last_peak) = engine_with_tone();
+        let audio = estream_project::AudioConfig {
+            volume_db: -6.0,
+            ..Default::default()
+        };
+        engine
+            .execute(Command::UpdateSourceAudio { source, audio })
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(150));
+        let meters = engine.audio_meters();
+        let meter = meters
+            .sources
+            .iter()
+            .find(|(id, _)| *id == source)
+            .expect("metered")
+            .1
+            .read();
+        assert!(
+            (db::from_gain(meter.peak[0]) + 6.0).abs() < 0.2,
+            "{:?}",
+            meter.peak
+        );
+        assert!(engine.undo().unwrap());
+        std::thread::sleep(Duration::from_millis(150));
+        let peak = *last_peak.lock().unwrap();
+        assert!(db::from_gain(peak).abs() < 0.2, "back to 0 dB: {peak}");
+    }
+
+    #[test]
+    fn switching_scene_removes_scene_audio_but_not_global() {
+        let (engine, _tone, _, last_peak) = engine_with_tone();
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(*last_peak.lock().unwrap() > 0.9);
+        let canvas = engine.snapshot().canvases[0].id;
+        let other = Scene::new("Other", canvas);
+        let other_id = other.id;
+        engine
+            .execute(Command::AddScene {
+                scene: other,
+                index: 1,
+            })
+            .unwrap();
+        engine
+            .execute(Command::SetActiveScene {
+                canvas,
+                scene: Some(other_id),
+            })
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(*last_peak.lock().unwrap(), 0.0, "scene audio stopped");
+
+        // A global source keeps playing in any scene.
+        let mut global = SourceDef::new(
+            "Global",
+            "audio_test_tone",
+            serde_json::json!({ "level_db": -12.0 }),
+        );
+        global.audio.global = true;
+        engine
+            .execute(Command::AddSource {
+                source: global,
+                index: 0,
+            })
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        let peak = db::from_gain(*last_peak.lock().unwrap());
+        assert!((peak + 12.0).abs() < 0.2, "{peak}");
+    }
+}

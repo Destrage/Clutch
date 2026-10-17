@@ -62,6 +62,8 @@ export struct Inspect {
     blend: int,
     visible: bool,
     locked: bool,
+    // Audio-only sources (no transform/crop/appearance).
+    no-video: bool,
 }
 
 export struct PaletteEntry {
@@ -100,4 +102,55 @@ export struct PropRow {
     color: color,
     options: [string],
     index: int,
+}
+export struct MixerStrip {
+    id: string,
+    name: string,
+    kind: string,
+    // Meter positions 0..1 on a -60..0 dB scale.
+    level-l: float,
+    level-r: float,
+    rms-l: float,
+    rms-r: float,
+    hold-l: float,
+    hold-r: float,
+    // Fader position 0..1 and its value in dB.
+    fader: float,
+    volume-db: float,
+    muted: bool,
+    monitoring: bool,
+    global: bool,
+    selected: bool,
+    problem: string,
+}
+
+export struct FilterParamRow {
+    key: string,
+    label: string,
+    value: float,
+    minimum: float,
+    maximum: float,
+    step: float,
+    unit: string,
+}
+
+export struct FilterRow {
+    id: string,
+    name: string,
+    enabled: bool,
+    params: [FilterParamRow],
+}
+
+export struct AudioInspect {
+    has: bool,
+    volume-db: float,
+    muted: bool,
+    balance: float,
+    mono: bool,
+    sync-ms: float,
+    // 0 off, 1 monitor only, 2 monitor and output
+    monitoring: int,
+    tracks: int,
+    global: bool,
+    filters: [FilterRow],
 }

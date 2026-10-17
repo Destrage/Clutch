@@ -4,7 +4,9 @@
 use estream_core::{
     BlendMode, CanvasId, Crop, ItemId, ItemTransform, Rational, Rgba8, SceneId, SourceId,
 };
-use estream_project::{Canvas, ItemContent, Project, Scene, SceneItem, SourceDef};
+use estream_project::{
+    AudioConfig, Canvas, ItemContent, Project, ProjectAudio, Scene, SceneItem, SourceDef,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -134,6 +136,15 @@ pub enum Command {
         source: SourceId,
         settings: serde_json::Value,
     },
+    /// Replaces a source's mixer settings (volume, mute, tracks, filters…).
+    UpdateSourceAudio {
+        source: SourceId,
+        audio: AudioConfig,
+    },
+    /// Replaces project-wide audio settings (monitoring device).
+    SetProjectAudio {
+        audio: ProjectAudio,
+    },
     AddItem {
         scene: SceneId,
         parent: Option<ItemId>,
@@ -220,6 +231,7 @@ pub enum CoalesceKey {
     Item(ItemId, u8),
     Canvas(CanvasId),
     SourceSettings(SourceId),
+    SourceAudio(SourceId),
 }
 
 #[derive(Debug)]
@@ -241,6 +253,7 @@ impl Command {
             }
             Command::UpdateCanvas { canvas, .. } => Some(CoalesceKey::Canvas(*canvas)),
             Command::SetSourceSettings { source, .. } => Some(CoalesceKey::SourceSettings(*source)),
+            Command::UpdateSourceAudio { source, .. } => Some(CoalesceKey::SourceAudio(*source)),
             _ => None,
         }
     }
@@ -484,6 +497,35 @@ impl Command {
                     },
                     Change::SourceChanged { source },
                 ))
+            }
+            UpdateSourceAudio { source, audio } => {
+                if !(-100.0..=26.0).contains(&audio.volume_db)
+                    || !(0.0..=1.0).contains(&audio.balance)
+                {
+                    return Err(CommandError::Invalid(
+                        "volume or balance out of range".into(),
+                    ));
+                }
+                if audio.sync_offset_ms > 2000 {
+                    return Err(CommandError::Invalid(
+                        "sync offset must be at most 2000 ms".into(),
+                    ));
+                }
+                let s = project
+                    .source_mut(source)
+                    .ok_or(CommandError::NoSource(source))?;
+                let old = std::mem::replace(&mut s.audio, audio);
+                Ok(applied(
+                    UpdateSourceAudio { source, audio: old },
+                    Change::SourceChanged { source },
+                ))
+            }
+            SetProjectAudio { audio } => {
+                let old = std::mem::replace(&mut project.audio, audio);
+                Ok(Applied {
+                    inverse: SetProjectAudio { audio: old },
+                    changes: Vec::new(),
+                })
             }
             AddItem {
                 scene,

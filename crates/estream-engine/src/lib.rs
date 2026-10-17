@@ -6,10 +6,14 @@
 //! and events ([`Engine::subscribe`]); finished frames are exposed per canvas
 //! via [`Engine::canvas_output`].
 
+pub mod audio;
 pub mod command;
 pub mod diagnostics;
 pub mod engine;
-pub mod frame_clock;
+/// Drift-free frame scheduling (re-exported from stream-core).
+pub mod frame_clock {
+    pub use estream_core::frame_clock::*;
+}
 pub mod graph;
 pub mod history;
 pub mod properties;
@@ -24,6 +28,7 @@ pub use source::{
 };
 pub use video::{CanvasFrame, CanvasOutput, SourceInfo, VideoCore};
 
+pub use estream_audio as audio_engine;
 pub use estream_core as core;
 pub use estream_gpu as gpu;
 pub use estream_project as project;

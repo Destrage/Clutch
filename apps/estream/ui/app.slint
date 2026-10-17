@@ -2,7 +2,7 @@
 
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
-import { SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SourceType, PropRow } from "types.slint";
+import { SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SourceType, PropRow, MixerStrip, AudioInspect } from "types.slint";
 import { VSplitter, HSplitter, TooltipLayer, Hint } from "widgets.slint";
 import { Preview } from "preview.slint";
 import { TopBar, ScenesPanel, SourcesPanel, InspectorPanel, MixerPanel, StatusBar } from "panels.slint";
@@ -39,6 +39,9 @@ export component AppWindow inherits Window {
     in property <[LayerRow]> layers;
     in property <Inspect> inspect;
     in property <[PropRow]> props;
+    in property <AudioInspect> audio-inspect;
+    in property <[MixerStrip]> mixer-strips;
+    in property <MixerStrip> mixer-master;
     in-out property <string> renaming-scene;
 
     // Top bar and status
@@ -100,6 +103,15 @@ export component AppWindow inherits Window {
     callback prop-index(string, int);
     callback prop-browse(string);
     callback prop-refresh();
+    callback audio-set(string, float);
+    callback filter-add(int);
+    callback filter-remove(string);
+    callback filter-toggle(string, bool);
+    callback filter-param(string, string, float);
+    callback filter-move(string, bool);
+    callback mixer-select(string);
+    callback mixer-fader(string, float);
+    callback mixer-mute(string);
     callback palette-query-changed(string);
     callback palette-run(string);
     callback add-source-pick(string);
@@ -208,7 +220,16 @@ export component AppWindow inherits Window {
                             group => { root.action("item.group"); }
                         }
                         VSplitter { size <=> root.sources-width; minimum: 260px; maximum: 900px; }
-                        MixerPanel { horizontal-stretch: 1; }
+                        MixerPanel {
+                            horizontal-stretch: 1;
+                            strips: root.mixer-strips;
+                            master: root.mixer-master;
+                            select(id) => { root.mixer-select(id); main-keys.focus(); }
+                            fader(id, v) => { root.mixer-fader(id, v); }
+                            commit => { root.inspect-commit(); }
+                            toggle-mute(id) => { root.mixer-mute(id); }
+                            add => { root.action("source.add"); }
+                        }
                     }
                 }
 
@@ -233,6 +254,13 @@ export component AppWindow inherits Window {
                     prop-index(k, i) => { root.prop-index(k, i); }
                     prop-browse(k) => { root.prop-browse(k); }
                     prop-refresh => { root.prop-refresh(); }
+                    audio: root.audio-inspect;
+                    audio-set(k, v) => { root.audio-set(k, v); }
+                    filter-add(i) => { root.filter-add(i); }
+                    filter-remove(id) => { root.filter-remove(id); }
+                    filter-toggle(id, v) => { root.filter-toggle(id, v); }
+                    filter-param(id, k, v) => { root.filter-param(id, k, v); }
+                    filter-move(id, up) => { root.filter-move(id, up); }
                 }
             }
             StatusBar {

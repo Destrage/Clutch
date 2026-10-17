@@ -4,5 +4,8 @@
 pub mod model;
 pub mod persist;
 
-pub use model::{Canvas, ItemContent, Project, Scene, SceneItem, SourceDef};
+pub use model::{
+    AudioConfig, AudioFilterDef, Canvas, ItemContent, Monitoring, Project, ProjectAudio, Scene,
+    SceneItem, SourceDef,
+};
 pub use persist::{CURRENT_SCHEMA, LoadWarning, Loaded, PersistError};

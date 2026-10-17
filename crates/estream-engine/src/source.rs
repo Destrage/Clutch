@@ -1,22 +1,15 @@
 //! Runtime video sources: the trait every source implements, the type registry,
 //! and the built-in `color` and `test_pattern` sources.
 
-use crate::properties::{PropKind, Property, PropertySchema};
+use crate::properties::{PropKind, Property, PropertySchema, SelectOption};
+use estream_audio::AudioSource;
 use estream_core::{Rgba8, Size, Timestamp};
 use estream_gpu::{Compositor, GpuContext, wgpu};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 
-/// Availability of a source, shown in the UI.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "state", content = "reason", rename_all = "snake_case")]
-pub enum SourceStatus {
-    Active,
-    /// The device, window or file is not available right now.
-    Unavailable(String),
-    Error(String),
-}
+pub use estream_core::SourceStatus;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SourceError {
@@ -58,6 +51,7 @@ pub trait VideoSource: Send {
 type Factory =
     dyn Fn(&SourceContext<'_>, &Value) -> Result<Box<dyn VideoSource>, SourceError> + Send + Sync;
 type SchemaFn = dyn Fn(&Value) -> PropertySchema + Send + Sync;
+type AudioFactory = dyn Fn(&Value) -> Result<Box<dyn AudioSource>, String> + Send + Sync;
 
 /// Describes a source type: identity, UI text, settings schema and constructor.
 #[derive(Clone)]
@@ -71,7 +65,8 @@ pub struct SourceType {
     /// Cheap schema used to validate commands (must not enumerate devices or
     /// windows: it runs on the engine's control thread).
     validation: Option<Arc<SchemaFn>>,
-    factory: Arc<Factory>,
+    factory: Option<Arc<Factory>>,
+    audio: Option<Arc<AudioFactory>>,
 }
 
 impl SourceType {
@@ -91,8 +86,45 @@ impl SourceType {
             description: description.into(),
             schema: Arc::new(schema),
             validation: None,
-            factory: Arc::new(factory),
+            factory: Some(Arc::new(factory)),
+            audio: None,
         }
+    }
+
+    /// An audio-only source type (microphones, desktop audio, app audio).
+    pub fn audio(
+        kind: &str,
+        name: &str,
+        description: &str,
+        schema: impl Fn(&Value) -> PropertySchema + Send + Sync + 'static,
+        factory: impl Fn(&Value) -> Result<Box<dyn AudioSource>, String> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            kind: kind.into(),
+            name: name.into(),
+            description: description.into(),
+            schema: Arc::new(schema),
+            validation: None,
+            factory: None,
+            audio: Some(Arc::new(factory)),
+        }
+    }
+
+    /// Adds an audio part to a video source type.
+    pub fn with_audio(
+        mut self,
+        factory: impl Fn(&Value) -> Result<Box<dyn AudioSource>, String> + Send + Sync + 'static,
+    ) -> Self {
+        self.audio = Some(Arc::new(factory));
+        self
+    }
+
+    pub fn has_video(&self) -> bool {
+        self.factory.is_some()
+    }
+
+    pub fn has_audio(&self) -> bool {
+        self.audio.is_some()
     }
 
     /// Uses schema for validation instead of the full (UI) schema.
@@ -172,6 +204,9 @@ impl SourceRegistry {
                 Ok(Box::new(src))
             },
         ));
+        for t in audio_types() {
+            r.register(t);
+        }
         r
     }
 
@@ -210,9 +245,23 @@ impl SourceRegistry {
         let source_type = self
             .get(kind)
             .ok_or_else(|| SourceError::UnknownKind(kind.to_owned()))?;
-        (source_type.factory)(ctx, settings)
+        match &source_type.factory {
+            Some(factory) => factory(ctx, settings),
+            None => Err(SourceError::UnknownKind(kind.to_owned())),
+        }
+    }
+
+    /// Creates the audio part of a source; None if the kind has no audio.
+    pub fn create_audio(
+        &self,
+        kind: &str,
+        settings: &Value,
+    ) -> Option<Result<Box<dyn AudioSource>, String>> {
+        let factory = self.get(kind)?.audio.as_ref()?;
+        Some(factory(settings))
     }
 }
+
 /// Parses settings into a typed struct (missing fields use the struct's defaults).
 pub fn parse<T: for<'de> Deserialize<'de> + Default>(settings: &Value) -> Result<T, SourceError> {
     if settings.is_null() {
@@ -475,4 +524,68 @@ impl VideoSource for TestPatternSource {
             size: self.size,
         })
     }
+}
+
+// ---------------------------------------------------------------- audio types
+
+fn device_schema(direction: estream_audio::devices::Direction, label: &str) -> PropertySchema {
+    let devices = estream_audio::devices::devices(direction);
+    let default_name = devices
+        .iter()
+        .find(|d| d.is_default)
+        .map(|d| d.name.clone())
+        .unwrap_or_else(|| "none found".into());
+    let mut options = vec![SelectOption::new("", format!("Default ({default_name})"))];
+    options.extend(devices.into_iter().map(|d| SelectOption::new(d.id, d.name)));
+    PropertySchema::new(vec![Property::select("device", label, options, "")])
+}
+
+fn device_validation(_: &Value) -> PropertySchema {
+    PropertySchema::new(vec![Property::select("device", "Device", vec![], "")])
+}
+
+fn audio_types() -> Vec<SourceType> {
+    use estream_audio::devices::{DeviceSource, Direction};
+    vec![
+        SourceType::audio(
+            "audio_input",
+            "Audio input",
+            "Microphones and line inputs",
+            |_| device_schema(Direction::Input, "Device"),
+            |settings| {
+                let mut s = DeviceSource::new(Direction::Input);
+                s.update(settings)?;
+                Ok(Box::new(s))
+            },
+        )
+        .with_validation(device_validation),
+        SourceType::audio(
+            "audio_output",
+            "Desktop audio",
+            "Everything playing on a speaker or headphone device",
+            |_| device_schema(Direction::Output, "Device"),
+            |settings| {
+                let mut s = DeviceSource::new(Direction::Output);
+                s.update(settings)?;
+                Ok(Box::new(s))
+            },
+        )
+        .with_validation(device_validation),
+        SourceType::audio(
+            "audio_test_tone",
+            "Test tone",
+            "A sine wave for checking levels and routing",
+            |_| {
+                PropertySchema::new(vec![
+                    Property::float("frequency", "Frequency (Hz)", 20.0, 20000.0, 1.0, 440.0),
+                    Property::float("level_db", "Level (dBFS)", -60.0, 0.0, 0.5, -18.0),
+                ])
+            },
+            |settings| {
+                let mut s = estream_audio::tone::ToneSource::default();
+                s.update(settings)?;
+                Ok(Box::new(s))
+            },
+        ),
+    ]
 }

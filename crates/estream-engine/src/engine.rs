@@ -1,6 +1,7 @@
 //! The engine: owns the project on a control thread, applies commands from the
 //! bus, publishes snapshots/events, autosaves, and drives the video thread.
 
+use crate::audio::{self, AudioHost};
 use crate::command::{Change, Command, CommandError};
 use crate::graph::RenderGraph;
 use crate::history::History;
@@ -8,6 +9,8 @@ use crate::source::{SourceRegistry, SourceStatus};
 use crate::video::{self, CanvasOutput, SourceInfo, VideoCore, VideoSink};
 use arc_swap::ArcSwap;
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TrySendError};
+use estream_audio::mixer::MeterSet;
+use estream_audio::{AudioCore, SourceFactory, TrackSink};
 use estream_core::{CanvasId, EngineClock, SourceId};
 use estream_gpu::{GpuContext, GpuError, GpuOptions};
 use estream_project::{PersistError, Project, persist};
@@ -50,6 +53,8 @@ pub struct EngineConfig {
     pub coalesce_window: Duration,
     /// Run the real-time video thread. Disable for pure model tests.
     pub video: bool,
+    /// Run the real-time audio thread.
+    pub audio: bool,
 }
 
 impl Default for EngineConfig {
@@ -63,6 +68,7 @@ impl Default for EngineConfig {
             history_limit: 500,
             coalesce_window: Duration::from_millis(500),
             video: true,
+            audio: true,
         }
     }
 }
@@ -129,7 +135,11 @@ struct Shared {
     graph: ArcSwap<RenderGraph>,
     revision: AtomicU64,
     outputs: ArcSwap<Vec<Arc<CanvasOutput>>>,
+    /// Merged video + audio source information.
     statuses: ArcSwap<HashMap<SourceId, SourceInfo>>,
+    video_infos: ArcSwap<HashMap<SourceId, SourceInfo>>,
+    audio_statuses: ArcSwap<HashMap<SourceId, SourceStatus>>,
+    audio_meters: ArcSwap<MeterSet>,
     subscribers: Mutex<Vec<Subscriber>>,
     shutdown: AtomicBool,
     can_undo: AtomicBool,
@@ -152,6 +162,36 @@ impl Shared {
     }
 }
 
+impl Shared {
+    /// Video information, plus status for audio-only sources (no video part).
+    fn merge_statuses(&self) {
+        let mut merged: HashMap<SourceId, SourceInfo> = (**self.video_infos.load()).clone();
+        for (id, status) in self.audio_statuses.load().iter() {
+            merged.entry(*id).or_insert_with(|| SourceInfo {
+                status: status.clone(),
+                size: None,
+            });
+        }
+        self.statuses.store(Arc::new(merged));
+    }
+}
+
+impl AudioHost for Shared {
+    fn graph(&self) -> Arc<RenderGraph> {
+        self.graph.load_full()
+    }
+
+    fn publish_audio(&self, meters: MeterSet, statuses: HashMap<SourceId, SourceStatus>) {
+        self.audio_meters.store(Arc::new(meters));
+        self.audio_statuses.store(Arc::new(statuses));
+        self.merge_statuses();
+    }
+
+    fn shutdown_requested(&self) -> &AtomicBool {
+        &self.shutdown
+    }
+}
+
 impl VideoSink for Shared {
     fn graph(&self) -> Arc<RenderGraph> {
         self.graph.load_full()
@@ -159,7 +199,8 @@ impl VideoSink for Shared {
 
     fn publish(&self, outputs: Vec<Arc<CanvasOutput>>, statuses: HashMap<SourceId, SourceInfo>) {
         self.outputs.store(Arc::new(outputs));
-        self.statuses.store(Arc::new(statuses));
+        self.video_infos.store(Arc::new(statuses));
+        self.merge_statuses();
     }
 
     fn shutdown_requested(&self) -> &AtomicBool {
@@ -194,6 +235,8 @@ pub struct Engine {
     clock: EngineClock,
     control: Option<JoinHandle<()>>,
     video: Option<JoinHandle<()>>,
+    audio: Option<JoinHandle<()>>,
+    track_sinks: Option<crossbeam_channel::Sender<Box<dyn TrackSink>>>,
 }
 
 impl Engine {
@@ -205,6 +248,9 @@ impl Engine {
             revision: AtomicU64::new(0),
             outputs: ArcSwap::from_pointee(Vec::new()),
             statuses: ArcSwap::from_pointee(HashMap::new()),
+            video_infos: ArcSwap::from_pointee(HashMap::new()),
+            audio_statuses: ArcSwap::from_pointee(HashMap::new()),
+            audio_meters: ArcSwap::from_pointee(MeterSet::default()),
             subscribers: Mutex::new(Vec::new()),
             shutdown: AtomicBool::new(false),
             can_undo: AtomicBool::new(false),
@@ -236,6 +282,23 @@ impl Engine {
             None => None,
         };
 
+        let (track_sinks, audio) = if config.audio {
+            let registry = config.registry.clone();
+            let factory: SourceFactory =
+                Arc::new(move |kind, settings| registry.create_audio(kind, settings));
+            let mut core = AudioCore::new(factory);
+            core.sync(&shared.graph.load().audio);
+            shared.publish_audio(core.meters(), core.statuses());
+            let (tx, rx) = crossbeam_channel::unbounded();
+            let host: Arc<dyn AudioHost> = shared.clone();
+            let handle = std::thread::Builder::new()
+                .name("estream-audio".into())
+                .spawn(move || audio::run(core, clock, host, rx))?;
+            (Some(tx), Some(handle))
+        } else {
+            (None, None)
+        };
+
         let (requests, rx) = crossbeam_channel::bounded(1024);
         let mut control = Control {
             registry: config.registry.clone(),
@@ -260,6 +323,8 @@ impl Engine {
             clock,
             control: Some(control),
             video,
+            audio,
+            track_sinks,
         })
     }
 
@@ -377,6 +442,18 @@ impl Engine {
     }
 
     /// Status and size of every source.
+    /// Level meters for the sources being mixed and the master mix.
+    pub fn audio_meters(&self) -> Arc<MeterSet> {
+        self.shared.audio_meters.load_full()
+    }
+
+    /// Receives every mixed audio block (all six tracks). Used by outputs.
+    pub fn add_track_sink(&self, sink: Box<dyn TrackSink>) {
+        if let Some(tx) = &self.track_sinks {
+            let _ = tx.send(sink);
+        }
+    }
+
     pub fn source_infos(&self) -> Arc<HashMap<SourceId, SourceInfo>> {
         self.shared.statuses.load_full()
     }
@@ -405,6 +482,9 @@ impl Engine {
             let _ = handle.join();
         }
         self.shared.shutdown.store(true, Ordering::Release);
+        if let Some(handle) = self.audio.take() {
+            let _ = handle.join();
+        }
         if let Some(handle) = self.video.take() {
             let _ = handle.join();
         }

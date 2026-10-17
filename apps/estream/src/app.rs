@@ -6,8 +6,8 @@ use crate::interact::{self, Drag, DragKind, Handle, ItemGeom, Modifiers};
 use crate::presets::{self, PRESETS};
 use crate::settings::{PanelLayout, Paths, Settings, ThemeMode, WindowState};
 use crate::ui::{
-    AppWindow, CanvasBox, Guide, Inspect, LayerRow, PaletteEntry, Preset, PropRow, SceneRow,
-    SourceType, Theme,
+    AppWindow, AudioInspect, CanvasBox, FilterParamRow, FilterRow, Guide, Inspect, LayerRow,
+    MixerStrip, PaletteEntry, Preset, PropRow, SceneRow, SourceType, Theme,
 };
 use estream_core::{BlendMode, BoundsMode, CanvasId, ItemId, Rgba8, SceneId, SourceId};
 use estream_engine::{
@@ -15,7 +15,10 @@ use estream_engine::{
     Subscription,
 };
 use estream_gpu::GpuContext;
-use estream_project::{ItemContent, Project, Scene, SceneItem, SourceDef, persist};
+use estream_project::{
+    AudioConfig, AudioFilterDef, ItemContent, Monitoring, Project, Scene, SceneItem, SourceDef,
+    persist,
+};
 use glam::Vec2;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
@@ -55,6 +58,11 @@ pub struct App {
 
     geoms: Vec<ItemGeom>,
     selection: Option<ItemId>,
+    /// A source picked in the mixer that has no item in the active scene.
+    selected_source: Option<SourceId>,
+    mixer_model: Rc<VecModel<MixerStrip>>,
+    meter_holds: HashMap<SourceId, [(f32, Instant); 2]>,
+    mixer_at: Instant,
     hover: Option<ItemId>,
     drag: Option<Drag>,
     shut_down: bool,
@@ -212,6 +220,10 @@ impl App {
             props_generation: 0,
             geoms: Vec::new(),
             selection: None,
+            selected_source: None,
+            mixer_model: Rc::new(VecModel::default()),
+            meter_holds: HashMap::new(),
+            mixer_at: Instant::now(),
             hover: None,
             drag: None,
             shut_down: false,
@@ -229,6 +241,7 @@ impl App {
         window.set_guides(ModelRc::from(app.guides_model.clone()));
         window.set_palette_entries(ModelRc::from(app.palette_model.clone()));
         window.set_props(ModelRc::from(app.props_model.clone()));
+        window.set_mixer_strips(ModelRc::from(app.mixer_model.clone()));
         Rc::new(RefCell::new(app))
     }
 
@@ -303,6 +316,15 @@ impl App {
             .unwrap_or(PRESETS[0]);
         let mut project = Project::new_default(preset.width, preset.height, preset.fps);
         project.scenes[0].name = "Main".into();
+        // Like OBS: desktop audio and the default microphone in every scene.
+        for (name, kind) in [
+            ("Desktop Audio", "audio_output"),
+            ("Microphone", "audio_input"),
+        ] {
+            let mut source = SourceDef::new(name, kind, serde_json::json!({ "device": "" }));
+            source.audio.global = true;
+            project.sources.push(source);
+        }
         if let Err(e) = persist::save(&self.collection, &project) {
             self.toast(format!("Couldn't create the scene collection: {e}"), true);
             return;
@@ -454,6 +476,10 @@ impl App {
         }
         if changed {
             self.refresh();
+        }
+        if !changed && self.mixer_at.elapsed() >= Duration::from_millis(33) {
+            self.mixer_at = Instant::now();
+            self.update_mixer();
         }
         if self.stats_at.elapsed() >= Duration::from_millis(500) {
             self.update_stats();
@@ -633,13 +659,47 @@ impl App {
         w.set_can_redo(engine.can_redo());
         w.set_dirty(self.dirty);
 
-        let (selection_box, inspect) = match (self.selection, scene) {
+        if self
+            .selected_source
+            .is_some_and(|id| snapshot.source(id).is_none())
+        {
+            self.selected_source = None;
+        }
+        let (selection_box, mut inspect) = match (self.selection, scene) {
             (Some(sel), Some(scene)) => self.describe_selection(sel, scene, &snapshot, &infos),
-            _ => (CanvasBox::default(), Inspect::default()),
+            _ => match self.selected_source.and_then(|id| snapshot.source(id)) {
+                // A global audio source picked in the mixer (not placed in this scene).
+                Some(source) => (
+                    CanvasBox::default(),
+                    Inspect {
+                        has: true,
+                        id: id_str(source.id),
+                        name: source.name.clone().into(),
+                        kind: source.kind.clone().into(),
+                        kind_label: engine
+                            .registry()
+                            .get(&source.kind)
+                            .map_or(source.kind.clone(), |t| t.name.clone())
+                            .into(),
+                        problem: status_problem(infos.get(&source.id)).into(),
+                        ..Default::default()
+                    },
+                ),
+                None => (CanvasBox::default(), Inspect::default()),
+            },
         };
+        if inspect.has {
+            inspect.no_video = !engine
+                .registry()
+                .get(inspect.kind.as_str())
+                .is_some_and(|t| t.has_video())
+                && inspect.kind != "group";
+        }
         w.set_selection_box(selection_box);
         w.set_inspect(inspect);
+        w.set_audio_inspect(self.audio_inspect(&snapshot));
         self.refresh_props(&snapshot);
+        self.update_mixer();
         w.set_hover_box(self.hover_box());
     }
 
@@ -727,6 +787,7 @@ impl App {
                 .unwrap_or(0) as i32,
             visible: item.visible,
             locked: item.locked,
+            no_video: false,
         };
         (selection_box, inspect)
     }
@@ -879,6 +940,7 @@ impl App {
     }
 
     pub fn layer_select(&mut self, id: &str) {
+        self.selected_source = None;
         self.selection = parse_id(id).map(ItemId);
         self.refresh();
     }
@@ -988,19 +1050,279 @@ impl App {
         }
     }
 
+    // ------------------------------------------------------------ audio
+
+    /// The source being edited: the selected item's source, or a source picked in the mixer.
+    fn current_source(&self, snapshot: &Project) -> Option<SourceId> {
+        match self.selection {
+            Some(sel) => snapshot
+                .scenes
+                .iter()
+                .find_map(|s| s.find_item(sel))
+                .and_then(|i| i.source_id()),
+            None => self.selected_source,
+        }
+    }
+
+    fn has_audio(&self, kind: &str) -> bool {
+        self.engine
+            .as_ref()
+            .is_some_and(|e| e.registry().get(kind).is_some_and(|t| t.has_audio()))
+    }
+
+    fn audio_inspect(&self, snapshot: &Project) -> AudioInspect {
+        let Some(source) = self
+            .current_source(snapshot)
+            .and_then(|id| snapshot.source(id))
+            .filter(|s| self.has_audio(&s.kind))
+        else {
+            return AudioInspect::default();
+        };
+        let a = &source.audio;
+        let filters: Vec<FilterRow> = a
+            .filters
+            .iter()
+            .map(|f| {
+                let kind = estream_engine::audio_engine::filters::kind(&f.kind);
+                let params: Vec<FilterParamRow> = kind
+                    .map(|k| k.params)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|p| FilterParamRow {
+                        key: p.key.into(),
+                        label: p.label.into(),
+                        value: f
+                            .settings
+                            .get(p.key)
+                            .and_then(serde_json::Value::as_f64)
+                            .map_or(p.default, |v| v as f32),
+                        minimum: p.min,
+                        maximum: p.max,
+                        step: p.step,
+                        unit: p.unit.into(),
+                    })
+                    .collect();
+                FilterRow {
+                    id: f.id.clone().into(),
+                    name: kind.map_or(f.kind.as_str(), |k| k.name).into(),
+                    enabled: f.enabled,
+                    params: ModelRc::new(VecModel::from(params)),
+                }
+            })
+            .collect();
+        AudioInspect {
+            has: true,
+            volume_db: a.volume_db,
+            muted: a.muted,
+            balance: a.balance,
+            mono: a.mono,
+            sync_ms: a.sync_offset_ms as f32,
+            monitoring: match a.monitoring {
+                Monitoring::Off => 0,
+                Monitoring::MonitorOnly => 1,
+                Monitoring::MonitorAndOutput => 2,
+            },
+            tracks: a.tracks as i32,
+            global: a.global,
+            filters: ModelRc::new(VecModel::from(filters)),
+        }
+    }
+
+    /// Applies `change` to a source's mixer settings (one undoable command).
+    fn update_audio(&mut self, source: SourceId, change: impl FnOnce(&mut AudioConfig)) {
+        let Some((snapshot, _, _)) = self.canvas_and_scene() else {
+            return;
+        };
+        let Some(def) = snapshot.source(source) else {
+            return;
+        };
+        let mut audio = def.audio.clone();
+        change(&mut audio);
+        if audio != def.audio {
+            self.exec(Command::UpdateSourceAudio { source, audio });
+        }
+    }
+
+    fn update_current_audio(&mut self, change: impl FnOnce(&mut AudioConfig)) {
+        let Some((snapshot, _, _)) = self.canvas_and_scene() else {
+            return;
+        };
+        if let Some(source) = self.current_source(&snapshot) {
+            self.update_audio(source, change);
+        }
+    }
+
+    pub fn audio_set(&mut self, field: &str, value: f32) {
+        self.update_current_audio(|a| match field {
+            "volume" => a.volume_db = value.clamp(-100.0, 26.0),
+            "muted" => a.muted = value > 0.5,
+            "balance" => a.balance = value.clamp(0.0, 1.0),
+            "mono" => a.mono = value > 0.5,
+            "global" => a.global = value > 0.5,
+            "sync" => a.sync_offset_ms = value.clamp(0.0, 2000.0).round() as u32,
+            "tracks" => a.tracks = (value.round() as i32).clamp(0, 63) as u8,
+            "monitoring" => {
+                a.monitoring = match value.round() as i32 {
+                    1 => Monitoring::MonitorOnly,
+                    2 => Monitoring::MonitorAndOutput,
+                    _ => Monitoring::Off,
+                }
+            }
+            _ => {}
+        });
+    }
+
+    pub fn filter_add(&mut self, index: i32) {
+        let Some(kind) = estream_engine::audio_engine::filters::KINDS.get(index.max(0) as usize)
+        else {
+            return;
+        };
+        self.update_current_audio(|a| {
+            a.filters.push(AudioFilterDef {
+                id: uuid::Uuid::now_v7().to_string(),
+                kind: kind.kind.into(),
+                enabled: true,
+                settings: serde_json::json!({}),
+            });
+        });
+    }
+
+    pub fn filter_remove(&mut self, id: &str) {
+        self.update_current_audio(|a| a.filters.retain(|f| f.id != id));
+    }
+
+    pub fn filter_toggle(&mut self, id: &str, enabled: bool) {
+        self.update_current_audio(|a| {
+            if let Some(f) = a.filters.iter_mut().find(|f| f.id == id) {
+                f.enabled = enabled;
+            }
+        });
+    }
+
+    pub fn filter_param(&mut self, id: &str, key: &str, value: f32) {
+        self.update_current_audio(|a| {
+            if let Some(f) = a.filters.iter_mut().find(|f| f.id == id) {
+                if !f.settings.is_object() {
+                    f.settings = serde_json::json!({});
+                }
+                f.settings[key] = serde_json::Value::from(value as f64);
+            }
+        });
+    }
+
+    pub fn filter_move(&mut self, id: &str, up: bool) {
+        self.update_current_audio(|a| {
+            if let Some(i) = a.filters.iter().position(|f| f.id == id) {
+                let j = if up {
+                    i.checked_sub(1)
+                } else {
+                    (i + 1 < a.filters.len()).then_some(i + 1)
+                };
+                if let Some(j) = j {
+                    a.filters.swap(i, j);
+                }
+            }
+        });
+    }
+
+    pub fn mixer_select(&mut self, id: &str) {
+        let Some(source) = parse_id(id).map(SourceId) else {
+            return;
+        };
+        // Prefer selecting the scene item that shows this source.
+        let item = self.canvas_and_scene().and_then(|(snapshot, _, scene)| {
+            let scene = snapshot.scene(scene?)?;
+            let mut found = None;
+            scene.walk(&mut |i| {
+                if found.is_none() && i.source_id() == Some(source) {
+                    found = Some(i.id);
+                }
+            });
+            found
+        });
+        self.selection = item;
+        self.selected_source = if item.is_none() { Some(source) } else { None };
+        self.refresh();
+    }
+
+    pub fn mixer_fader(&mut self, id: &str, position: f32) {
+        let Some(source) = parse_id(id).map(SourceId) else {
+            return;
+        };
+        self.update_audio(source, |a| a.volume_db = fader_to_db(position));
+    }
+
+    pub fn mixer_mute(&mut self, id: &str) {
+        let Some(source) = parse_id(id).map(SourceId) else {
+            return;
+        };
+        self.update_audio(source, |a| a.muted = !a.muted);
+    }
+
+    /// Rebuilds mixer strips from the latest meters (called ~30 times per second).
+    fn update_mixer(&mut self) {
+        let Some(w) = self.window() else { return };
+        let Some(engine) = &self.engine else { return };
+        let meters = engine.audio_meters();
+        let snapshot = engine.snapshot();
+        let infos = engine.source_infos();
+        let current = self.current_source(&snapshot);
+        let now = Instant::now();
+        let holds = &mut self.meter_holds;
+        let mut strip = |id: SourceId, reading: estream_engine::audio_engine::MeterReading| {
+            let peak = [
+                meter_position(reading.peak[0]),
+                meter_position(reading.peak[1]),
+            ];
+            let hold = holds.entry(id).or_insert([(0.0, now); 2]);
+            for ch in 0..2 {
+                if peak[ch] >= hold[ch].0
+                    || now.duration_since(hold[ch].1) > Duration::from_millis(1500)
+                {
+                    hold[ch] = (peak[ch], now);
+                }
+            }
+            MixerStrip {
+                id: id_str(id),
+                level_l: peak[0],
+                level_r: peak[1],
+                rms_l: meter_position(reading.rms[0]),
+                rms_r: meter_position(reading.rms[1]),
+                hold_l: hold[0].0,
+                hold_r: hold[1].0,
+                ..Default::default()
+            }
+        };
+        let strips: Vec<MixerStrip> = meters
+            .sources
+            .iter()
+            .filter_map(|(id, meter)| {
+                let def = snapshot.source(*id)?;
+                let mut s = strip(*id, meter.read());
+                s.name = def.name.clone().into();
+                s.kind = def.kind.clone().into();
+                s.volume_db = def.audio.volume_db;
+                s.fader = db_to_fader(def.audio.volume_db);
+                s.muted = def.audio.muted;
+                s.global = def.audio.global;
+                s.monitoring = def.audio.monitoring != Monitoring::Off;
+                s.selected = Some(*id) == current;
+                s.problem = status_problem(infos.get(id)).into();
+                Some(s)
+            })
+            .collect();
+        let mut master = strip(SourceId(uuid::Uuid::nil()), meters.master.read());
+        master.name = "Master (track 1)".into();
+        w.set_mixer_master(master);
+        sync_model(&self.mixer_model, strips);
+    }
+
     // ------------------------------------------------------------ source properties
 
     /// Rebuilds the generic property rows when the selected source or its settings change.
     fn refresh_props(&mut self, snapshot: &Project) {
         let source = self
-            .selection
-            .and_then(|sel| {
-                snapshot
-                    .scenes
-                    .iter()
-                    .find_map(|s| s.find_item(sel))
-                    .and_then(|i| i.source_id())
-            })
+            .current_source(snapshot)
             .and_then(|id| snapshot.source(id));
         let Some(source) = source else {
             self.props = None;
@@ -1165,13 +1487,20 @@ impl App {
     }
 
     pub fn inspect_text(&mut self, field: &str, value: &str) {
-        let Some((_, item)) = self.selected() else {
-            return;
-        };
         let name = value.trim();
         if field != "name" || name.is_empty() {
             return;
         }
+        let Some((_, item)) = self.selected() else {
+            // A source picked in the mixer (no item in this scene).
+            if let Some(source) = self.selected_source {
+                self.exec(Command::RenameSource {
+                    source,
+                    name: name.into(),
+                });
+            }
+            return;
+        };
         match item.source_id() {
             Some(source) => {
                 self.exec(Command::RenameSource {
@@ -1188,13 +1517,10 @@ impl App {
 
     /// Sets one key of the selected source's settings.
     fn set_setting(&mut self, key: &str, value: serde_json::Value) {
-        let Some((_, item)) = self.selected() else {
-            return;
-        };
-        let Some(source) = item.source_id() else {
-            return;
-        };
         let Some((snapshot, _, _)) = self.canvas_and_scene() else {
+            return;
+        };
+        let Some(source) = self.current_source(&snapshot) else {
             return;
         };
         let Some(def) = snapshot.source(source) else {
@@ -1300,6 +1626,7 @@ impl App {
     }
 
     fn pointer_down(&mut self, p: Vec2, px: f32) {
+        self.selected_source = None;
         let Some((snapshot, _, Some(scene_id))) = self.canvas_and_scene() else {
             return;
         };
@@ -1908,6 +2235,29 @@ fn push_layers(
     }
 }
 
+/// Meter position (0..1) for a linear level on a -60..0 dB scale.
+fn meter_position(level: f32) -> f32 {
+    let db = estream_engine::audio_engine::db::from_gain(level);
+    ((db + 60.0) / 60.0).clamp(0.0, 1.0)
+}
+
+/// Fader position (0..1) to dB: linear in dB from -60 to 0; the bottom is silence.
+fn fader_to_db(position: f32) -> f32 {
+    if position <= 0.005 {
+        -100.0
+    } else {
+        60.0 * (position.clamp(0.0, 1.0) - 1.0)
+    }
+}
+
+fn db_to_fader(db: f32) -> f32 {
+    if db <= -60.0 {
+        0.0
+    } else {
+        (db / 60.0 + 1.0).clamp(0.0, 1.0)
+    }
+}
+
 /// Builds a property row for the inspector from a schema property and its current value.
 fn prop_row(p: &estream_engine::Property, value: &serde_json::Value) -> PropRow {
     let mut row = PropRow {
@@ -2071,6 +2421,15 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     on!(on_prop_index, |a, k, i| a.prop_index(&k, i));
     on!(on_prop_browse, |a, k| a.prop_browse(&k));
     on!(on_prop_refresh, |a| a.prop_refresh());
+    on!(on_audio_set, |a, k, v| a.audio_set(&k, v));
+    on!(on_filter_add, |a, i| a.filter_add(i));
+    on!(on_filter_remove, |a, id| a.filter_remove(&id));
+    on!(on_filter_toggle, |a, id, v| a.filter_toggle(&id, v));
+    on!(on_filter_param, |a, id, k, v| a.filter_param(&id, &k, v));
+    on!(on_filter_move, |a, id, up| a.filter_move(&id, up));
+    on!(on_mixer_select, |a, id| a.mixer_select(&id));
+    on!(on_mixer_fader, |a, id, v| a.mixer_fader(&id, v));
+    on!(on_mixer_mute, |a, id| a.mixer_mute(&id));
 
     {
         let app = app.clone();

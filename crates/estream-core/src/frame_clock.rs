@@ -1,6 +1,6 @@
 //! Drift-free fixed-rate frame scheduling.
 
-use estream_core::{EngineClock, Rational, Timestamp};
+use crate::{EngineClock, Rational, Timestamp};
 use std::time::Duration;
 
 /// One scheduled frame.

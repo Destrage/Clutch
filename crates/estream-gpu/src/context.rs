@@ -83,6 +83,10 @@ impl GpuContext {
                 ..Default::default()
             })
             .await?;
+        // A live show must not abort on a GPU validation error: log it instead.
+        device.on_uncaptured_error(Arc::new(|e: wgpu::Error| {
+            tracing::error!(error = %e, "GPU validation error");
+        }));
         Ok(Self {
             instance,
             adapter,

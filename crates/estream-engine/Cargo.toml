@@ -9,6 +9,7 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+estream-audio.workspace = true
 estream-core.workspace = true
 estream-gpu.workspace = true
 estream-project.workspace = true

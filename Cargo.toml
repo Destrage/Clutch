@@ -10,6 +10,7 @@ repository = "https://github.com/estream/estream"
 rust-version = "1.90"
 
 [workspace.dependencies]
+estream-audio = { path = "crates/estream-audio" }
 estream-core = { path = "crates/estream-core" }
 estream-gpu = { path = "crates/estream-gpu" }
 estream-project = { path = "crates/estream-project" }
@@ -38,6 +39,10 @@ dirs = "7.0.0"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
 cosmic-text = "0.19.0"
 rfd = "0.17.2"
+cpal = "0.18.2"
+rubato = "5.0.1"
+rtrb = "0.4.0"
+nnnoiseless = { version = "0.5.2", default-features = false }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

@@ -194,6 +194,11 @@ impl VideoCore {
         self.sources
             .retain(|id, _| graph.sources.iter().any(|s| s.id == *id));
         for def in &graph.sources {
+            // Audio-only types (microphones…) have no video part.
+            if self.registry.get(&def.kind).is_some_and(|t| !t.has_video()) {
+                self.sources.remove(&def.id);
+                continue;
+            }
             match self.sources.get_mut(&def.id) {
                 Some(slot) if slot.kind == def.kind => {
                     if slot.settings != def.settings {

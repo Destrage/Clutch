@@ -10,6 +10,7 @@ description = "eStream capture and media sources (display, window, game, camera,
 workspace = true
 
 [dependencies]
+estream-audio.workspace = true
 estream-core.workspace = true
 cosmic-text.workspace = true
 image.workspace = true
@@ -36,6 +37,8 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
+    "Win32_Media_Audio",
+    "Win32_System_Diagnostics_ToolHelp",
     "Win32_Media_MediaFoundation",
     "Win32_Security",
     "Win32_System_Com",
@@ -47,6 +50,7 @@ windows = { version = "0.62", features = [
     "Win32_System_WinRT_Graphics_Capture",
     "Win32_UI_WindowsAndMessaging",
 ] }
+windows-core = "0.62"
 
 [dev-dependencies]
 estream-project.workspace = true
