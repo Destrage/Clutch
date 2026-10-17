@@ -70,6 +70,16 @@ $env:ESTREAM_HOME = "D:\estream-test"; .\target\release\estream.exe
 
 Stream keys are encrypted with Windows DPAPI and never written to project files.
 
+## Remote control
+
+Turn it on in **Settings → Remote control**. Then point Stream Deck, Touch Portal, Streamer.bot or any obs-websocket v5 client at the address shown there (port 4455 by default), using the password from the same section.
+
+To try requests by hand:
+
+```powershell
+cargo run -p estream-api --example obs-cli -- --password <password> GetSceneList SetCurrentProgramScene '{"sceneName":"Scene"}'
+```
+
 ## Tests
 
 ```powershell
@@ -93,6 +103,7 @@ crates/estream-capture  display/window/camera capture, browser source host
 crates/estream-audio    audio devices, mixer, audio filters
 crates/estream-media    FFmpeg encoding, recording, streaming, media player
 crates/estream-shm      shared-memory frames and audio between processes
+crates/estream-api      remote control server (obs-websocket v5 protocol)
 openspec/               specs and change proposals (start with openspec/project.md)
 ```
 

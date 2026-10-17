@@ -94,6 +94,16 @@ pub struct App {
     current_canvas: Option<CanvasId>,
     /// Last file written by a recording or replay save, for "Show in folder".
     last_output: Option<std::path::PathBuf>,
+    /// Last replay saved (reported to remote clients).
+    last_replay: Option<std::path::PathBuf>,
+    /// Last finished recording (reported to remote clients).
+    last_recording: Option<std::path::PathBuf>,
+    /// The remote control server, when enabled and running.
+    api: Option<estream_api::Api>,
+    /// Why the remote control server isn't running (port in use, …), or "".
+    api_error: String,
+    /// Restart the server at this time (debounces typing in the port and password fields).
+    remote_restart_at: Option<Instant>,
 }
 
 /// What the shader editor dialog applies to.
@@ -392,6 +402,11 @@ impl App {
             shader_target: ShaderTarget::Transition,
             current_canvas: None,
             last_output: None,
+            last_replay: None,
+            last_recording: None,
+            api: None,
+            api_error: String::new(),
+            remote_restart_at: None,
         };
         window.set_scenes(ModelRc::from(app.scenes_model.clone()));
         window.set_layers(ModelRc::from(app.layers_model.clone()));
@@ -411,6 +426,9 @@ impl App {
     /// Decides the startup flow: first-run wizard, crash recovery, or normal load.
     pub fn begin(&mut self) {
         let Some(w) = self.window() else { return };
+        if self.api.is_none() && self.api_error.is_empty() {
+            self.apply_remote();
+        }
         self.apply_theme();
         self.apply_layout(self.settings.layout);
         let info = &self.gpu.info;
@@ -532,6 +550,9 @@ impl App {
         match Engine::start(project, config) {
             Ok(engine) => {
                 self.subscription = Some(engine.subscribe());
+                if let Some(api) = &mut self.api {
+                    api.collection_changed();
+                }
                 self.engine = Some(engine);
                 self.settings.last_collection = Some(self.collection.clone());
                 if let Some(w) = self.window() {
@@ -552,6 +573,10 @@ impl App {
             return;
         }
         self.shut_down = true;
+        // Remote clients hear about it first (ExitStarted), then their sessions close.
+        if let Some(api) = self.api.take() {
+            api.shutdown();
+        }
         // Finish files cleanly before the engine goes away.
         if let Some(engine) = &self.engine {
             if let Some(rec) = self.recording.take() {
@@ -680,6 +705,7 @@ impl App {
         }
         if self.stats_at.elapsed() >= Duration::from_millis(500) {
             self.update_stats();
+            w.set_remote_status(self.remote_status().into());
             self.update_outputs();
         }
         if self.toast_until.is_some_and(|t| Instant::now() >= t) {
@@ -692,6 +718,7 @@ impl App {
             self.theme_checked_at = Instant::now();
             self.apply_theme();
         }
+        self.tick_api();
     }
 
     fn update_stats(&mut self) {
@@ -1836,6 +1863,7 @@ impl App {
                         ),
                     };
                     self.toast(message, false);
+                    self.last_recording = paths.first().cloned();
                     self.last_output = paths.into_iter().next();
                 }
                 Err(e) => self.toast(format!("Recording failed: {e}"), true),
@@ -1883,6 +1911,7 @@ impl App {
         match replay.save() {
             Ok(path) => {
                 self.toast(format!("Replay saved: {}", path.display()), false);
+                self.last_replay = Some(path.clone());
                 self.last_output = Some(path);
             }
             Err(e) => self.toast(format!("Couldn't save the replay: {e}"), true),
@@ -2193,6 +2222,10 @@ impl App {
                 .dest_selected
                 .and_then(|i| self.settings.destinations.get(i))
                 .map_or(0, |d| index_of(d.stream.canvas)),
+            remote_enabled: self.settings.remote.enabled,
+            remote_port: self.settings.remote.port as f32,
+            remote_auth: self.settings.remote.auth,
+            remote_password: self.settings.remote.password.clone().into(),
             ..stream_form(&self.settings.destinations, self.dest_selected)
         });
     }
@@ -2327,6 +2360,25 @@ impl App {
                 r.all_canvases = i >= ids.len();
                 r.canvas = ids.get(i).copied();
             }
+            "remote-enable" => {
+                self.settings.remote.enabled = value > 0.5;
+                self.remote_restart_at = Some(Instant::now());
+            }
+            "remote-auth" => {
+                self.settings.remote.auth = value > 0.5;
+                self.remote_restart_at = Some(Instant::now());
+            }
+            "remote-port" => {
+                self.settings.remote.port = value.clamp(1024.0, 65535.0) as u16;
+                self.remote_restart_at = Some(Instant::now() + Duration::from_millis(800));
+            }
+            "remote-apply" if self.remote_restart_at.is_some() => {
+                self.remote_restart_at = Some(Instant::now());
+            }
+            "remote-generate" => {
+                self.settings.remote.generate_password();
+                self.remote_restart_at = Some(Instant::now());
+            }
             "theme" => {
                 self.settings.theme = match i {
                     1 => ThemeMode::Light,
@@ -2386,6 +2438,11 @@ impl App {
             }
             ("filename", _) if !value.is_empty() => {
                 self.settings.recording.filename = value.to_owned()
+            }
+            ("remote-password" | "remote-password-draft", _) if !value.is_empty() => {
+                self.settings.remote.set_password(value);
+                let delay = if field == "remote-password" { 0 } else { 800 };
+                self.remote_restart_at = Some(Instant::now() + Duration::from_millis(delay));
             }
             _ => return,
         }
@@ -2656,6 +2713,65 @@ impl App {
         {
             player.seek(duration.mul_f32(fraction.clamp(0.0, 1.0)));
         }
+    }
+
+    // ------------------------------------------------------------ remote control
+
+    /// Starts, restarts or stops the remote control server to match the settings.
+    fn apply_remote(&mut self) {
+        if let Some(api) = self.api.take() {
+            api.invalidate();
+        }
+        self.api_error.clear();
+        let remote = &mut self.settings.remote;
+        if !remote.enabled {
+            return;
+        }
+        if remote.auth && remote.password.is_empty() {
+            remote.generate_password();
+            self.settings.save(&self.paths.settings());
+        }
+        let remote = &self.settings.remote;
+        let password = remote.auth.then(|| remote.password.clone());
+        match estream_api::Api::start(remote.port, password) {
+            Ok(api) => self.api = Some(api),
+            Err(e) => {
+                tracing::warn!(error = %e, "remote control server didn't start");
+                self.api_error = e.to_string();
+            }
+        }
+    }
+
+    fn tick_api(&mut self) {
+        if self.remote_restart_at.is_some_and(|t| Instant::now() >= t) {
+            self.remote_restart_at = None;
+            self.apply_remote();
+            self.refresh_settings_form();
+        }
+        if let Some(mut api) = self.api.take() {
+            api.tick(self);
+            self.api = Some(api);
+        }
+    }
+
+    /// One line for Settings: where clients connect and how many are connected.
+    fn remote_status(&self) -> String {
+        if !self.settings.remote.enabled {
+            return "Off".into();
+        }
+        if !self.api_error.is_empty() {
+            return format!("Not running: {}", self.api_error);
+        }
+        let Some(api) = &self.api else {
+            return "Starting…".into();
+        };
+        let host = local_ip().unwrap_or_else(|| "localhost".into());
+        let clients = match api.client_count() {
+            0 => "no clients connected".to_owned(),
+            1 => "1 client connected".to_owned(),
+            n => format!("{n} clients connected"),
+        };
+        format!("ws://{host}:{} · {clients}", api.port())
     }
 
     // ------------------------------------------------------------ browser sources
@@ -3887,6 +4003,232 @@ impl App {
             })
             .collect();
         self.palette_model.set_vec(entries);
+    }
+}
+
+/// This machine's LAN address (what remote controllers on other devices connect to).
+fn local_ip() -> Option<String> {
+    // Connecting a UDP socket sends nothing; it only picks the outgoing interface.
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("192.0.2.1:9").ok()?;
+    let ip = socket.local_addr().ok()?.ip();
+    (!ip.is_unspecified()).then(|| ip.to_string())
+}
+
+/// The app side of the remote control API: studio mode, outputs and players go through the
+/// same actions as the buttons.
+impl estream_api::Studio for App {
+    fn engine(&self) -> Option<&Engine> {
+        self.engine.as_ref()
+    }
+
+    fn collection_name(&self) -> String {
+        App::collection_name(self)
+    }
+
+    fn record_directory(&self) -> PathBuf {
+        self.settings.recording.folder.clone()
+    }
+
+    fn studio_mode(&self) -> bool {
+        self.studio
+    }
+
+    fn set_studio_mode(&mut self, enabled: bool) {
+        if enabled != self.studio {
+            self.toggle_studio();
+        }
+    }
+
+    fn preview_scene(&self) -> Option<SceneId> {
+        self.studio.then_some(self.preview_scene).flatten()
+    }
+
+    fn set_preview_scene(&mut self, scene: SceneId) -> Result<(), String> {
+        let canvas = self
+            .engine
+            .as_ref()
+            .and_then(|e| e.snapshot().scene(scene).map(|s| s.canvas))
+            .ok_or("that scene no longer exists")?;
+        let current = self
+            .engine
+            .as_ref()
+            .and_then(|e| self.canvas_of(&e.snapshot()).map(|c| c.id));
+        if current != Some(canvas) {
+            self.canvas_select(&canvas.to_string());
+        }
+        self.show_in_preview(canvas, scene);
+        Ok(())
+    }
+
+    fn trigger_studio_transition(&mut self) -> Result<(), String> {
+        if self.preview_scene.is_none() {
+            return Err("the Preview is empty".into());
+        }
+        self.studio_go("go");
+        Ok(())
+    }
+
+    fn output_status(&self, output: estream_api::Output) -> estream_api::OutputStatus {
+        use estream_api::{Output, OutputStatus};
+        use std::sync::atomic::Ordering::Relaxed;
+        match output {
+            Output::Stream => {
+                let Some(stream) = self.stream.as_ref().filter(|s| s.is_active()) else {
+                    return OutputStatus::default();
+                };
+                let dests = stream.destinations();
+                OutputStatus {
+                    active: true,
+                    reconnecting: dests
+                        .iter()
+                        .any(|d| d.state() == estream_media::StreamState::Reconnecting),
+                    duration: stream.elapsed(),
+                    bytes: dests.iter().map(|d| d.stats.bytes.load(Relaxed)).sum(),
+                    skipped_frames: dests
+                        .iter()
+                        .map(|d| d.stats.network.dropped.load(Relaxed))
+                        .sum(),
+                    total_frames: (0..stream.encoder_count())
+                        .filter_map(|i| stream.encoder_stats(i))
+                        .map(|s| s.frames.load(Relaxed))
+                        .sum(),
+                }
+            }
+            Output::Record => match &self.recording {
+                Some(rec) => {
+                    let stats = rec.stats();
+                    OutputStatus {
+                        active: true,
+                        reconnecting: false,
+                        duration: rec.elapsed(),
+                        bytes: stats.bytes.load(Relaxed),
+                        skipped_frames: stats.dropped.load(Relaxed),
+                        total_frames: stats.frames.load(Relaxed),
+                    }
+                }
+                None => OutputStatus::default(),
+            },
+            Output::ReplayBuffer => OutputStatus {
+                active: self.replay.is_some(),
+                ..Default::default()
+            },
+        }
+    }
+
+    fn set_output_active(
+        &mut self,
+        output: estream_api::Output,
+        active: bool,
+    ) -> Result<Option<PathBuf>, String> {
+        use estream_api::Output;
+        let running = |app: &App| app.output_status(output).active;
+        if running(self) == active {
+            return Ok(None);
+        }
+        match output {
+            Output::Stream => self.toggle_stream(),
+            Output::Record => self.toggle_recording(),
+            Output::ReplayBuffer => self.toggle_replay(),
+        }
+        if active && !running(self) {
+            return Err(match output {
+                Output::Stream => "couldn't go live (check the stream destinations in eStream)",
+                Output::Record => "couldn't start recording (see eStream for details)",
+                Output::ReplayBuffer => "couldn't start the replay buffer",
+            }
+            .into());
+        }
+        Ok((!active && output == Output::Record)
+            .then(|| self.last_recording.clone())
+            .flatten())
+    }
+
+    fn save_replay(&mut self) -> Result<PathBuf, String> {
+        let before = self.last_replay.clone();
+        App::save_replay(self);
+        match &self.last_replay {
+            Some(path) if self.last_replay != before => Ok(path.clone()),
+            _ => Err("couldn't save the replay".into()),
+        }
+    }
+
+    fn last_replay(&self) -> Option<PathBuf> {
+        self.last_replay.clone()
+    }
+
+    fn last_recording(&self) -> Option<PathBuf> {
+        self.last_recording.clone()
+    }
+
+    fn media_status(&self, source: SourceId) -> Option<estream_api::MediaStatus> {
+        use estream_api::MediaState;
+        use estream_media::player::PlayState;
+        let player = estream_media::player::get(&source.to_string())?;
+        let s = player.status();
+        let state = match s.state {
+            PlayState::Idle => MediaState::None,
+            PlayState::Playing => MediaState::Playing,
+            PlayState::Paused => MediaState::Paused,
+            PlayState::Ended => MediaState::Ended,
+        };
+        Some(estream_api::MediaStatus {
+            state,
+            duration: s.duration,
+            position: (state != MediaState::None).then_some(s.position),
+        })
+    }
+
+    fn media_action(
+        &mut self,
+        source: SourceId,
+        action: estream_api::MediaAction,
+    ) -> Result<(), String> {
+        use estream_api::MediaAction;
+        use estream_media::player::PlayState;
+        let player = estream_media::player::get(&source.to_string())
+            .ok_or("the media source isn't loaded")?;
+        match action {
+            MediaAction::Play if player.status().state == PlayState::Ended => {
+                player.set_paused(false);
+                player.restart();
+            }
+            MediaAction::Play => player.set_paused(false),
+            MediaAction::Pause => player.set_paused(true),
+            MediaAction::Stop => {
+                player.restart();
+                player.set_paused(true);
+            }
+            MediaAction::Restart => {
+                player.set_paused(false);
+                player.restart();
+            }
+            MediaAction::Next => player.next(),
+            MediaAction::Previous => player.previous(),
+        }
+        Ok(())
+    }
+
+    fn media_seek(&mut self, source: SourceId, position: Duration) -> Result<(), String> {
+        let player = estream_media::player::get(&source.to_string())
+            .ok_or("the media source isn't loaded")?;
+        player.seek(position);
+        Ok(())
+    }
+
+    fn press_input_button(&mut self, source: SourceId, property: &str) -> Result<(), String> {
+        let kind = self
+            .engine
+            .as_ref()
+            .and_then(|e| e.snapshot().source(source).map(|s| s.kind.clone()))
+            .ok_or("that input no longer exists")?;
+        match (kind.as_str(), property) {
+            ("browser", "refreshnocache" | "refresh") => {
+                estream_capture::media::browser::reload(&source.to_string());
+                Ok(())
+            }
+            _ => Err(format!("“{kind}” inputs have no “{property}” button")),
+        }
     }
 }
 

@@ -91,6 +91,8 @@ pub struct Settings {
     pub recording: estream_media::RecordingSettings,
     /// Where Go Live streams to.
     pub destinations: Vec<DestinationConfig>,
+    /// The obs-websocket compatible remote control server.
+    pub remote: RemoteSettings,
     /// Single-stream settings from before multistream; read once, migrated, never written.
     #[serde(rename = "stream", skip_serializing)]
     legacy_stream: Option<estream_media::StreamSettings>,
@@ -135,6 +137,53 @@ impl DestinationConfig {
     }
 }
 
+/// Remote control (obs-websocket v5) server settings.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RemoteSettings {
+    pub enabled: bool,
+    pub port: u16,
+    /// Require the password (recommended; anyone on the network could connect otherwise).
+    pub auth: bool,
+    /// In memory only; saved encrypted in `password_protected`.
+    #[serde(skip)]
+    pub password: String,
+    pub password_protected: String,
+}
+
+impl Default for RemoteSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: 4455,
+            auth: true,
+            password: String::new(),
+            password_protected: String::new(),
+        }
+    }
+}
+
+impl RemoteSettings {
+    pub fn set_password(&mut self, password: &str) {
+        self.password = password.trim().to_owned();
+        self.password_protected = crate::secret::protect(&self.password);
+    }
+
+    /// A random 16-character password (letters and digits, no look-alikes).
+    pub fn generate_password(&mut self) {
+        const CHARS: &[u8] = b"abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+        let mut bytes = [0u8; 16];
+        if getrandom::fill(&mut bytes).is_err() {
+            bytes = std::array::from_fn(|_| fastrand::u8(..));
+        }
+        let password: String = bytes
+            .iter()
+            .map(|b| CHARS[*b as usize % CHARS.len()] as char)
+            .collect();
+        self.set_password(&password);
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -146,6 +195,7 @@ impl Default for Settings {
             last_collection: None,
             recording: estream_media::RecordingSettings::default(),
             destinations: Vec::new(),
+            remote: RemoteSettings::default(),
             legacy_stream: None,
             legacy_key: None,
         }
@@ -166,6 +216,7 @@ impl Settings {
         for d in &mut settings.destinations {
             d.stream.key = crate::secret::unprotect(&d.key_protected);
         }
+        settings.remote.password = crate::secret::unprotect(&settings.remote.password_protected);
         settings
     }
 

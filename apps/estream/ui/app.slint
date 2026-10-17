@@ -59,6 +59,7 @@ export component AppWindow inherits Window {
     callback media-seek(float);
     in property <bool> browser-selected;
     in property <string> browser-status;
+    in property <string> remote-status;
     callback browser-reload();
     in property <[string]> video-filter-kinds;
     callback vfilter-add(int);
@@ -452,6 +453,7 @@ export component AppWindow inherits Window {
 
     if root.settings-open: SettingsDialog {
         form: root.settings-form;
+        remote-status: root.remote-status;
         set(k, v) => { root.settings-set(k, v); }
         set-text(k, v) => { root.settings-text(k, v); }
         browse => { root.settings-browse(); }

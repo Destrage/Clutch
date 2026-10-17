@@ -536,6 +536,8 @@ component DestinationEditor inherits VerticalLayout {
 
 export component SettingsDialog inherits Modal {
     in property <SettingsForm> form;
+    in property <string> remote-status;
+    property <bool> reveal-password: false;
     callback set(string, float);
     callback set-text(string, string);
     callback browse();
@@ -748,6 +750,59 @@ export component SettingsDialog inherits Modal {
             SettingRow {
                 label: "Length";
                 NumberField { label: ""; value: root.form.replay-seconds; minimum: 5; maximum: 300; step: 5; suffix: "s"; changed(v) => { root.set("replay-seconds", v); } }
+            }
+
+            SectionTitle { text: "REMOTE CONTROL"; }
+            Text {
+                text: "Lets Stream Deck, Touch Portal, Streamer.bot and other obs-websocket tools control eStream.";
+                color: Theme.text-faint;
+                font-size: Theme.font-s;
+                wrap: word-wrap;
+            }
+            SettingRow {
+                label: "Enable server";
+                hint: root.remote-status;
+                HorizontalLayout {
+                    alignment: start;
+                    VerticalLayout {
+                        alignment: center;
+                        Toggle { checked: root.form.remote-enabled; toggled(v) => { root.set("remote-enable", v ? 1 : 0); } }
+                    }
+                }
+            }
+            SettingRow {
+                label: "Port";
+                NumberField { label: ""; value: root.form.remote-port; minimum: 1024; maximum: 65535; step: 1; changed(v) => { root.set("remote-port", v); } committed => { root.set("remote-apply", 0); } }
+            }
+            SettingRow {
+                label: "Require password";
+                hint: "Recommended: anyone on your network could connect otherwise.";
+                HorizontalLayout {
+                    alignment: start;
+                    VerticalLayout {
+                        alignment: center;
+                        Toggle { checked: root.form.remote-auth; toggled(v) => { root.set("remote-auth", v ? 1 : 0); } }
+                    }
+                }
+            }
+            if root.form.remote-auth: SettingRow {
+                label: "Password";
+                HorizontalLayout {
+                    spacing: 6px;
+                    TextField {
+                        label: "Password";
+                        text: root.form.remote-password;
+                        input-type: root.reveal-password ? InputType.text : InputType.password;
+                        accepted(t) => { root.set-text("remote-password", t); }
+                        edited(t) => { root.set-text("remote-password-draft", t); }
+                    }
+                    IconButton {
+                        icon: root.reveal-password ? Icons.eye-off : Icons.eye;
+                        tooltip: root.reveal-password ? "Hide password" : "Show password";
+                        clicked => { root.reveal-password = !root.reveal-password; }
+                    }
+                    Button { text: "Generate"; kind: "ghost"; tooltip: "Make a new random password"; clicked => { root.set("remote-generate", 0); } }
+                }
             }
 
             SectionTitle { text: "APPEARANCE"; }

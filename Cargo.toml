@@ -16,6 +16,7 @@ estream-shm = { path = "crates/estream-shm" }
 estream-gpu = { path = "crates/estream-gpu" }
 estream-project = { path = "crates/estream-project" }
 estream-engine = { path = "crates/estream-engine" }
+estream-api = { path = "crates/estream-api" }
 
 anyhow = "1.0.104"
 arc-swap = "1.9.2"
