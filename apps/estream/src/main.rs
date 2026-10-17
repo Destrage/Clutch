@@ -6,6 +6,7 @@ mod actions;
 mod app;
 mod interact;
 mod presets;
+mod secret;
 mod settings;
 
 #[allow(clippy::all, clippy::unwrap_used, clippy::expect_used)]

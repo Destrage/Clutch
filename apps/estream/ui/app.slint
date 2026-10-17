@@ -71,6 +71,10 @@ export component AppWindow inherits Window {
     in property <bool> recording;
     in property <string> record-time;
     in property <bool> replay-active;
+    in property <int> stream-state;
+    in property <string> stream-time;
+    in property <string> stream-info;
+    in property <int> stream-health;
     in-out property <bool> settings-open;
     in property <SettingsForm> settings-form;
     in property <string> toast-text;
@@ -169,6 +173,9 @@ export component AppWindow inherits Window {
                 recording: root.recording;
                 record-time: root.record-time;
                 replay-active: root.replay-active;
+                stream-state: root.stream-state;
+                stream-time: root.stream-time;
+                toggle-stream => { root.action("stream.toggle"); }
                 toggle-record => { root.action("record.toggle"); }
                 toggle-replay => { root.action("replay.toggle"); }
                 save-replay => { root.action("replay.save"); }
@@ -285,6 +292,8 @@ export component AppWindow inherits Window {
                 lagged: root.lagged;
                 gpu: root.gpu-info;
                 message: root.status-message;
+                stream-info: root.stream-info;
+                stream-health: root.stream-health;
             }
         }
     }

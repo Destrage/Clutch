@@ -15,7 +15,10 @@ export component TopBar inherits Rectangle {
     in property <bool> recording;
     in property <string> record-time;
     in property <bool> replay-active;
+    in property <int> stream-state;
+    in property <string> stream-time;
     callback open-palette();
+    callback toggle-stream();
     callback undo();
     callback redo();
     callback toggle-theme();
@@ -185,13 +188,18 @@ export component TopBar inherits Rectangle {
         }
         VerticalLayout {
             alignment: center;
+            // stream-state: 0 off, 1 connecting, 2 live, 3 reconnecting
             Button {
-                text: "Go Live";
+                text: root.stream-state == 0 ? "Go Live"
+                    : root.stream-state == 1 ? "Connecting…"
+                    : root.stream-state == 3 ? "Reconnecting…"
+                    : root.stream-time;
                 has-icon: true;
-                icon: Icons.radio;
-                kind: "live";
-                enabled: false;
-                tooltip: "Streaming arrives with the add-streaming-outputs change";
+                icon: root.stream-state == 2 ? Icons.square : Icons.radio;
+                kind: root.stream-state == 3 ? "danger" : root.stream-state == 1 ? "default" : "live";
+                active: root.stream-state == 2;
+                tooltip: root.stream-state == 0 ? "Start streaming" : "Stop streaming";
+                clicked => { root.toggle-stream(); }
             }
         }
     }
@@ -1003,6 +1011,9 @@ export component StatusBar inherits Rectangle {
     in property <int> lagged;
     in property <string> gpu;
     in property <string> message;
+    /// Live stream summary; `stream-health` 0 = not streaming, 1 good, 2 congested, 3 failing.
+    in property <string> stream-info;
+    in property <int> stream-health;
 
     height: 28px;
     background: Theme.bg;
@@ -1038,6 +1049,24 @@ export component StatusBar inherits Rectangle {
         }
         Text { text: root.gpu; color: Theme.text-faint; font-size: Theme.font-xs; vertical-alignment: center; overflow: elide; }
         Rectangle { horizontal-stretch: 1; }
+        if root.stream-health > 0: HorizontalLayout {
+            spacing: 6px;
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 7px;
+                    height: 7px;
+                    border-radius: 3.5px;
+                    background: root.stream-health == 1 ? Theme.ok : root.stream-health == 2 ? Theme.warn : Theme.live;
+                }
+            }
+            Text {
+                text: root.stream-info;
+                color: root.stream-health == 1 ? Theme.text-muted : root.stream-health == 2 ? Theme.warn : Theme.live;
+                font-size: Theme.font-xs;
+                vertical-alignment: center;
+            }
+        }
         Text { text: root.message; color: Theme.text-faint; font-size: Theme.font-xs; vertical-alignment: center; }
     }
 }

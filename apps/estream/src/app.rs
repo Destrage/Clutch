@@ -77,8 +77,77 @@ pub struct App {
     theme_checked_at: Instant,
     recording: Option<estream_media::Recording>,
     replay: Option<estream_media::ReplayBuffer>,
+    stream: Option<estream_media::Stream>,
+    /// Last bitrate sample: (time, bytes sent, kbps).
+    stream_rate: (Instant, u64, f64),
     /// Last file written by a recording or replay save, for "Show in folder".
     last_output: Option<std::path::PathBuf>,
+}
+
+/// The Stream section of the settings form (other fields left default).
+fn stream_form(s: &estream_media::StreamSettings) -> SettingsForm {
+    use estream_media::{Protocol, Service, VideoCodec, encode};
+    let encoders = encode::available(s.codec);
+    let mut encoder_names = vec![SharedString::from("Automatic (best available)")];
+    encoder_names.extend(encoders.iter().map(|e| SharedString::from(e.label)));
+    let protocol = match s.protocol() {
+        Some(Protocol::Rtmp) => {
+            let base = if s.server.trim().to_ascii_lowercase().starts_with("rtmps") {
+                "RTMPS (encrypted)"
+            } else {
+                "RTMP"
+            };
+            if s.codec == VideoCodec::H264 {
+                base.to_owned()
+            } else {
+                format!("{base}, Enhanced RTMP")
+            }
+        }
+        Some(p) => p.label().to_owned(),
+        None => String::new(),
+    };
+    let warning = match s.validate() {
+        // Nothing entered yet: no need to nag.
+        Err(_) if s.server.trim().is_empty() && s.key.is_empty() => String::new(),
+        Err(problem) => problem,
+        Ok(_) => match s.service.max_video_kbps() {
+            Some(max) if s.codec == VideoCodec::H264 && s.bitrate_kbps > max => format!(
+                "{} accepts at most {max} kbps for H.264; higher bitrates may be rejected.",
+                s.service.label()
+            ),
+            _ => String::new(),
+        },
+    };
+    SettingsForm {
+        stream_services: ModelRc::new(VecModel::from(
+            Service::ALL
+                .iter()
+                .map(|s| SharedString::from(s.label()))
+                .collect::<Vec<_>>(),
+        )),
+        stream_service: Service::ALL
+            .iter()
+            .position(|v| *v == s.service)
+            .unwrap_or(0) as i32,
+        stream_server: s.server.clone().into(),
+        stream_key_set: !s.key.is_empty(),
+        stream_protocol: protocol.into(),
+        stream_warning: warning.into(),
+        stream_codec: VideoCodec::ALL
+            .iter()
+            .position(|c| *c == s.codec)
+            .unwrap_or(0) as i32,
+        stream_encoders: ModelRc::new(VecModel::from(encoder_names)),
+        stream_encoder: encoders
+            .iter()
+            .position(|e| e.name == s.encoder)
+            .map_or(0, |i| i + 1) as i32,
+        stream_bitrate: s.bitrate_kbps as f32,
+        stream_audio_bitrate: s.audio_bitrate_kbps as f32,
+        stream_track: s.audio_track as i32,
+        stream_reconnect: s.reconnect,
+        ..Default::default()
+    }
 }
 
 fn id_str(id: impl std::fmt::Display) -> SharedString {
@@ -241,6 +310,8 @@ impl App {
             theme_checked_at: Instant::now(),
             recording: None,
             replay: None,
+            stream: None,
+            stream_rate: (Instant::now(), 0, 0.0),
             last_output: None,
         };
         window.set_scenes(ModelRc::from(app.scenes_model.clone()));
@@ -408,6 +479,9 @@ impl App {
             }
             if let Some(replay) = self.replay.take() {
                 let _ = replay.stop(engine);
+            }
+            if let Some(stream) = self.stream.take() {
+                let _ = stream.stop(engine);
             }
         }
         if let Some(w) = self.window() {
@@ -1069,6 +1143,31 @@ impl App {
 
     // ------------------------------------------------------------ outputs
 
+    fn toggle_stream(&mut self) {
+        let Some(engine) = &self.engine else { return };
+        if let Some(stream) = self.stream.take() {
+            stream.stop_in_background(engine);
+            self.toast("Stream ended".into(), false);
+        } else if let Err(problem) = self.settings.stream.validate() {
+            // Missing server or key: take the user straight to where it's set.
+            self.toast(problem, true);
+            self.refresh_settings_form();
+            if let Some(w) = self.window() {
+                w.set_settings_open(true);
+            }
+        } else {
+            match estream_media::Stream::start(engine, &self.settings.stream) {
+                Ok(stream) => {
+                    self.toast(format!("Connecting to {}", stream.destination), false);
+                    self.stream = Some(stream);
+                    self.stream_rate = (Instant::now(), 0, 0.0);
+                }
+                Err(e) => self.toast(format!("Couldn't go live: {e}"), true),
+            }
+        }
+        self.update_outputs();
+    }
+
     fn toggle_recording(&mut self) {
         let Some(engine) = &self.engine else { return };
         if let Some(rec) = self.recording.take() {
@@ -1169,6 +1268,7 @@ impl App {
             }
             self.toast(format!("Recording stopped: {error}"), true);
         }
+        self.update_stream();
         w.set_recording(self.recording.is_some());
         w.set_replay_active(self.replay.is_some());
         let Some(rec) = &self.recording else {
@@ -1205,6 +1305,81 @@ impl App {
             )
             .into(),
         );
+    }
+
+    /// Go Live button state, timer and the stream health line in the status bar.
+    fn update_stream(&mut self) {
+        use estream_media::StreamState;
+        use std::sync::atomic::Ordering::Relaxed;
+        let Some(w) = self.window() else { return };
+        let failed = self
+            .stream
+            .as_ref()
+            .and_then(|s| s.stats().error.lock().ok().and_then(|e| e.clone()));
+        if let Some(error) = failed {
+            if let (Some(engine), Some(stream)) = (&self.engine, self.stream.take()) {
+                stream.stop_in_background(engine);
+            }
+            self.toast(format!("Stream ended: {error}"), true);
+        }
+        let Some(stream) = &self.stream else {
+            w.set_stream_state(0);
+            w.set_stream_health(0);
+            w.set_stream_info("".into());
+            return;
+        };
+        if let Some(engine) = &self.engine {
+            stream.poll(engine);
+        }
+        let stats = stream.stats();
+        let net = &stats.network;
+        let state = stream.state();
+        w.set_stream_state(match state {
+            StreamState::Connecting => 1,
+            StreamState::Live => 2,
+            StreamState::Reconnecting | StreamState::Stopped => 3,
+        });
+        let secs = stream.elapsed().as_secs();
+        w.set_stream_time(
+            format!("{:02}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60).into(),
+        );
+
+        // Sent bitrate over the last second or so.
+        let bytes = stats.bytes.load(Relaxed);
+        let (at, prev, _) = self.stream_rate;
+        let dt = at.elapsed().as_secs_f64();
+        if dt >= 1.0 {
+            let kbps = bytes.saturating_sub(prev) as f64 * 8.0 / dt / 1000.0;
+            self.stream_rate = (Instant::now(), bytes, kbps);
+        }
+        let kbps = self.stream_rate.2;
+        let frames = stats.frames.load(Relaxed).max(1);
+        let dropped = net.dropped.load(Relaxed) + stats.dropped.load(Relaxed);
+        let percent = dropped as f64 * 100.0 / frames as f64;
+        let queue_ms = net.queue_ms.load(Relaxed);
+        let (health, info) = match state {
+            StreamState::Live => {
+                let congested = queue_ms > 300 || percent > 1.0;
+                let encoder = stats.encoder.lock().map(|e| e.clone()).unwrap_or_default();
+                (
+                    if congested { 2 } else { 1 },
+                    format!(
+                        "LIVE · {kbps:.0} kb/s · {dropped} dropped ({percent:.1}%) · {encoder}"
+                    ),
+                )
+            }
+            StreamState::Connecting => (2, format!("Connecting to {}…", stream.destination)),
+            StreamState::Reconnecting | StreamState::Stopped => (
+                3,
+                format!(
+                    "Reconnecting to {} (attempt {})…",
+                    stream.destination,
+                    net.attempt.load(Relaxed)
+                ),
+            ),
+        };
+        w.set_stream_health(health);
+        w.set_stream_info(info.into());
     }
 
     // ------------------------------------------------------------ settings dialog
@@ -1265,12 +1440,42 @@ impl App {
                 ThemeMode::System => 2,
             },
             ffmpeg: format!("FFmpeg libavutil {}", estream_media::version()).into(),
+            ..stream_form(&self.settings.stream)
         });
     }
 
     pub fn settings_set(&mut self, field: &str, value: f32) {
-        use estream_media::{AudioCodec, Container, Preset, RateControl, VideoCodec, encode};
+        use estream_media::{
+            AudioCodec, Container, Preset, RateControl, Service, VideoCodec, encode,
+        };
         let i = value.round().max(0.0) as usize;
+        let s = &mut self.settings.stream;
+        match field {
+            "stream-service" => {
+                s.service = Service::ALL.get(i).copied().unwrap_or_default();
+                if s.service != Service::Custom {
+                    s.server = s.service.default_server().to_owned();
+                }
+            }
+            "stream-codec" => {
+                s.codec = VideoCodec::ALL.get(i).copied().unwrap_or_default();
+                s.encoder = "auto".into();
+            }
+            "stream-encoder" => {
+                s.encoder = if i == 0 {
+                    "auto".into()
+                } else {
+                    encode::available(s.codec)
+                        .get(i - 1)
+                        .map_or("auto".into(), |e| e.name.to_owned())
+                }
+            }
+            "stream-bitrate" => s.bitrate_kbps = value.clamp(500.0, 50_000.0) as u32,
+            "stream-audio-bitrate" => s.audio_bitrate_kbps = value.clamp(64.0, 320.0) as u32,
+            "stream-track" => s.audio_track = i.min(5) as u8,
+            "stream-reconnect" => s.reconnect = value > 0.5,
+            _ => {}
+        }
         let r = &mut self.settings.recording;
         match field {
             "container" => r.container = Container::ALL.get(i).copied().unwrap_or_default(),
@@ -1334,6 +1539,8 @@ impl App {
     pub fn settings_text(&mut self, field: &str, value: &str) {
         let value = value.trim();
         match field {
+            "stream-server" => self.settings.stream.server = value.to_owned(),
+            "stream-key" => self.settings.set_stream_key(value),
             "folder" if !value.is_empty() => self.settings.recording.folder = PathBuf::from(value),
             "filename" if !value.is_empty() => self.settings.recording.filename = value.to_owned(),
             _ => return,
@@ -2236,6 +2443,7 @@ impl App {
             }
             Action::ToggleRecording => self.toggle_recording(),
             Action::ToggleReplay => self.toggle_replay(),
+            Action::ToggleStream => self.toggle_stream(),
             Action::SaveReplay => self.save_replay(),
             Action::RevealOutput => self.reveal_output(),
             Action::OpenSettings => {

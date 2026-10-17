@@ -5,7 +5,8 @@ use crate::MediaError;
 use crate::encode::{self, AudioEncoder, VideoEncoder};
 use crate::ffmpeg;
 use crate::mux::{Muxer, PacketRing, StreamSpec, remux};
-use crate::settings::{Container, RecordingSettings};
+use crate::settings::{Container, RecordingSettings, StreamSettings, redact};
+use crate::stream::{Entry, NetTarget, NetworkStats, StreamState};
 use crossbeam_channel::{Receiver, Sender, bounded, select};
 use estream_audio::{Block, TRACKS, TrackSink};
 use estream_core::{CanvasId, Rational, Timestamp};
@@ -26,6 +27,8 @@ pub struct OutputStats {
     pub encoder: Mutex<String>,
     /// Set if the output failed while running.
     pub error: Mutex<Option<String>>,
+    /// Streaming outputs only.
+    pub network: NetworkStats,
 }
 
 struct AudioChunk {
@@ -55,6 +58,14 @@ impl TrackSink for ChannelSink {
 enum Target {
     File(Muxer),
     Replay(PacketRing),
+    Network(NetTarget),
+}
+
+/// What a session produces.
+enum Kind {
+    File(PathBuf),
+    Replay,
+    Network(Box<StreamSettings>),
 }
 
 enum Control {
@@ -77,8 +88,7 @@ impl Session {
     fn start(
         engine: &Engine,
         settings: &RecordingSettings,
-        replay: Option<PathBuf>,
-        path: Option<PathBuf>,
+        kind: Kind,
     ) -> Result<Self, MediaError> {
         crate::init();
         let snapshot = engine.snapshot();
@@ -123,8 +133,7 @@ impl Session {
                         control_rx,
                         stop,
                         stats: stats.clone(),
-                        replay,
-                        path,
+                        kind,
                     });
                     if let Err(e) = &result {
                         tracing::error!(error = %e, "output failed");
@@ -158,11 +167,20 @@ impl Session {
         }
     }
 
-    fn stop(mut self, engine: &Engine) -> Result<(), MediaError> {
+    /// Disconnects from the engine and asks the encoder thread to finish.
+    fn detach(&mut self, engine: &Engine) {
         self.update_dropped(engine);
         engine.remove_video_consumer(self.consumer);
         self.sink_closed.store(true, Ordering::Release);
         self.stop.store(true, Ordering::Release);
+    }
+
+    fn stop(mut self, engine: &Engine) -> Result<(), MediaError> {
+        self.detach(engine);
+        self.join()
+    }
+
+    fn join(mut self) -> Result<(), MediaError> {
         match self.thread.take().map(|t| t.join()) {
             Some(Ok(result)) => result,
             _ => Err(MediaError::Engine("encoder thread panicked".into())),
@@ -179,9 +197,7 @@ struct Run {
     control_rx: Receiver<Control>,
     stop: Arc<AtomicBool>,
     stats: Arc<OutputStats>,
-    /// Replay buffer: folder for saved replays is taken from settings; `Some` = replay mode.
-    replay: Option<PathBuf>,
-    path: Option<PathBuf>,
+    kind: Kind,
 }
 
 fn run(r: Run) -> Result<(), MediaError> {
@@ -220,18 +236,19 @@ fn run(r: Run) -> Result<(), MediaError> {
         time_base: a.time_base,
         is_video: false,
     }));
-    let target = match &r.replay {
-        Some(_) => Target::Replay(PacketRing::new(
+    let time_bases = specs.iter().map(|s| s.time_base).collect();
+    let target = match r.kind {
+        Kind::Replay => Target::Replay(PacketRing::new(
             specs,
             r.settings.replay_seconds.clamp(5, 300) as f64,
         )),
-        None => {
-            let path = r
-                .path
-                .clone()
-                .ok_or_else(|| MediaError::Io("no output path".into()))?;
-            Target::File(Muxer::create(&path, r.settings.container, &specs)?)
-        }
+        Kind::File(path) => Target::File(Muxer::create(&path, r.settings.container, &specs)?),
+        Kind::Network(stream) => Target::Network(NetTarget::start(
+            *stream,
+            specs,
+            r.stop.clone(),
+            r.stats.clone(),
+        )?),
     };
 
     let mut state = State {
@@ -243,6 +260,7 @@ fn run(r: Run) -> Result<(), MediaError> {
         last_pts: -1,
         audio_started: false,
         tracks,
+        time_bases,
     };
     state.video(first, &mut video)?;
 
@@ -251,8 +269,8 @@ fn run(r: Run) -> Result<(), MediaError> {
             recv(r.video_rx) -> f => if let Ok(f) = f { state.video(f, &mut video)?; },
             recv(r.audio_rx) -> a => if let Ok(a) = a { state.audio(a, &mut audio)?; },
             recv(r.control_rx) -> c => if let Ok(Control::SaveReplay(reply)) = c {
-                let result = match (&state.target, &r.replay) {
-                    (Target::Replay(ring), Some(_)) => {
+                let result = match &state.target {
+                    Target::Replay(ring) => {
                         let container = replay_container(&r.settings);
                         let path = r.settings.next_path(" Replay", container);
                         ring.save(&path, container).map(|_| path)
@@ -278,8 +296,10 @@ fn run(r: Run) -> Result<(), MediaError> {
     if let Some(e) = state.write_error.take() {
         return Err(e);
     }
-    if let Target::File(m) = state.target {
-        m.finish()?;
+    match state.target {
+        Target::File(m) => m.finish()?,
+        Target::Network(net) => net.finish(),
+        Target::Replay(_) => {}
     }
     Ok(())
 }
@@ -294,6 +314,7 @@ struct State {
     last_pts: i64,
     audio_started: bool,
     tracks: Vec<usize>,
+    time_bases: Vec<ffmpeg::Rational>,
 }
 
 impl State {
@@ -309,6 +330,22 @@ impl State {
                 ring.push(stream, packet);
                 self.stats.bytes.store(ring.bytes, Ordering::Relaxed);
             }
+            Target::Network(net) => {
+                let tb = self
+                    .time_bases
+                    .get(stream)
+                    .copied()
+                    .unwrap_or(ffmpeg::Rational(1, 1));
+                let time = packet.pts().or(packet.dts()).unwrap_or(0) as f64 * tb.0 as f64
+                    / tb.1.max(1) as f64;
+                net.queue.push(Entry {
+                    stream,
+                    video: stream == 0,
+                    key: packet.is_key(),
+                    time,
+                    payload: packet,
+                });
+            }
         }
     }
 
@@ -319,7 +356,11 @@ impl State {
             return Ok(()); // keep frame timestamps strictly increasing
         }
         self.last_pts = pts;
-        encoder.encode(&frame, pts, &mut |p| self.write(0, p))?;
+        let force_key = match &self.target {
+            Target::Network(net) => net.force_key.swap(false, Ordering::AcqRel),
+            _ => false,
+        };
+        encoder.encode(&frame, pts, force_key, &mut |p| self.write(0, p))?;
         self.stats.frames.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
@@ -362,7 +403,7 @@ pub struct Recording {
 impl Recording {
     pub fn start(engine: &Engine, settings: &RecordingSettings) -> Result<Self, MediaError> {
         let path = settings.next_path("", settings.container);
-        let session = Session::start(engine, settings, None, Some(path.clone()))?;
+        let session = Session::start(engine, settings, Kind::File(path.clone()))?;
         tracing::info!(path = %path.display(), "recording started");
         Ok(Self {
             session,
@@ -406,7 +447,7 @@ pub struct ReplayBuffer {
 
 impl ReplayBuffer {
     pub fn start(engine: &Engine, settings: &RecordingSettings) -> Result<Self, MediaError> {
-        let session = Session::start(engine, settings, Some(settings.folder.clone()), None)?;
+        let session = Session::start(engine, settings, Kind::Replay)?;
         Ok(Self { session })
     }
 
@@ -427,5 +468,68 @@ impl ReplayBuffer {
 
     pub fn stop(self, engine: &Engine) -> Result<(), MediaError> {
         self.session.stop(engine)
+    }
+}
+
+/// A running live stream.
+pub struct Stream {
+    session: Session,
+    /// Destination with secrets removed, for display.
+    pub destination: String,
+}
+
+impl Stream {
+    /// Validates the settings, picks the encoder and starts connecting in the background.
+    pub fn start(engine: &Engine, settings: &StreamSettings) -> Result<Self, MediaError> {
+        let protocol = settings.validate().map_err(MediaError::Engine)?;
+        let destination = redact(&settings.url());
+        let session = Session::start(
+            engine,
+            &settings.encoder_settings(),
+            Kind::Network(Box::new(settings.clone())),
+        )?;
+        tracing::info!(%destination, protocol = protocol.label(), "stream started");
+        Ok(Self {
+            session,
+            destination,
+        })
+    }
+
+    pub fn stats(&self) -> &Arc<OutputStats> {
+        &self.session.stats
+    }
+
+    pub fn state(&self) -> StreamState {
+        self.session.stats.network.state()
+    }
+
+    pub fn elapsed(&self) -> Duration {
+        self.session.started.elapsed()
+    }
+
+    /// Updates the encoder-lag counter from the engine.
+    pub fn poll(&self, engine: &Engine) {
+        self.session.update_dropped(engine);
+    }
+
+    pub fn stop(self, engine: &Engine) -> Result<(), MediaError> {
+        self.session.stop(engine)
+    }
+
+    /// Stops without blocking the caller: the encoder and connection wind down on a
+    /// helper thread (flushing can take up to about a second).
+    pub fn stop_in_background(self, engine: &Engine) {
+        let mut session = self.session;
+        session.detach(engine);
+        let spawned = std::thread::Builder::new()
+            .name("estream-stream-stop".into())
+            .spawn(move || {
+                if let Err(e) = session.join() {
+                    tracing::warn!(error = %e, "stream stopped with an error");
+                }
+            });
+        if let Err(e) = spawned {
+            tracing::error!(error = %e, "couldn't spawn the stream stop thread");
+        }
     }
 }

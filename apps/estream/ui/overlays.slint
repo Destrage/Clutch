@@ -423,6 +423,14 @@ export component SettingsDialog inherits Modal {
     callback set-text(string, string);
     callback browse();
 
+    // Typing breaks the server field's binding; re-sync it when a preset changes the server.
+    property <string> server: root.form.stream-server;
+    changed server => {
+        if (server-field.text != self.server) {
+            server-field.text = self.server;
+        }
+    }
+
     card-width: 640px;
     card-top: 40px;
 
@@ -453,6 +461,81 @@ export component SettingsDialog inherits Modal {
             padding: 18px;
             padding-top: 8px;
             spacing: 12px;
+
+            SectionTitle { text: "STREAM"; }
+            SettingRow {
+                label: "Service";
+                Select {
+                    label: "Streaming service";
+                    options: root.form.stream-services;
+                    current-index: root.form.stream-service;
+                    selected(i) => { root.set("stream-service", i); }
+                }
+            }
+            SettingRow {
+                label: "Server";
+                hint: root.form.stream-protocol != "" ? "Detected: " + root.form.stream-protocol : "rtmp(s)://, srt://, rist:// or https:// (WHIP)";
+                server-field := TextField {
+                    text: root.form.stream-server;
+                    label: "Stream server";
+                    placeholder: "rtmps://…";
+                    edited(t) => { root.set-text("stream-server", t); }
+                }
+            }
+            SettingRow {
+                label: "Stream key";
+                hint: "Stored encrypted for your Windows account";
+                TextField {
+                    input-type: InputType.password;
+                    label: "Stream key";
+                    placeholder: root.form.stream-key-set ? "Saved — type to replace" : "Paste your stream key";
+                    edited(t) => { root.set-text("stream-key", t); }
+                }
+            }
+            SettingRow {
+                label: "Video";
+                Select {
+                    label: "Stream codec";
+                    options: ["H.264", "HEVC (Enhanced RTMP / SRT)", "AV1 (Enhanced RTMP / SRT)"];
+                    current-index: root.form.stream-codec;
+                    selected(i) => { root.set("stream-codec", i); }
+                }
+            }
+            SettingRow {
+                label: "Encoder";
+                Select {
+                    label: "Stream encoder";
+                    options: root.form.stream-encoders;
+                    current-index: root.form.stream-encoder;
+                    selected(i) => { root.set("stream-encoder", i); }
+                }
+            }
+            SettingRow {
+                label: "Bitrate";
+                hint: "Constant bitrate; keep below ~75% of your upload speed";
+                NumberField { label: ""; value: root.form.stream-bitrate; minimum: 500; maximum: 50000; step: 500; suffix: "kbps"; changed(v) => { root.set("stream-bitrate", v); } }
+            }
+            SettingRow {
+                label: "Audio";
+                NumberField { label: ""; value: root.form.stream-audio-bitrate; minimum: 64; maximum: 320; step: 32; suffix: "kbps"; changed(v) => { root.set("stream-audio-bitrate", v); } }
+                Select {
+                    label: "Audio track to stream";
+                    options: ["Track 1", "Track 2", "Track 3", "Track 4", "Track 5", "Track 6"];
+                    current-index: root.form.stream-track;
+                    selected(i) => { root.set("stream-track", i); }
+                }
+            }
+            SettingRow {
+                label: "Reconnect";
+                hint: "Retry automatically if the connection drops";
+                Toggle { checked: root.form.stream-reconnect; toggled(v) => { root.set("stream-reconnect", v ? 1 : 0); } }
+            }
+            if root.form.stream-warning != "": Text {
+                text: root.form.stream-warning;
+                color: Theme.warn;
+                font-size: Theme.font-s;
+                wrap: word-wrap;
+            }
 
             SectionTitle { text: "RECORDING"; }
             SettingRow {

@@ -7,9 +7,14 @@ pub mod encode;
 pub mod mux;
 pub mod output;
 pub mod settings;
+pub mod stream;
 
-pub use output::{OutputStats, Recording, ReplayBuffer};
-pub use settings::{AudioCodec, Container, Preset, RateControl, RecordingSettings, VideoCodec};
+pub use output::{OutputStats, Recording, ReplayBuffer, Stream};
+pub use settings::{
+    AudioCodec, Container, Preset, Protocol, RateControl, RecordingSettings, Service,
+    StreamSettings, VideoCodec, redact,
+};
+pub use stream::StreamState;
 
 #[derive(Debug, thiserror::Error)]
 pub enum MediaError {

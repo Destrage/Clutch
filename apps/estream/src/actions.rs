@@ -37,6 +37,7 @@ pub enum Action {
     Deselect,
     ToggleRecording,
     ToggleReplay,
+    ToggleStream,
     SaveReplay,
     RevealOutput,
     OpenSettings,
@@ -166,6 +167,7 @@ actions! {
     ResetLayout, "layout.reset", "Reset layout", "View", None, true;
     ToggleRecording, "record.toggle", "Start / stop recording", "Output", None, true;
     ToggleReplay, "replay.toggle", "Start / stop replay buffer", "Output", None, true;
+    ToggleStream, "stream.toggle", "Go live / end stream", "Output", None, true;
     SaveReplay, "replay.save", "Save replay", "Output", Some(Shortcut::ctrl_shift('r')), true;
     RevealOutput, "output.reveal", "Show last recording in folder", "Output", None, true;
     OpenSettings, "settings", "Settings…", "General", Some(Shortcut::ctrl(',')), true;

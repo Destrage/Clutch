@@ -112,6 +112,12 @@ fn family(name: &str) -> &str {
 fn options(name: &str, settings: &RecordingSettings) -> Dictionary<'static> {
     let mut d = Dictionary::new();
     let q = settings.quality.clamp(1, 51).to_string();
+    // Forced keyframes must be IDR so a reconnecting viewer can start decoding there.
+    match family(name) {
+        "nvenc" => d.set("forced-idr", "1"),
+        "amf" | "qsv" => d.set("forced_idr", "1"),
+        _ => {}
+    }
     match family(name) {
         "nvenc" => {
             d.set(
@@ -242,10 +248,12 @@ impl VideoEncoder {
     }
 
     /// Encodes one NV12 frame at `pts` (in frames); finished packets go to `out`.
+    /// `force_key` makes this frame a keyframe (IDR), e.g. when a stream reconnects.
     pub fn encode(
         &mut self,
         frame: &VideoFrame,
         pts: i64,
+        force_key: bool,
         out: &mut dyn FnMut(ffmpeg::Packet),
     ) -> Result<(), MediaError> {
         let (w, h) = (frame.width as usize, frame.height as usize);
@@ -272,6 +280,11 @@ impl VideoEncoder {
             }
         }
         self.frame.set_pts(Some(pts));
+        self.frame.set_kind(if force_key {
+            ffmpeg::picture::Type::I
+        } else {
+            ffmpeg::picture::Type::None
+        });
         self.encoder.send_frame(&self.frame)?;
         self.drain(out)
     }
@@ -392,5 +405,59 @@ impl AudioEncoder {
             out(std::mem::replace(&mut packet, ffmpeg::Packet::empty()));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use estream_core::Timestamp;
+
+    /// Every probed encoder honours a forced keyframe in the middle of a GOP.
+    #[test]
+    fn forced_keyframes_are_idr() {
+        let settings = RecordingSettings {
+            rate_control: RateControl::Cbr,
+            bitrate_kbps: 2000,
+            keyframe_seconds: 4,
+            ..Default::default()
+        };
+        for codec in VideoCodec::ALL {
+            for info in available(codec) {
+                let mut enc =
+                    match VideoEncoder::open(info.name, 320, 192, Rational::fps(30), &settings) {
+                        Ok(e) => e,
+                        Err(e) => panic!("{} failed to open at 320x192: {e}", info.name),
+                    };
+
+                let mut keys = Vec::new();
+                let mut n = 0;
+                for i in 0..20i64 {
+                    let data = vec![(i * 10 % 255) as u8; 320 * 192 * 3 / 2];
+                    let frame = VideoFrame::from_nv12(Timestamp(i as u64), 320, 192, data);
+                    enc.encode(&frame, i, i == 10, &mut |p| {
+                        if p.is_key() {
+                            keys.push(n);
+                        }
+                        n += 1;
+                    })
+                    .unwrap();
+                }
+                enc.finish(&mut |p| {
+                    if p.is_key() {
+                        keys.push(n);
+                    }
+                    n += 1;
+                })
+                .unwrap();
+                eprintln!("{}: keyframes at {keys:?} of {n}", info.name);
+                // FFmpeg's Kvazaar wrapper ignores forced keyframes; streams then wait for
+                // the next regular keyframe instead.
+                if info.name != "libkvazaar" {
+                    assert!(keys.contains(&10), "{}: {keys:?}", info.name);
+                }
+            }
+        }
     }
 }

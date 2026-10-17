@@ -1346,6 +1346,7 @@ dependencies = [
  "slint-build",
  "tracing",
  "uuid",
+ "windows",
 ]
 
 [[package]]

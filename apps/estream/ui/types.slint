@@ -174,4 +174,20 @@ export struct SettingsForm {
     auto-remux: bool,
     theme: int,
     ffmpeg: string,
+    // Streaming
+    stream-services: [string],
+    stream-service: int,
+    stream-server: string,
+    stream-key-set: bool,
+    /// Detected transport, e.g. "RTMPS", or "" if the server is not recognized.
+    stream-protocol: string,
+    /// Problem to fix before going live, or a bitrate warning ("" if none).
+    stream-warning: string,
+    stream-codec: int,
+    stream-encoders: [string],
+    stream-encoder: int,
+    stream-bitrate: float,
+    stream-audio-bitrate: float,
+    stream-track: int,
+    stream-reconnect: bool,
 }

@@ -89,6 +89,9 @@ pub struct Settings {
     pub snapping: bool,
     pub last_collection: Option<PathBuf>,
     pub recording: estream_media::RecordingSettings,
+    pub stream: estream_media::StreamSettings,
+    /// The stream key, encrypted (see `secret`). `stream.key` holds it in memory only.
+    pub stream_key_protected: String,
 }
 
 impl Default for Settings {
@@ -101,6 +104,8 @@ impl Default for Settings {
             snapping: true,
             last_collection: None,
             recording: estream_media::RecordingSettings::default(),
+            stream: estream_media::StreamSettings::default(),
+            stream_key_protected: String::new(),
         }
     }
 }
@@ -108,13 +113,21 @@ impl Default for Settings {
 impl Settings {
     /// Loads settings, falling back to defaults (and logging) if missing or invalid.
     pub fn load(path: &Path) -> Self {
-        match std::fs::read_to_string(path) {
+        let mut settings: Self = match std::fs::read_to_string(path) {
             Ok(text) => serde_json::from_str(&text).unwrap_or_else(|e| {
                 tracing::warn!(error = %e, "invalid settings file; using defaults");
                 Self::default()
             }),
             Err(_) => Self::default(),
-        }
+        };
+        settings.stream.key = crate::secret::unprotect(&settings.stream_key_protected);
+        settings
+    }
+
+    /// Sets the stream key (kept in memory, saved encrypted).
+    pub fn set_stream_key(&mut self, key: &str) {
+        self.stream.key = key.trim().to_owned();
+        self.stream_key_protected = crate::secret::protect(&self.stream.key);
     }
 
     pub fn save(&self, path: &Path) {
@@ -188,5 +201,23 @@ mod tests {
     fn hex_parsing() {
         assert_eq!(parse_hex("#6c8cff"), Some((0x6c, 0x8c, 0xff)));
         assert_eq!(parse_hex("zzz"), None);
+    }
+
+    #[test]
+    fn stream_key_is_encrypted_on_disk() {
+        let dir = std::env::temp_dir().join(format!("estream-settings-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let mut s = Settings::default();
+        s.stream.server = "rtmp://example.com/app".into();
+        s.set_stream_key("live_42_secret");
+        s.save(&path);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("live_42_secret"), "{text}");
+        let loaded = Settings::load(&path);
+        if cfg!(windows) {
+            assert_eq!(loaded.stream.key, "live_42_secret");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

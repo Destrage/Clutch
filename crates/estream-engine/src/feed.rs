@@ -21,6 +21,18 @@ pub struct VideoFrame {
 }
 
 impl VideoFrame {
+    /// A standalone frame from tightly packed NV12 data (not pooled), e.g. for tests.
+    pub fn from_nv12(timestamp: Timestamp, width: u32, height: u32, data: Vec<u8>) -> Self {
+        debug_assert_eq!(data.len(), (width * height * 3 / 2) as usize);
+        Self {
+            timestamp,
+            width,
+            height,
+            data,
+            recycle: None,
+        }
+    }
+
     pub fn y(&self) -> &[u8] {
         &self.data[..(self.width * self.height) as usize]
     }
