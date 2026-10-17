@@ -89,9 +89,50 @@ pub struct Settings {
     pub snapping: bool,
     pub last_collection: Option<PathBuf>,
     pub recording: estream_media::RecordingSettings,
+    /// Where Go Live streams to.
+    pub destinations: Vec<DestinationConfig>,
+    /// Single-stream settings from before multistream; read once, migrated, never written.
+    #[serde(rename = "stream", skip_serializing)]
+    legacy_stream: Option<estream_media::StreamSettings>,
+    #[serde(rename = "stream_key_protected", skip_serializing)]
+    legacy_key: Option<String>,
+}
+
+/// One streaming destination.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DestinationConfig {
+    pub name: String,
+    pub enabled: bool,
+    /// `stream.key` holds the key in memory only; it is saved encrypted in `key_protected`.
     pub stream: estream_media::StreamSettings,
-    /// The stream key, encrypted (see `secret`). `stream.key` holds it in memory only.
-    pub stream_key_protected: String,
+    pub key_protected: String,
+}
+
+impl Default for DestinationConfig {
+    fn default() -> Self {
+        Self {
+            name: "New destination".into(),
+            enabled: true,
+            stream: estream_media::StreamSettings::default(),
+            key_protected: String::new(),
+        }
+    }
+}
+
+impl DestinationConfig {
+    /// Sets the stream key (kept in memory, saved encrypted).
+    pub fn set_key(&mut self, key: &str) {
+        self.stream.key = key.trim().to_owned();
+        self.key_protected = crate::secret::protect(&self.stream.key);
+    }
+
+    pub fn to_destination(&self) -> estream_media::Destination {
+        estream_media::Destination {
+            name: self.name.clone(),
+            settings: self.stream.clone(),
+        }
+    }
 }
 
 impl Default for Settings {
@@ -104,8 +145,9 @@ impl Default for Settings {
             snapping: true,
             last_collection: None,
             recording: estream_media::RecordingSettings::default(),
-            stream: estream_media::StreamSettings::default(),
-            stream_key_protected: String::new(),
+            destinations: Vec::new(),
+            legacy_stream: None,
+            legacy_key: None,
         }
     }
 }
@@ -120,14 +162,42 @@ impl Settings {
             }),
             Err(_) => Self::default(),
         };
-        settings.stream.key = crate::secret::unprotect(&settings.stream_key_protected);
+        settings.migrate();
+        for d in &mut settings.destinations {
+            d.stream.key = crate::secret::unprotect(&d.key_protected);
+        }
         settings
     }
 
-    /// Sets the stream key (kept in memory, saved encrypted).
-    pub fn set_stream_key(&mut self, key: &str) {
-        self.stream.key = key.trim().to_owned();
-        self.stream_key_protected = crate::secret::protect(&self.stream.key);
+    /// Turns pre-multistream single-stream settings into the first destination.
+    fn migrate(&mut self) {
+        let legacy = self.legacy_stream.take();
+        let key = self.legacy_key.take().unwrap_or_default();
+        let Some(stream) = legacy else { return };
+        if !self.destinations.is_empty() || stream.server.trim().is_empty() {
+            return;
+        }
+        let name = match stream.service {
+            estream_media::Service::Custom => "Stream".to_owned(),
+            service => service.label().to_owned(),
+        };
+        tracing::info!(%name, "migrated stream settings to a destination");
+        self.destinations.push(DestinationConfig {
+            name,
+            enabled: true,
+            stream,
+            key_protected: key,
+        });
+    }
+
+    /// The enabled destinations, in order, with their settings indices.
+    pub fn enabled_destinations(&self) -> Vec<(usize, estream_media::Destination)> {
+        self.destinations
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| d.enabled)
+            .map(|(i, d)| (i, d.to_destination()))
+            .collect()
     }
 
     pub fn save(&self, path: &Path) {
@@ -209,15 +279,47 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("settings.json");
         let mut s = Settings::default();
-        s.stream.server = "rtmp://example.com/app".into();
-        s.set_stream_key("live_42_secret");
+        let mut d = DestinationConfig::default();
+        d.stream.server = "rtmp://example.com/app".into();
+        d.set_key("live_42_secret");
+        s.destinations.push(d);
         s.save(&path);
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(!text.contains("live_42_secret"), "{text}");
         let loaded = Settings::load(&path);
         if cfg!(windows) {
-            assert_eq!(loaded.stream.key, "live_42_secret");
+            assert_eq!(loaded.destinations[0].stream.key, "live_42_secret");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn single_stream_settings_migrate_to_a_destination() {
+        let dir = std::env::temp_dir().join(format!("estream-migrate-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let protected = crate::secret::protect("old-key");
+        let old = serde_json::json!({
+            "theme": "dark",
+            "stream": { "service": "twitch", "server": "rtmp://live.twitch.tv/app", "bitrate_kbps": 4500 },
+            "stream_key_protected": protected,
+        });
+        std::fs::write(&path, old.to_string()).unwrap();
+        let s = Settings::load(&path);
+        assert_eq!(s.destinations.len(), 1);
+        let d = &s.destinations[0];
+        assert_eq!(d.name, "Twitch");
+        assert!(d.enabled);
+        assert_eq!(d.stream.server, "rtmp://live.twitch.tv/app");
+        assert_eq!(d.stream.bitrate_kbps, 4500);
+        if cfg!(windows) {
+            assert_eq!(d.stream.key, "old-key");
+        }
+        // Saved in the new format only.
+        s.save(&path);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("\"destinations\""));
+        assert!(!text.contains("\"stream_key_protected\""));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

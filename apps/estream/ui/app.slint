@@ -2,11 +2,11 @@
 
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
-import { SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SourceType, PropRow, MixerStrip, AudioInspect, SettingsForm } from "types.slint";
+import { SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SourceType, PropRow, MixerStrip, AudioInspect, SettingsForm, LiveRow, DestinationRow } from "types.slint";
 import { VSplitter, HSplitter, TooltipLayer, Hint } from "widgets.slint";
 import { Preview } from "preview.slint";
 import { TopBar, ScenesPanel, SourcesPanel, InspectorPanel, MixerPanel, StatusBar } from "panels.slint";
-import { CommandPalette, AddSourceDialog, SetupWizard, RecoveryPrompt, Toast, SettingsDialog } from "overlays.slint";
+import { CommandPalette, AddSourceDialog, SetupWizard, RecoveryPrompt, Toast, SettingsDialog, LivePanel } from "overlays.slint";
 
 export { Theme }
 
@@ -75,6 +75,9 @@ export component AppWindow inherits Window {
     in property <string> stream-time;
     in property <string> stream-info;
     in property <int> stream-health;
+    in property <[LiveRow]> live-rows;
+    in-out property <bool> live-panel-open;
+    callback live-toggle(int);
     in-out property <bool> settings-open;
     in property <SettingsForm> settings-form;
     in property <string> toast-text;
@@ -176,6 +179,8 @@ export component AppWindow inherits Window {
                 stream-state: root.stream-state;
                 stream-time: root.stream-time;
                 toggle-stream => { root.action("stream.toggle"); }
+                live-panel-open: root.live-panel-open;
+                open-destinations => { root.live-panel-open = !root.live-panel-open; }
                 toggle-record => { root.action("record.toggle"); }
                 toggle-replay => { root.action("replay.toggle"); }
                 save-replay => { root.action("replay.save"); }
@@ -325,6 +330,15 @@ export component AppWindow inherits Window {
             root.add-source-open = false;
             main-keys.focus();
         }
+    }
+
+    if root.live-panel-open: LivePanel {
+        width: parent.width;
+        height: parent.height;
+        rows: root.live-rows;
+        toggle(i) => { root.live-toggle(i); }
+        manage => { root.live-panel-open = false; root.action("settings"); }
+        dismiss => { root.live-panel-open = false; }
     }
 
     if root.settings-open: SettingsDialog {

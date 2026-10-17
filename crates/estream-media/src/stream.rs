@@ -4,7 +4,6 @@
 use crate::MediaError;
 use crate::ffmpeg::{self, Dictionary};
 use crate::mux::StreamSpec;
-use crate::output::OutputStats;
 use crate::settings::{Protocol, StreamSettings, redact};
 use std::collections::VecDeque;
 use std::ffi::{CString, c_int, c_void};
@@ -22,7 +21,7 @@ const RW_TIMEOUT_US: &str = "10000000";
 pub enum StreamState {
     Connecting,
     Live,
-    /// Waiting to retry; `attempt` in [`OutputStats::attempt`].
+    /// Waiting to retry; see [`NetworkStats::attempt`].
     Reconnecting,
     Stopped,
 }
@@ -38,7 +37,65 @@ impl StreamState {
     }
 }
 
-/// Network side of [`OutputStats`].
+/// Live statistics of one streaming destination.
+#[derive(Debug, Default)]
+pub struct DestinationStats {
+    pub name: String,
+    /// Destination URL with secrets removed.
+    pub destination: String,
+    /// Bytes actually sent.
+    pub bytes: AtomicU64,
+    pub network: NetworkStats,
+    /// Set when the destination gave up (or could not start).
+    pub error: Mutex<Option<String>>,
+}
+
+impl DestinationStats {
+    pub fn error(&self) -> Option<String> {
+        self.error.lock().ok().and_then(|e| e.clone())
+    }
+
+    pub(crate) fn set_error(&self, message: String) {
+        if let Ok(mut slot) = self.error.lock() {
+            *slot = Some(message);
+        }
+    }
+}
+
+/// A destination stops when its session stops or when it is stopped on its own.
+#[derive(Clone, Debug)]
+pub(crate) struct StopFlags {
+    pub session: Arc<AtomicBool>,
+    pub own: Arc<AtomicBool>,
+}
+
+impl StopFlags {
+    fn is_set(&self) -> bool {
+        self.session.load(Ordering::Acquire) || self.own.load(Ordering::Acquire)
+    }
+}
+
+/// Everything an encoder session needs to start sending to one destination.
+pub(crate) struct NetSpec {
+    pub settings: StreamSettings,
+    pub stats: Arc<DestinationStats>,
+    pub own_stop: Arc<AtomicBool>,
+    pub queue: Arc<SendQueue<ffmpeg::Packet>>,
+}
+
+impl NetSpec {
+    pub fn new(settings: StreamSettings, stats: Arc<DestinationStats>) -> Self {
+        let threshold = Duration::from_millis(settings.drop_threshold_ms.clamp(200, 10_000) as u64);
+        Self {
+            settings,
+            stats,
+            own_stop: Arc::new(AtomicBool::new(false)),
+            queue: Arc::new(SendQueue::new(threshold)),
+        }
+    }
+}
+
+/// Network state of a destination.
 #[derive(Debug, Default)]
 pub struct NetworkStats {
     /// Video frames dropped because the network could not keep up.
@@ -56,7 +113,7 @@ impl NetworkStats {
         StreamState::from_u8(self.state.load(Ordering::Acquire))
     }
 
-    fn set_state(&self, state: StreamState) {
+    pub(crate) fn set_state(&self, state: StreamState) {
         self.state.store(state as u8, Ordering::Release);
     }
 }
@@ -198,6 +255,20 @@ impl<T> SendQueue<T> {
     }
 }
 
+/// A new reference to the same packet data (no copy). Destinations only rewrite timestamps,
+/// which live in the packet struct, not in the shared buffer.
+pub(crate) fn share(packet: &ffmpeg::Packet) -> ffmpeg::Packet {
+    use ffmpeg::packet::{Mut, Ref};
+    let mut shared = ffmpeg::Packet::empty();
+    // SAFETY: both pointers are valid packets; `av_packet_ref` adds a buffer reference
+    // (or copies if the source isn't reference counted).
+    let r = unsafe { ffmpeg::ffi::av_packet_ref(shared.as_mut_ptr(), packet.as_ptr()) };
+    if r < 0 {
+        return packet.clone();
+    }
+    shared
+}
+
 fn span<T>(entries: &VecDeque<Entry<T>>) -> f64 {
     let first = entries.iter().find(|e| e.video).map(|e| e.time);
     let last = entries.iter().rev().find(|e| e.video).map(|e| e.time);
@@ -210,13 +281,13 @@ fn span<T>(entries: &VecDeque<Entry<T>>) -> f64 {
 /// Polled by FFmpeg during blocking network calls: abort once Stop has been requested
 /// for longer than [`STOP_GRACE`].
 struct Abort {
-    stop: Arc<AtomicBool>,
+    stop: StopFlags,
     since: Mutex<Option<Instant>>,
 }
 
 impl Abort {
     fn aborted(&self) -> bool {
-        if !self.stop.load(Ordering::Acquire) {
+        if !self.stop.is_set() {
             return false;
         }
         let Ok(mut since) = self.since.lock() else {
@@ -359,14 +430,20 @@ pub(crate) struct NetTarget {
 
 impl NetTarget {
     pub fn start(
-        settings: StreamSettings,
+        spec: NetSpec,
         specs: Vec<StreamSpec>,
-        stop: Arc<AtomicBool>,
-        stats: Arc<OutputStats>,
+        session_stop: Arc<AtomicBool>,
     ) -> Result<Self, MediaError> {
-        let queue = Arc::new(SendQueue::new(Duration::from_millis(
-            settings.drop_threshold_ms.clamp(200, 10_000) as u64,
-        )));
+        let NetSpec {
+            settings,
+            stats,
+            own_stop,
+            queue,
+        } = spec;
+        let stop = StopFlags {
+            session: session_stop,
+            own: own_stop,
+        };
         let force_key = Arc::new(AtomicBool::new(false));
         let thread = {
             let (queue, force_key) = (queue.clone(), force_key.clone());
@@ -396,8 +473,8 @@ fn send_loop(
     specs: Vec<StreamSpec>,
     queue: Arc<SendQueue<ffmpeg::Packet>>,
     force_key: Arc<AtomicBool>,
-    stop: Arc<AtomicBool>,
-    stats: Arc<OutputStats>,
+    stop: StopFlags,
+    stats: Arc<DestinationStats>,
 ) {
     let url = settings.url();
     let shown = redact(&url);
@@ -411,12 +488,10 @@ fn send_loop(
     let mut attempt = 0u32;
     let fail = |message: String| {
         tracing::error!(url = %shown, %message, "stream failed");
-        if let Ok(mut slot) = stats.error.lock() {
-            *slot = Some(message);
-        }
+        stats.set_error(message);
     };
     loop {
-        if stop.load(Ordering::Acquire) {
+        if stop.is_set() {
             break;
         }
         net.set_state(if attempt == 0 {
@@ -440,7 +515,7 @@ fn send_loop(
                 force_key.store(true, Ordering::Release);
                 net.set_state(StreamState::Live);
                 let error = loop {
-                    if stop.load(Ordering::Acquire) && queue.is_closed_and_empty() {
+                    if stop.is_set() && queue.is_closed_and_empty() {
                         break None;
                     }
                     net.queue_ms
@@ -465,7 +540,7 @@ fn send_loop(
                     }
                     Some(e) => {
                         drop(conn);
-                        if stop.load(Ordering::Acquire) {
+                        if stop.is_set() {
                             break;
                         }
                         tracing::warn!(url = %shown, error = %e, "stream disconnected");
@@ -473,7 +548,7 @@ fn send_loop(
                 }
             }
             Err(e) => {
-                if stop.load(Ordering::Acquire) {
+                if stop.is_set() {
                     break;
                 }
                 tracing::warn!(url = %shown, error = %e, attempt, "stream connect failed");
@@ -491,10 +566,12 @@ fn send_loop(
         net.attempt.store(attempt, Ordering::Relaxed);
         net.set_state(StreamState::Reconnecting);
         let until = Instant::now() + settings.retry_delay(attempt);
-        while Instant::now() < until && !stop.load(Ordering::Acquire) {
+        while Instant::now() < until && !stop.is_set() {
             std::thread::sleep(Duration::from_millis(50));
         }
     }
+    // The encoder may keep running for other destinations; stop accepting packets.
+    queue.close();
     net.dropped
         .store(queue.dropped.load(Ordering::Relaxed), Ordering::Relaxed);
     net.set_state(StreamState::Stopped);

@@ -155,6 +155,25 @@ export struct AudioInspect {
     filters: [FilterRow],
 }
 // Recording & app settings shown in the Settings dialog.
+/// A streaming destination in Settings.
+export struct DestinationRow {
+    name: string,
+    enabled: bool,
+    /// e.g. "RTMPS", "SRT"; "" if the server is not set or not recognized.
+    protocol: string,
+}
+
+/// A destination in the live panel.
+export struct LiveRow {
+    name: string,
+    /// 0 off, 1 connecting, 2 live, 3 reconnecting, 4 failed
+    state: int,
+    /// Bitrate and drops, or the error / what is happening.
+    info: string,
+    /// 1 good, 2 congested / connecting, 3 failing
+    health: int,
+}
+
 export struct SettingsForm {
     folder: string,
     filename: string,
@@ -174,7 +193,10 @@ export struct SettingsForm {
     auto-remux: bool,
     theme: int,
     ffmpeg: string,
-    // Streaming
+    // Streaming: destination list, then the editor for the selected one
+    destinations: [DestinationRow],
+    dest-selected: int,
+    dest-name: string,
     stream-services: [string],
     stream-service: int,
     stream-server: string,

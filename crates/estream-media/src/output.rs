@@ -5,8 +5,8 @@ use crate::MediaError;
 use crate::encode::{self, AudioEncoder, VideoEncoder};
 use crate::ffmpeg;
 use crate::mux::{Muxer, PacketRing, StreamSpec, remux};
-use crate::settings::{Container, RecordingSettings, StreamSettings, redact};
-use crate::stream::{Entry, NetTarget, NetworkStats, StreamState};
+use crate::settings::{Container, RecordingSettings};
+use crate::stream::{Entry, NetSpec, NetTarget, share};
 use crossbeam_channel::{Receiver, Sender, bounded, select};
 use estream_audio::{Block, TRACKS, TrackSink};
 use estream_core::{CanvasId, Rational, Timestamp};
@@ -27,8 +27,6 @@ pub struct OutputStats {
     pub encoder: Mutex<String>,
     /// Set if the output failed while running.
     pub error: Mutex<Option<String>>,
-    /// Streaming outputs only.
-    pub network: NetworkStats,
 }
 
 struct AudioChunk {
@@ -58,34 +56,36 @@ impl TrackSink for ChannelSink {
 enum Target {
     File(Muxer),
     Replay(PacketRing),
-    Network(NetTarget),
+    Network(Vec<NetTarget>),
 }
 
 /// What a session produces.
-enum Kind {
+pub(crate) enum Kind {
     File(PathBuf),
     Replay,
-    Network(Box<StreamSettings>),
+    Network(Vec<NetSpec>),
 }
 
 enum Control {
     SaveReplay(Sender<Result<PathBuf, MediaError>>),
+    /// A stream destination joining a running stream session.
+    AddDestination(NetSpec),
 }
 
-struct Session {
+pub(crate) struct Session {
     stop: Arc<AtomicBool>,
     sink_closed: Arc<AtomicBool>,
     consumer: u64,
     control: Sender<Control>,
     thread: Option<JoinHandle<Result<(), MediaError>>>,
     pub stats: Arc<OutputStats>,
-    started: Instant,
+    pub(crate) started: Instant,
     canvas: CanvasId,
     dropped_base: u64,
 }
 
 impl Session {
-    fn start(
+    pub(crate) fn start(
         engine: &Engine,
         settings: &RecordingSettings,
         kind: Kind,
@@ -158,7 +158,7 @@ impl Session {
         })
     }
 
-    fn update_dropped(&self, engine: &Engine) {
+    pub(crate) fn update_dropped(&self, engine: &Engine) {
         if let Some(out) = engine.canvas_output(self.canvas) {
             let total = out.stats.encoder_dropped.load(Ordering::Relaxed);
             self.stats
@@ -168,22 +168,44 @@ impl Session {
     }
 
     /// Disconnects from the engine and asks the encoder thread to finish.
-    fn detach(&mut self, engine: &Engine) {
+    pub(crate) fn detach(&mut self, engine: &Engine) {
         self.update_dropped(engine);
         engine.remove_video_consumer(self.consumer);
         self.sink_closed.store(true, Ordering::Release);
         self.stop.store(true, Ordering::Release);
     }
 
-    fn stop(mut self, engine: &Engine) -> Result<(), MediaError> {
+    pub(crate) fn stop(mut self, engine: &Engine) -> Result<(), MediaError> {
         self.detach(engine);
         self.join()
     }
 
-    fn join(mut self) -> Result<(), MediaError> {
+    pub(crate) fn join(mut self) -> Result<(), MediaError> {
         match self.thread.take().map(|t| t.join()) {
             Some(Ok(result)) => result,
             _ => Err(MediaError::Engine("encoder thread panicked".into())),
+        }
+    }
+
+    /// Adds a destination to a running stream session.
+    pub(crate) fn add_destination(&self, spec: NetSpec) -> Result<(), MediaError> {
+        self.control
+            .send(Control::AddDestination(spec))
+            .map_err(|_| MediaError::Engine("the stream encoder has stopped".into()))
+    }
+
+    /// Stops on a helper thread so the caller doesn't wait for flushing.
+    pub(crate) fn stop_in_background(mut self, engine: &Engine) {
+        self.detach(engine);
+        let spawned = std::thread::Builder::new()
+            .name("estream-output-stop".into())
+            .spawn(move || {
+                if let Err(e) = self.join() {
+                    tracing::warn!(error = %e, "output stopped with an error");
+                }
+            });
+        if let Err(e) = spawned {
+            tracing::error!(error = %e, "couldn't spawn the output stop thread");
         }
     }
 }
@@ -237,18 +259,20 @@ fn run(r: Run) -> Result<(), MediaError> {
         is_video: false,
     }));
     let time_bases = specs.iter().map(|s| s.time_base).collect();
+    // Kept for destinations that join a running stream session.
+    let stream_specs = specs.clone();
     let target = match r.kind {
         Kind::Replay => Target::Replay(PacketRing::new(
             specs,
             r.settings.replay_seconds.clamp(5, 300) as f64,
         )),
         Kind::File(path) => Target::File(Muxer::create(&path, r.settings.container, &specs)?),
-        Kind::Network(stream) => Target::Network(NetTarget::start(
-            *stream,
-            specs,
-            r.stop.clone(),
-            r.stats.clone(),
-        )?),
+        Kind::Network(destinations) => Target::Network(
+            destinations
+                .into_iter()
+                .map(|d| NetTarget::start(d, specs.clone(), r.stop.clone()))
+                .collect::<Result<_, _>>()?,
+        ),
     };
 
     let mut state = State {
@@ -268,16 +292,31 @@ fn run(r: Run) -> Result<(), MediaError> {
         select! {
             recv(r.video_rx) -> f => if let Ok(f) = f { state.video(f, &mut video)?; },
             recv(r.audio_rx) -> a => if let Ok(a) = a { state.audio(a, &mut audio)?; },
-            recv(r.control_rx) -> c => if let Ok(Control::SaveReplay(reply)) = c {
-                let result = match &state.target {
-                    Target::Replay(ring) => {
-                        let container = replay_container(&r.settings);
-                        let path = r.settings.next_path(" Replay", container);
-                        ring.save(&path, container).map(|_| path)
+            recv(r.control_rx) -> c => match c {
+                Ok(Control::SaveReplay(reply)) => {
+                    let result = match &state.target {
+                        Target::Replay(ring) => {
+                            let container = replay_container(&r.settings);
+                            let path = r.settings.next_path(" Replay", container);
+                            ring.save(&path, container).map(|_| path)
+                        }
+                        _ => Err(MediaError::Io("not a replay buffer".into())),
+                    };
+                    let _ = reply.send(result);
+                }
+                Ok(Control::AddDestination(spec)) => {
+                    let stats = spec.stats.clone();
+                    match &mut state.target {
+                        Target::Network(nets) => {
+                            match NetTarget::start(spec, stream_specs.clone(), r.stop.clone()) {
+                                Ok(net) => nets.push(net),
+                                Err(e) => stats.set_error(e.to_string()),
+                            }
+                        }
+                        _ => stats.set_error("not a stream session".into()),
                     }
-                    _ => Err(MediaError::Io("not a replay buffer".into())),
-                };
-                let _ = reply.send(result);
+                }
+                Err(_) => {}
             },
             default(Duration::from_millis(50)) => {},
         }
@@ -298,7 +337,11 @@ fn run(r: Run) -> Result<(), MediaError> {
     }
     match state.target {
         Target::File(m) => m.finish()?,
-        Target::Network(net) => net.finish(),
+        Target::Network(nets) => {
+            // Close every queue first so all senders flush in parallel, then join.
+            nets.iter().for_each(|n| n.queue.close());
+            nets.into_iter().for_each(NetTarget::finish);
+        }
         Target::Replay(_) => {}
     }
     Ok(())
@@ -330,7 +373,7 @@ impl State {
                 ring.push(stream, packet);
                 self.stats.bytes.store(ring.bytes, Ordering::Relaxed);
             }
-            Target::Network(net) => {
+            Target::Network(nets) => {
                 let tb = self
                     .time_bases
                     .get(stream)
@@ -338,13 +381,17 @@ impl State {
                     .unwrap_or(ffmpeg::Rational(1, 1));
                 let time = packet.pts().or(packet.dts()).unwrap_or(0) as f64 * tb.0 as f64
                     / tb.1.max(1) as f64;
-                net.queue.push(Entry {
-                    stream,
-                    video: stream == 0,
-                    key: packet.is_key(),
-                    time,
-                    payload: packet,
-                });
+                let key = packet.is_key();
+                // Every destination gets a reference to the same packet data.
+                for net in nets.iter() {
+                    net.queue.push(Entry {
+                        stream,
+                        video: stream == 0,
+                        key,
+                        time,
+                        payload: share(&packet),
+                    });
+                }
             }
         }
     }
@@ -357,7 +404,15 @@ impl State {
         }
         self.last_pts = pts;
         let force_key = match &self.target {
-            Target::Network(net) => net.force_key.swap(false, Ordering::AcqRel),
+            // Any (re)connecting destination asks for a keyframe; clear every request.
+            // (Not `any()`: it would stop early and leave other requests pending.)
+            Target::Network(nets) => {
+                let mut requested = false;
+                for n in nets.iter() {
+                    requested |= n.force_key.swap(false, Ordering::AcqRel);
+                }
+                requested
+            }
             _ => false,
         };
         encoder.encode(&frame, pts, force_key, &mut |p| self.write(0, p))?;
@@ -468,68 +523,5 @@ impl ReplayBuffer {
 
     pub fn stop(self, engine: &Engine) -> Result<(), MediaError> {
         self.session.stop(engine)
-    }
-}
-
-/// A running live stream.
-pub struct Stream {
-    session: Session,
-    /// Destination with secrets removed, for display.
-    pub destination: String,
-}
-
-impl Stream {
-    /// Validates the settings, picks the encoder and starts connecting in the background.
-    pub fn start(engine: &Engine, settings: &StreamSettings) -> Result<Self, MediaError> {
-        let protocol = settings.validate().map_err(MediaError::Engine)?;
-        let destination = redact(&settings.url());
-        let session = Session::start(
-            engine,
-            &settings.encoder_settings(),
-            Kind::Network(Box::new(settings.clone())),
-        )?;
-        tracing::info!(%destination, protocol = protocol.label(), "stream started");
-        Ok(Self {
-            session,
-            destination,
-        })
-    }
-
-    pub fn stats(&self) -> &Arc<OutputStats> {
-        &self.session.stats
-    }
-
-    pub fn state(&self) -> StreamState {
-        self.session.stats.network.state()
-    }
-
-    pub fn elapsed(&self) -> Duration {
-        self.session.started.elapsed()
-    }
-
-    /// Updates the encoder-lag counter from the engine.
-    pub fn poll(&self, engine: &Engine) {
-        self.session.update_dropped(engine);
-    }
-
-    pub fn stop(self, engine: &Engine) -> Result<(), MediaError> {
-        self.session.stop(engine)
-    }
-
-    /// Stops without blocking the caller: the encoder and connection wind down on a
-    /// helper thread (flushing can take up to about a second).
-    pub fn stop_in_background(self, engine: &Engine) {
-        let mut session = self.session;
-        session.detach(engine);
-        let spawned = std::thread::Builder::new()
-            .name("estream-stream-stop".into())
-            .spawn(move || {
-                if let Err(e) = session.join() {
-                    tracing::warn!(error = %e, "stream stopped with an error");
-                }
-            });
-        if let Err(e) = spawned {
-            tracing::error!(error = %e, "couldn't spawn the stream stop thread");
-        }
     }
 }

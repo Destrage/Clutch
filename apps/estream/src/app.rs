@@ -6,8 +6,9 @@ use crate::interact::{self, Drag, DragKind, Handle, ItemGeom, Modifiers};
 use crate::presets::{self, PRESETS};
 use crate::settings::{PanelLayout, Paths, Settings, ThemeMode, WindowState};
 use crate::ui::{
-    AppWindow, AudioInspect, CanvasBox, FilterParamRow, FilterRow, Guide, Inspect, LayerRow,
-    MixerStrip, PaletteEntry, Preset, PropRow, SceneRow, SettingsForm, SourceType, Theme,
+    AppWindow, AudioInspect, CanvasBox, DestinationRow, FilterParamRow, FilterRow, Guide, Inspect,
+    LayerRow, LiveRow, MixerStrip, PaletteEntry, Preset, PropRow, SceneRow, SettingsForm,
+    SourceType, Theme,
 };
 use estream_core::{BlendMode, BoundsMode, CanvasId, ItemId, Rgba8, SceneId, SourceId};
 use estream_engine::{
@@ -77,35 +78,85 @@ pub struct App {
     theme_checked_at: Instant,
     recording: Option<estream_media::Recording>,
     replay: Option<estream_media::ReplayBuffer>,
-    stream: Option<estream_media::Stream>,
-    /// Last bitrate sample: (time, bytes sent, kbps).
-    stream_rate: (Instant, u64, f64),
+    stream: Option<estream_media::MultiStream>,
+    /// Per live destination (same order as `MultiStream::destinations`): its settings index,
+    /// last bitrate sample (time, bytes, kbps) and whether its error was already shown.
+    stream_dests: Vec<LiveDest>,
+    /// Destination being edited in Settings.
+    dest_selected: Option<usize>,
     /// Last file written by a recording or replay save, for "Show in folder".
     last_output: Option<std::path::PathBuf>,
 }
 
-/// The Stream section of the settings form (other fields left default).
-fn stream_form(s: &estream_media::StreamSettings) -> SettingsForm {
-    use estream_media::{Protocol, Service, VideoCodec, encode};
-    let encoders = encode::available(s.codec);
-    let mut encoder_names = vec![SharedString::from("Automatic (best available)")];
-    encoder_names.extend(encoders.iter().map(|e| SharedString::from(e.label)));
-    let protocol = match s.protocol() {
+/// A live destination as the app tracks it.
+struct LiveDest {
+    /// Index into `settings.destinations`.
+    config: usize,
+    /// Last bitrate sample: (time, bytes sent, kbps).
+    rate: (Instant, u64, f64),
+    error_shown: bool,
+}
+
+impl LiveDest {
+    fn new(config: usize) -> Self {
+        Self {
+            config,
+            rate: (Instant::now(), 0, 0.0),
+            error_shown: false,
+        }
+    }
+}
+
+/// Short transport label for a destination, e.g. "RTMPS" or "SRT".
+fn protocol_label(s: &estream_media::StreamSettings, long: bool) -> String {
+    use estream_media::{Protocol, VideoCodec};
+    match s.protocol() {
         Some(Protocol::Rtmp) => {
-            let base = if s.server.trim().to_ascii_lowercase().starts_with("rtmps") {
-                "RTMPS (encrypted)"
-            } else {
-                "RTMP"
+            let secure = s.server.trim().to_ascii_lowercase().starts_with("rtmps");
+            let base = match (secure, long) {
+                (true, true) => "RTMPS (encrypted)",
+                (true, false) => "RTMPS",
+                (false, _) => "RTMP",
             };
-            if s.codec == VideoCodec::H264 {
-                base.to_owned()
-            } else {
+            if long && s.codec != VideoCodec::H264 {
                 format!("{base}, Enhanced RTMP")
+            } else {
+                base.to_owned()
             }
         }
         Some(p) => p.label().to_owned(),
         None => String::new(),
+    }
+}
+
+/// The Stream section of the settings form: the destination list and the selected
+/// destination's editor fields (other fields left default).
+fn stream_form(
+    dests: &[crate::settings::DestinationConfig],
+    selected: Option<usize>,
+) -> SettingsForm {
+    use estream_media::{Service, VideoCodec, encode};
+    let rows: Vec<DestinationRow> = dests
+        .iter()
+        .map(|d| DestinationRow {
+            name: d.name.clone().into(),
+            enabled: d.enabled,
+            protocol: protocol_label(&d.stream, false).into(),
+        })
+        .collect();
+    let selected = selected.filter(|i| *i < dests.len());
+    let Some(d) = selected.map(|i| &dests[i]) else {
+        return SettingsForm {
+            destinations: ModelRc::new(VecModel::from(rows)),
+            dest_selected: -1,
+            ..Default::default()
+        };
     };
+    let s = &d.stream;
+    let encoders = encode::available(s.codec);
+    let mut encoder_names = vec![SharedString::from("Automatic (best available)")];
+    encoder_names.extend(encoders.iter().map(|e| SharedString::from(e.label)));
+    let protocol = protocol_label(s, true);
     let warning = match s.validate() {
         // Nothing entered yet: no need to nag.
         Err(_) if s.server.trim().is_empty() && s.key.is_empty() => String::new(),
@@ -119,6 +170,9 @@ fn stream_form(s: &estream_media::StreamSettings) -> SettingsForm {
         },
     };
     SettingsForm {
+        destinations: ModelRc::new(VecModel::from(rows)),
+        dest_selected: selected.map_or(-1, |i| i as i32),
+        dest_name: d.name.clone().into(),
         stream_services: ModelRc::new(VecModel::from(
             Service::ALL
                 .iter()
@@ -311,7 +365,8 @@ impl App {
             recording: None,
             replay: None,
             stream: None,
-            stream_rate: (Instant::now(), 0, 0.0),
+            stream_dests: Vec::new(),
+            dest_selected: None,
             last_output: None,
         };
         window.set_scenes(ModelRc::from(app.scenes_model.clone()));
@@ -1143,26 +1198,80 @@ impl App {
 
     // ------------------------------------------------------------ outputs
 
+    /// Opens Settings at the stream destinations (e.g. when something is missing).
+    fn open_stream_settings(&mut self) {
+        if self.dest_selected.is_none() && !self.settings.destinations.is_empty() {
+            self.dest_selected = Some(0);
+        }
+        self.refresh_settings_form();
+        if let Some(w) = self.window() {
+            w.set_settings_open(true);
+        }
+    }
+
+    /// Go Live on every enabled destination, or end the stream everywhere.
     fn toggle_stream(&mut self) {
         let Some(engine) = &self.engine else { return };
         if let Some(stream) = self.stream.take() {
             stream.stop_in_background(engine);
+            self.stream_dests.clear();
             self.toast("Stream ended".into(), false);
-        } else if let Err(problem) = self.settings.stream.validate() {
-            // Missing server or key: take the user straight to where it's set.
-            self.toast(problem, true);
-            self.refresh_settings_form();
-            if let Some(w) = self.window() {
-                w.set_settings_open(true);
+            self.update_outputs();
+            return;
+        }
+        let enabled = self.settings.enabled_destinations();
+        if enabled.is_empty() {
+            self.toast("Add a stream destination first".into(), true);
+            self.open_stream_settings();
+            return;
+        }
+        let dests: Vec<_> = enabled.iter().map(|(_, d)| d.clone()).collect();
+        match estream_media::MultiStream::start(engine, &dests) {
+            Ok(stream) => {
+                let names: Vec<&str> = dests.iter().map(|d| d.name.as_str()).collect();
+                self.toast(format!("Going live on {}", names.join(", ")), false);
+                self.stream_dests = enabled.iter().map(|(i, _)| LiveDest::new(*i)).collect();
+                self.stream = Some(stream);
             }
-        } else {
-            match estream_media::Stream::start(engine, &self.settings.stream) {
+            Err(e) => {
+                self.toast(format!("Couldn't go live: {e}"), true);
+                self.open_stream_settings();
+            }
+        }
+        self.update_outputs();
+    }
+
+    /// Start or stop one destination (by settings index) from the live panel.
+    pub fn live_toggle(&mut self, config: usize) {
+        let Some(engine) = &self.engine else { return };
+        let Some(dest) = self
+            .settings
+            .destinations
+            .get(config)
+            .map(|d| d.to_destination())
+        else {
+            return;
+        };
+        let live = self.stream_dests.iter().position(|d| d.config == config);
+        match (&mut self.stream, live) {
+            (None, _) => match estream_media::MultiStream::start(engine, &[dest]) {
                 Ok(stream) => {
-                    self.toast(format!("Connecting to {}", stream.destination), false);
                     self.stream = Some(stream);
-                    self.stream_rate = (Instant::now(), 0, 0.0);
+                    self.stream_dests = vec![LiveDest::new(config)];
                 }
                 Err(e) => self.toast(format!("Couldn't go live: {e}"), true),
+            },
+            (Some(stream), Some(k)) if stream.destinations()[k].is_active() => {
+                stream.stop_destination(engine, k);
+                self.toast(format!("Ended the stream on {}", dest.name), false);
+            }
+            (Some(stream), Some(k)) => {
+                stream.restart_destination(engine, k, &dest);
+                self.stream_dests[k] = LiveDest::new(config);
+            }
+            (Some(stream), None) => {
+                stream.add_destination(engine, &dest);
+                self.stream_dests.push(LiveDest::new(config));
             }
         }
         self.update_outputs();
@@ -1307,85 +1416,154 @@ impl App {
         );
     }
 
-    /// Go Live button state, timer and the stream health line in the status bar.
+    /// Go Live state and timer, per-destination failures, the live panel and the status bar.
     fn update_stream(&mut self) {
         use estream_media::StreamState;
         use std::sync::atomic::Ordering::Relaxed;
         let Some(w) = self.window() else { return };
-        let failed = self
-            .stream
-            .as_ref()
-            .and_then(|s| s.stats().error.lock().ok().and_then(|e| e.clone()));
-        if let Some(error) = failed {
+        if let (Some(engine), Some(stream)) = (&self.engine, &mut self.stream) {
+            stream.poll(engine);
+        }
+
+        // Report each destination's failure once; the others keep going.
+        let mut failures = Vec::new();
+        if let Some(stream) = &self.stream {
+            for (k, live) in stream.destinations().iter().enumerate() {
+                if let (Some(error), Some(d)) = (live.error(), self.stream_dests.get_mut(k))
+                    && !d.error_shown
+                {
+                    d.error_shown = true;
+                    failures.push(format!("{}: {error}", live.name()));
+                }
+            }
+        }
+        for f in failures {
+            self.toast(f, true);
+        }
+        // Everything ended (stopped or failed): the stream is over.
+        if self.stream.as_ref().is_some_and(|s| !s.is_active()) {
             if let (Some(engine), Some(stream)) = (&self.engine, self.stream.take()) {
                 stream.stop_in_background(engine);
             }
-            self.toast(format!("Stream ended: {error}"), true);
+            self.stream_dests.clear();
         }
+
+        // Per-destination rows for every configured destination.
+        let mut rows: Vec<LiveRow> = self
+            .settings
+            .destinations
+            .iter()
+            .map(|d| LiveRow {
+                name: d.name.clone().into(),
+                state: 0,
+                info: if d.enabled {
+                    "Off".into()
+                } else {
+                    "Off · not included in Go Live".into()
+                },
+                health: 0,
+            })
+            .collect();
+        let mut summary = Vec::new();
+        let (mut any_live, mut any_connecting, mut worst) = (false, false, 0);
+        if let Some(stream) = &self.stream {
+            for (k, live) in stream.destinations().iter().enumerate() {
+                let Some(tracked) = self.stream_dests.get_mut(k) else {
+                    continue;
+                };
+                let stats = &live.stats;
+                let bytes = stats.bytes.load(Relaxed);
+                let (at, prev, _) = tracked.rate;
+                let dt = at.elapsed().as_secs_f64();
+                if dt >= 1.0 {
+                    let kbps = bytes.saturating_sub(prev) as f64 * 8.0 / dt / 1000.0;
+                    tracked.rate = (Instant::now(), bytes, kbps);
+                }
+                let kbps = tracked.rate.2;
+                let encoder = stream.encoder_stats(k);
+                let frames = encoder.map_or(0, |e| e.frames.load(Relaxed)).max(1);
+                let dropped = stats.network.dropped.load(Relaxed)
+                    + encoder.map_or(0, |e| e.dropped.load(Relaxed));
+                let percent = dropped as f64 * 100.0 / frames as f64;
+                let (state, health, info) = match live.state() {
+                    StreamState::Live => {
+                        any_live = true;
+                        let congested = stats.network.queue_ms.load(Relaxed) > 300 || percent > 1.0;
+                        summary.push(format!("{} {:.1} Mb/s", live.name(), kbps / 1000.0));
+                        (
+                            2,
+                            if congested { 2 } else { 1 },
+                            format!("Live · {kbps:.0} kb/s · {dropped} dropped ({percent:.1}%)"),
+                        )
+                    }
+                    StreamState::Connecting => {
+                        any_connecting = true;
+                        summary.push(format!("{} connecting", live.name()));
+                        (1, 2, format!("Connecting to {}…", stats.destination))
+                    }
+                    StreamState::Reconnecting => {
+                        summary.push(format!("{} reconnecting", live.name()));
+                        (
+                            3,
+                            3,
+                            format!(
+                                "Reconnecting (attempt {})…",
+                                stats.network.attempt.load(Relaxed)
+                            ),
+                        )
+                    }
+                    StreamState::Stopped => match live.error() {
+                        Some(error) => (4, 3, error),
+                        None => (0, 0, "Off".into()),
+                    },
+                };
+                if state != 0 && state != 4 {
+                    worst = worst.max(health);
+                }
+                if let Some(row) = rows.get_mut(tracked.config) {
+                    *row = LiveRow {
+                        name: live.name().into(),
+                        state,
+                        info: info.into(),
+                        health,
+                    };
+                }
+            }
+        }
+        w.set_live_rows(ModelRc::new(VecModel::from(rows)));
+
         let Some(stream) = &self.stream else {
             w.set_stream_state(0);
             w.set_stream_health(0);
             w.set_stream_info("".into());
             return;
         };
-        if let Some(engine) = &self.engine {
-            stream.poll(engine);
-        }
-        let stats = stream.stats();
-        let net = &stats.network;
-        let state = stream.state();
-        w.set_stream_state(match state {
-            StreamState::Connecting => 1,
-            StreamState::Live => 2,
-            StreamState::Reconnecting | StreamState::Stopped => 3,
+        w.set_stream_state(if any_live {
+            2
+        } else if any_connecting {
+            1
+        } else {
+            3
         });
         let secs = stream.elapsed().as_secs();
         w.set_stream_time(
             format!("{:02}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60).into(),
         );
-
-        // Sent bitrate over the last second or so.
-        let bytes = stats.bytes.load(Relaxed);
-        let (at, prev, _) = self.stream_rate;
-        let dt = at.elapsed().as_secs_f64();
-        if dt >= 1.0 {
-            let kbps = bytes.saturating_sub(prev) as f64 * 8.0 / dt / 1000.0;
-            self.stream_rate = (Instant::now(), bytes, kbps);
-        }
-        let kbps = self.stream_rate.2;
-        let frames = stats.frames.load(Relaxed).max(1);
-        let dropped = net.dropped.load(Relaxed) + stats.dropped.load(Relaxed);
-        let percent = dropped as f64 * 100.0 / frames as f64;
-        let queue_ms = net.queue_ms.load(Relaxed);
-        let (health, info) = match state {
-            StreamState::Live => {
-                let congested = queue_ms > 300 || percent > 1.0;
-                let encoder = stats.encoder.lock().map(|e| e.clone()).unwrap_or_default();
-                (
-                    if congested { 2 } else { 1 },
-                    format!(
-                        "LIVE · {kbps:.0} kb/s · {dropped} dropped ({percent:.1}%) · {encoder}"
-                    ),
-                )
-            }
-            StreamState::Connecting => (2, format!("Connecting to {}…", stream.destination)),
-            StreamState::Reconnecting | StreamState::Stopped => (
-                3,
-                format!(
-                    "Reconnecting to {} (attempt {})…",
-                    stream.destination,
-                    net.attempt.load(Relaxed)
-                ),
-            ),
-        };
-        w.set_stream_health(health);
-        w.set_stream_info(info.into());
+        w.set_stream_health(worst.max(1));
+        w.set_stream_info(summary.join(" · ").into());
     }
 
     // ------------------------------------------------------------ settings dialog
 
     pub fn refresh_settings_form(&mut self) {
         let Some(w) = self.window() else { return };
+        // Always show an editor when there is something to edit.
+        if self
+            .dest_selected
+            .is_none_or(|i| i >= self.settings.destinations.len())
+        {
+            self.dest_selected = (!self.settings.destinations.is_empty()).then_some(0);
+        }
         use estream_media::{AudioCodec, Container, Preset, RateControl, VideoCodec, encode};
         let r = &self.settings.recording;
         let encoders = encode::available(r.codec);
@@ -1440,41 +1618,62 @@ impl App {
                 ThemeMode::System => 2,
             },
             ffmpeg: format!("FFmpeg libavutil {}", estream_media::version()).into(),
-            ..stream_form(&self.settings.stream)
+            ..stream_form(&self.settings.destinations, self.dest_selected)
         });
     }
 
     pub fn settings_set(&mut self, field: &str, value: f32) {
-        use estream_media::{
-            AudioCodec, Container, Preset, RateControl, Service, VideoCodec, encode,
-        };
+        use estream_media::{AudioCodec, Container, Preset, RateControl, VideoCodec, encode};
         let i = value.round().max(0.0) as usize;
-        let s = &mut self.settings.stream;
+        // Destination list.
+        let live_configs: Vec<usize> = self.stream_dests.iter().map(|d| d.config).collect();
         match field {
-            "stream-service" => {
-                s.service = Service::ALL.get(i).copied().unwrap_or_default();
-                if s.service != Service::Custom {
-                    s.server = s.service.default_server().to_owned();
+            "dest-select" => self.dest_selected = Some(i),
+            "dest-add" => {
+                let n = self.settings.destinations.len() + 1;
+                self.settings
+                    .destinations
+                    .push(crate::settings::DestinationConfig {
+                        name: format!("Destination {n}"),
+                        ..Default::default()
+                    });
+                self.dest_selected = Some(self.settings.destinations.len() - 1);
+            }
+            "dest-remove" if live_configs.contains(&i) => {
+                self.toast(
+                    "End the stream before removing a live destination".into(),
+                    true,
+                );
+                return;
+            }
+            "dest-remove" if i < self.settings.destinations.len() => {
+                self.settings.destinations.remove(i);
+                // Keep live destinations pointing at the right settings entries.
+                for d in &mut self.stream_dests {
+                    if d.config > i {
+                        d.config -= 1;
+                    }
+                }
+                self.dest_selected = match self.dest_selected {
+                    _ if self.settings.destinations.is_empty() => None,
+                    Some(s) if s >= i => Some(s.saturating_sub(1)),
+                    other => other,
+                };
+            }
+            "dest-enable" => {
+                if let Some(d) = self.settings.destinations.get_mut(i) {
+                    d.enabled = !d.enabled;
                 }
             }
-            "stream-codec" => {
-                s.codec = VideoCodec::ALL.get(i).copied().unwrap_or_default();
-                s.encoder = "auto".into();
-            }
-            "stream-encoder" => {
-                s.encoder = if i == 0 {
-                    "auto".into()
-                } else {
-                    encode::available(s.codec)
-                        .get(i - 1)
-                        .map_or("auto".into(), |e| e.name.to_owned())
-                }
-            }
-            "stream-bitrate" => s.bitrate_kbps = value.clamp(500.0, 50_000.0) as u32,
-            "stream-audio-bitrate" => s.audio_bitrate_kbps = value.clamp(64.0, 320.0) as u32,
-            "stream-track" => s.audio_track = i.min(5) as u8,
-            "stream-reconnect" => s.reconnect = value > 0.5,
             _ => {}
+        }
+        // Editor fields act on the selected destination.
+        let selected = self.dest_selected;
+        if let Some(s) = selected
+            .and_then(|i| self.settings.destinations.get_mut(i))
+            .map(|d| &mut d.stream)
+        {
+            Self::set_stream_field(s, field, value, i);
         }
         let r = &mut self.settings.recording;
         match field {
@@ -1536,13 +1735,52 @@ impl App {
         self.refresh_settings_form();
     }
 
+    /// Applies a numeric editor field to a destination's stream settings.
+    fn set_stream_field(s: &mut estream_media::StreamSettings, field: &str, value: f32, i: usize) {
+        use estream_media::{Service, VideoCodec, encode};
+        match field {
+            "stream-service" => {
+                s.service = Service::ALL.get(i).copied().unwrap_or_default();
+                if s.service != Service::Custom {
+                    s.server = s.service.default_server().to_owned();
+                }
+            }
+            "stream-codec" => {
+                s.codec = VideoCodec::ALL.get(i).copied().unwrap_or_default();
+                s.encoder = "auto".into();
+            }
+            "stream-encoder" => {
+                s.encoder = if i == 0 {
+                    "auto".into()
+                } else {
+                    encode::available(s.codec)
+                        .get(i - 1)
+                        .map_or("auto".into(), |e| e.name.to_owned())
+                }
+            }
+            "stream-bitrate" => s.bitrate_kbps = value.clamp(500.0, 50_000.0) as u32,
+            "stream-audio-bitrate" => s.audio_bitrate_kbps = value.clamp(64.0, 320.0) as u32,
+            "stream-track" => s.audio_track = i.min(5) as u8,
+            "stream-reconnect" => s.reconnect = value > 0.5,
+            _ => {}
+        }
+    }
+
     pub fn settings_text(&mut self, field: &str, value: &str) {
         let value = value.trim();
-        match field {
-            "stream-server" => self.settings.stream.server = value.to_owned(),
-            "stream-key" => self.settings.set_stream_key(value),
-            "folder" if !value.is_empty() => self.settings.recording.folder = PathBuf::from(value),
-            "filename" if !value.is_empty() => self.settings.recording.filename = value.to_owned(),
+        let selected = self
+            .dest_selected
+            .and_then(|i| self.settings.destinations.get_mut(i));
+        match (field, selected) {
+            ("dest-name", Some(d)) if !value.is_empty() => d.name = value.to_owned(),
+            ("stream-server", Some(d)) => d.stream.server = value.to_owned(),
+            ("stream-key", Some(d)) => d.set_key(value),
+            ("folder", _) if !value.is_empty() => {
+                self.settings.recording.folder = PathBuf::from(value)
+            }
+            ("filename", _) if !value.is_empty() => {
+                self.settings.recording.filename = value.to_owned()
+            }
             _ => return,
         }
         self.settings.save(&self.paths.settings());
@@ -2952,6 +3190,7 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     on!(on_mixer_mute, |a, id| a.mixer_mute(&id));
     on!(on_settings_set, |a, k, v| a.settings_set(&k, v));
     on!(on_settings_text, |a, k, v| a.settings_text(&k, &v));
+    on!(on_live_toggle, |a, i| a.live_toggle(i.max(0) as usize));
     on!(on_settings_browse, |a| a.settings_browse());
 
     {

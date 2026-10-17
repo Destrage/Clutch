@@ -1,7 +1,7 @@
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
-import { PaletteEntry, Preset, SourceType, SettingsForm } from "types.slint";
-import { Button, Icon, Badge, TextField, NumberField, Select, Toggle, SectionTitle } from "widgets.slint";
+import { PaletteEntry, Preset, SourceType, SettingsForm, DestinationRow, LiveRow } from "types.slint";
+import { Button, IconButton, Icon, Badge, TextField, NumberField, Select, Toggle, SectionTitle } from "widgets.slint";
 import { KindIcon } from "panels.slint";
 
 // Full-window scrim with a centered card. Clicking the scrim calls `dismiss`.
@@ -417,19 +417,119 @@ component SettingRow inherits HorizontalLayout {
     @children
 }
 
+// Editor for the selected streaming destination.
+component DestinationEditor inherits VerticalLayout {
+    in property <SettingsForm> form;
+    callback set(string, float);
+    callback set-text(string, string);
+
+    spacing: 12px;
+
+    // Typing breaks the text fields' bindings; re-sync them when another destination is
+    // selected or a preset changes the server.
+    property <int> selected: root.form.dest-selected;
+    property <string> server: root.form.stream-server;
+    changed selected => {
+        name-field.text = root.form.dest-name;
+        server-field.text = root.form.stream-server;
+        key-field.text = "";
+    }
+    changed server => {
+        if (server-field.text != self.server) {
+            server-field.text = self.server;
+        }
+    }
+
+    SettingRow {
+        label: "Name";
+        name-field := TextField {
+            text: root.form.dest-name;
+            label: "Destination name";
+            edited(t) => { root.set-text("dest-name", t); }
+        }
+    }
+    SettingRow {
+        label: "Service";
+        Select {
+            label: "Streaming service";
+            options: root.form.stream-services;
+            current-index: root.form.stream-service;
+            selected(i) => { root.set("stream-service", i); }
+        }
+    }
+    SettingRow {
+        label: "Server";
+        hint: root.form.stream-protocol != "" ? "Detected: " + root.form.stream-protocol : "rtmp(s)://, srt://, rist:// or https:// (WHIP)";
+        server-field := TextField {
+            text: root.form.stream-server;
+            label: "Stream server";
+            placeholder: "rtmps://…";
+            edited(t) => { root.set-text("stream-server", t); }
+        }
+    }
+    SettingRow {
+        label: "Stream key";
+        hint: "Stored encrypted for your Windows account";
+        key-field := TextField {
+            input-type: InputType.password;
+            label: "Stream key";
+            placeholder: root.form.stream-key-set ? "Saved — type to replace" : "Paste your stream key";
+            edited(t) => { root.set-text("stream-key", t); }
+        }
+    }
+    SettingRow {
+        label: "Video";
+        Select {
+            label: "Stream codec";
+            options: ["H.264", "HEVC (Enhanced RTMP / SRT)", "AV1 (Enhanced RTMP / SRT)"];
+            current-index: root.form.stream-codec;
+            selected(i) => { root.set("stream-codec", i); }
+        }
+    }
+    SettingRow {
+        label: "Encoder";
+        hint: "Destinations with identical video and audio settings share one encoder";
+        Select {
+            label: "Stream encoder";
+            options: root.form.stream-encoders;
+            current-index: root.form.stream-encoder;
+            selected(i) => { root.set("stream-encoder", i); }
+        }
+    }
+    SettingRow {
+        label: "Bitrate";
+        hint: "Constant bitrate; keep the total below ~75% of your upload speed";
+        NumberField { label: ""; value: root.form.stream-bitrate; minimum: 500; maximum: 50000; step: 500; suffix: "kbps"; changed(v) => { root.set("stream-bitrate", v); } }
+    }
+    SettingRow {
+        label: "Audio";
+        NumberField { label: ""; value: root.form.stream-audio-bitrate; minimum: 64; maximum: 320; step: 32; suffix: "kbps"; changed(v) => { root.set("stream-audio-bitrate", v); } }
+        Select {
+            label: "Audio track to stream";
+            options: ["Track 1", "Track 2", "Track 3", "Track 4", "Track 5", "Track 6"];
+            current-index: root.form.stream-track;
+            selected(i) => { root.set("stream-track", i); }
+        }
+    }
+    SettingRow {
+        label: "Reconnect";
+        hint: "Retry automatically if the connection drops";
+        Toggle { checked: root.form.stream-reconnect; toggled(v) => { root.set("stream-reconnect", v ? 1 : 0); } }
+    }
+    if root.form.stream-warning != "": Text {
+        text: root.form.stream-warning;
+        color: Theme.warn;
+        font-size: Theme.font-s;
+        wrap: word-wrap;
+    }
+}
+
 export component SettingsDialog inherits Modal {
     in property <SettingsForm> form;
     callback set(string, float);
     callback set-text(string, string);
     callback browse();
 
-    // Typing breaks the server field's binding; re-sync it when a preset changes the server.
-    property <string> server: root.form.stream-server;
-    changed server => {
-        if (server-field.text != self.server) {
-            server-field.text = self.server;
-        }
-    }
 
     card-width: 640px;
     card-top: 40px;
@@ -462,79 +562,52 @@ export component SettingsDialog inherits Modal {
             padding-top: 8px;
             spacing: 12px;
 
-            SectionTitle { text: "STREAM"; }
-            SettingRow {
-                label: "Service";
-                Select {
-                    label: "Streaming service";
-                    options: root.form.stream-services;
-                    current-index: root.form.stream-service;
-                    selected(i) => { root.set("stream-service", i); }
-                }
-            }
-            SettingRow {
-                label: "Server";
-                hint: root.form.stream-protocol != "" ? "Detected: " + root.form.stream-protocol : "rtmp(s)://, srt://, rist:// or https:// (WHIP)";
-                server-field := TextField {
-                    text: root.form.stream-server;
-                    label: "Stream server";
-                    placeholder: "rtmps://…";
-                    edited(t) => { root.set-text("stream-server", t); }
-                }
-            }
-            SettingRow {
-                label: "Stream key";
-                hint: "Stored encrypted for your Windows account";
-                TextField {
-                    input-type: InputType.password;
-                    label: "Stream key";
-                    placeholder: root.form.stream-key-set ? "Saved — type to replace" : "Paste your stream key";
-                    edited(t) => { root.set-text("stream-key", t); }
-                }
-            }
-            SettingRow {
-                label: "Video";
-                Select {
-                    label: "Stream codec";
-                    options: ["H.264", "HEVC (Enhanced RTMP / SRT)", "AV1 (Enhanced RTMP / SRT)"];
-                    current-index: root.form.stream-codec;
-                    selected(i) => { root.set("stream-codec", i); }
-                }
-            }
-            SettingRow {
-                label: "Encoder";
-                Select {
-                    label: "Stream encoder";
-                    options: root.form.stream-encoders;
-                    current-index: root.form.stream-encoder;
-                    selected(i) => { root.set("stream-encoder", i); }
-                }
-            }
-            SettingRow {
-                label: "Bitrate";
-                hint: "Constant bitrate; keep below ~75% of your upload speed";
-                NumberField { label: ""; value: root.form.stream-bitrate; minimum: 500; maximum: 50000; step: 500; suffix: "kbps"; changed(v) => { root.set("stream-bitrate", v); } }
-            }
-            SettingRow {
-                label: "Audio";
-                NumberField { label: ""; value: root.form.stream-audio-bitrate; minimum: 64; maximum: 320; step: 32; suffix: "kbps"; changed(v) => { root.set("stream-audio-bitrate", v); } }
-                Select {
-                    label: "Audio track to stream";
-                    options: ["Track 1", "Track 2", "Track 3", "Track 4", "Track 5", "Track 6"];
-                    current-index: root.form.stream-track;
-                    selected(i) => { root.set("stream-track", i); }
-                }
-            }
-            SettingRow {
-                label: "Reconnect";
-                hint: "Retry automatically if the connection drops";
-                Toggle { checked: root.form.stream-reconnect; toggled(v) => { root.set("stream-reconnect", v ? 1 : 0); } }
-            }
-            if root.form.stream-warning != "": Text {
-                text: root.form.stream-warning;
-                color: Theme.warn;
+            SectionTitle { text: "STREAM DESTINATIONS"; }
+            Text {
+                text: "Go Live streams to every enabled destination at once.";
+                color: Theme.text-faint;
                 font-size: Theme.font-s;
                 wrap: word-wrap;
+            }
+            for d[i] in root.form.destinations: Rectangle {
+                height: 36px;
+                border-radius: Theme.radius-s;
+                background: i == root.form.dest-selected ? Theme.accent.with-alpha(0.14) : row-ta.has-hover ? Theme.hover : transparent;
+                border-width: i == root.form.dest-selected ? 1px : 0px;
+                border-color: Theme.accent.with-alpha(0.5);
+                accessible-role: list-item;
+                accessible-label: d.name;
+                row-ta := TouchArea {
+                    mouse-cursor: MouseCursor.pointer;
+                    clicked => { root.set("dest-select", i); }
+                }
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 6px;
+                    spacing: 10px;
+                    VerticalLayout {
+                        alignment: center;
+                        Toggle { checked: d.enabled; toggled(v) => { root.set("dest-enable", i); } }
+                    }
+                    Text { text: d.name; color: d.enabled ? Theme.text : Theme.text-faint; font-size: Theme.font-m; vertical-alignment: center; horizontal-alignment: left; horizontal-stretch: 1; overflow: elide; }
+                    if d.protocol != "": VerticalLayout {
+                        alignment: center;
+                        Badge { text: d.protocol; }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        IconButton { icon: Icons.trash; tooltip: "Remove " + d.name; clicked => { root.set("dest-remove", i); } }
+                    }
+                }
+            }
+            HorizontalLayout {
+                alignment: start;
+                Button { text: "Add destination"; has-icon: true; icon: Icons.plus; kind: "ghost"; clicked => { root.set("dest-add", 0); } }
+            }
+            if root.form.dest-selected >= 0: DestinationEditor {
+                form: root.form;
+                set(k, v) => { root.set(k, v); }
+                set-text(k, v) => { root.set-text(k, v); }
             }
 
             SectionTitle { text: "RECORDING"; }
@@ -668,6 +741,80 @@ export component SettingsDialog inherits Modal {
                 }
             }
             Text { text: root.form.ffmpeg; color: Theme.text-faint; font-size: Theme.font-xs; }
+        }
+    }
+}
+/// Live destinations, opened from the chevron next to Go Live.
+export component LivePanel inherits Rectangle {
+    in property <[LiveRow]> rows;
+    callback toggle(int);
+    callback manage();
+    callback dismiss();
+
+    // Click-away layer.
+    TouchArea {
+        clicked => { root.dismiss(); }
+    }
+    Rectangle {
+        x: parent.width - self.width - 12px;
+        y: 56px;
+        width: 360px;
+        height: body.preferred-height;
+        background: Theme.surface;
+        border-radius: Theme.radius-l;
+        border-width: 1px;
+        border-color: Theme.border-strong;
+        drop-shadow-blur: 24px;
+        drop-shadow-offset-y: 8px;
+        drop-shadow-color: #00000066;
+        accessible-role: groupbox;
+        accessible-label: "Stream destinations";
+        TouchArea { }
+        body := VerticalLayout {
+            padding: 12px;
+            spacing: 6px;
+            HorizontalLayout {
+                Text { text: "Destinations"; color: Theme.text; font-size: Theme.font-m; font-weight: 700; vertical-alignment: center; horizontal-stretch: 1; }
+                Button { text: "Manage…"; kind: "ghost"; clicked => { root.manage(); } }
+            }
+            if root.rows.length == 0: Text {
+                text: "No destinations yet. Add one in Settings.";
+                color: Theme.text-faint;
+                font-size: Theme.font-s;
+                wrap: word-wrap;
+            }
+            for r[i] in root.rows: HorizontalLayout {
+                spacing: 10px;
+                padding-top: 4px;
+                padding-bottom: 4px;
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 8px;
+                        height: 8px;
+                        border-radius: 4px;
+                        background: r.state == 0 ? Theme.text-faint
+                            : r.health == 1 ? Theme.ok
+                            : r.health == 2 ? Theme.warn
+                            : Theme.live;
+                    }
+                }
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: center;
+                    Text { text: r.name; color: Theme.text; font-size: Theme.font-m; overflow: elide; }
+                    Text { text: r.info; color: r.state == 4 ? Theme.live : Theme.text-muted; font-size: Theme.font-xs; wrap: word-wrap; }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Button {
+                        text: r.state == 0 || r.state == 4 ? "Start" : "Stop";
+                        kind: r.state == 0 || r.state == 4 ? "default" : "ghost";
+                        tooltip: (r.state == 0 || r.state == 4 ? "Go live on " : "End the stream on ") + r.name;
+                        clicked => { root.toggle(i); }
+                    }
+                }
+            }
         }
     }
 }

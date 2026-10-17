@@ -4,17 +4,19 @@
 pub use ffmpeg_next as ffmpeg;
 
 pub mod encode;
+pub mod multistream;
 pub mod mux;
 pub mod output;
 pub mod settings;
 pub mod stream;
 
-pub use output::{OutputStats, Recording, ReplayBuffer, Stream};
+pub use multistream::{Destination, LiveDestination, MultiStream};
+pub use output::{OutputStats, Recording, ReplayBuffer};
 pub use settings::{
     AudioCodec, Container, Preset, Protocol, RateControl, RecordingSettings, Service,
     StreamSettings, VideoCodec, redact,
 };
-pub use stream::StreamState;
+pub use stream::{DestinationStats, StreamState};
 
 #[derive(Debug, thiserror::Error)]
 pub enum MediaError {

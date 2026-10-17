@@ -19,6 +19,8 @@ export component TopBar inherits Rectangle {
     in property <string> stream-time;
     callback open-palette();
     callback toggle-stream();
+    callback open-destinations();
+    in property <bool> live-panel-open;
     callback undo();
     callback redo();
     callback toggle-theme();
@@ -198,8 +200,17 @@ export component TopBar inherits Rectangle {
                 icon: root.stream-state == 2 ? Icons.square : Icons.radio;
                 kind: root.stream-state == 3 ? "danger" : root.stream-state == 1 ? "default" : "live";
                 active: root.stream-state == 2;
-                tooltip: root.stream-state == 0 ? "Start streaming" : "Stop streaming";
+                tooltip: root.stream-state == 0 ? "Go live on all enabled destinations" : "End the stream everywhere";
                 clicked => { root.toggle-stream(); }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            IconButton {
+                icon: Icons.chevron-down;
+                toggled: root.live-panel-open;
+                tooltip: "Destinations";
+                clicked => { root.open-destinations(); }
             }
         }
     }
