@@ -4,7 +4,7 @@
 use crate::audio::{self, AudioHost};
 use crate::command::{Change, Command, CommandError};
 use crate::feed::{VideoConsumer, VideoFrame};
-use crate::graph::RenderGraph;
+use crate::graph::{ActiveTransition, RenderGraph, ViewState};
 use crate::history::History;
 use crate::source::{SourceRegistry, SourceStatus};
 use crate::video::{self, CanvasOutput, SourceInfo, VideoCore, VideoSink};
@@ -12,9 +12,9 @@ use arc_swap::ArcSwap;
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TrySendError};
 use estream_audio::mixer::MeterSet;
 use estream_audio::{AudioCore, SourceFactory, TrackSink};
-use estream_core::{CanvasId, EngineClock, SourceId};
+use estream_core::{CanvasId, EngineClock, SceneId, SourceId};
 use estream_gpu::{GpuContext, GpuError, GpuOptions};
-use estream_project::{PersistError, Project, persist};
+use estream_project::{PersistError, Project, Transition, TransitionKind, persist};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -136,6 +136,8 @@ struct Shared {
     graph: ArcSwap<RenderGraph>,
     revision: AtomicU64,
     outputs: ArcSwap<Vec<Arc<CanvasOutput>>>,
+    /// Studio-mode Preview renders, per canvas.
+    previews: ArcSwap<Vec<Arc<CanvasOutput>>>,
     /// Merged video + audio source information.
     statuses: ArcSwap<HashMap<SourceId, SourceInfo>>,
     video_infos: ArcSwap<HashMap<SourceId, SourceInfo>>,
@@ -210,6 +212,10 @@ impl VideoSink for Shared {
         self.merge_statuses();
     }
 
+    fn publish_previews(&self, previews: Vec<Arc<CanvasOutput>>) {
+        self.previews.store(Arc::new(previews));
+    }
+
     fn shutdown_requested(&self) -> &AtomicBool {
         &self.shutdown
     }
@@ -225,6 +231,16 @@ enum Request {
     Undo(Reply<bool>),
     Redo(Reply<bool>),
     Seal,
+    TransitionTo {
+        canvas: CanvasId,
+        scene: SceneId,
+        transition: Option<Transition>,
+        reply: Reply<u64>,
+    },
+    SetPreview {
+        canvas: CanvasId,
+        scene: Option<SceneId>,
+    },
     Save {
         path: Option<PathBuf>,
         reply: Reply<PathBuf>,
@@ -254,6 +270,7 @@ impl Engine {
             snapshot: ArcSwap::from_pointee(project.clone()),
             revision: AtomicU64::new(0),
             outputs: ArcSwap::from_pointee(Vec::new()),
+            previews: ArcSwap::from_pointee(Vec::new()),
             statuses: ArcSwap::from_pointee(HashMap::new()),
             video_infos: ArcSwap::from_pointee(HashMap::new()),
             audio_statuses: ArcSwap::from_pointee(HashMap::new()),
@@ -318,6 +335,10 @@ impl Engine {
             autosave_delay: config.autosave_delay,
             dirty_since_save: false,
             autosave_at: None,
+            view: ViewState::default(),
+            clock,
+            generation: 0,
+            starting: None,
         };
         let control = std::thread::Builder::new()
             .name("estream-engine".into())
@@ -375,6 +396,48 @@ impl Engine {
     /// Ends the current undo coalescing run (call when a drag gesture ends).
     pub fn seal_history(&self) {
         let _ = self.requests.send(Request::Seal);
+    }
+
+    /// Makes `scene` the program scene of `canvas` with a transition (the project's
+    /// transition if `None`). Returns the new revision.
+    pub fn transition_to(
+        &self,
+        canvas: CanvasId,
+        scene: SceneId,
+        transition: Option<Transition>,
+    ) -> Result<u64, EngineError> {
+        self.request(|reply| Request::TransitionTo {
+            canvas,
+            scene,
+            transition,
+            reply,
+        })
+    }
+
+    /// Shows `scene` in the studio-mode Preview of `canvas`; `None` turns the Preview off.
+    pub fn set_preview_scene(&self, canvas: CanvasId, scene: Option<SceneId>) {
+        let _ = self.requests.send(Request::SetPreview { canvas, scene });
+    }
+
+    /// True while a program transition is running on `canvas`.
+    pub fn is_transitioning(&self, canvas: CanvasId) -> bool {
+        let now = self.clock.now();
+        self.shared.graph.load().canvases.iter().any(|c| {
+            c.id == canvas
+                && c.transition
+                    .as_ref()
+                    .is_some_and(|t| t.progress(now).is_some())
+        })
+    }
+
+    /// The studio-mode Preview render of `canvas`, while studio mode is on.
+    pub fn preview_output(&self, canvas: CanvasId) -> Option<Arc<CanvasOutput>> {
+        self.shared
+            .previews
+            .load()
+            .iter()
+            .find(|o| o.id == canvas)
+            .cloned()
     }
 
     /// Saves the collection to the configured path and removes the recovery file.
@@ -545,16 +608,40 @@ struct Control {
     autosave_delay: Duration,
     dirty_since_save: bool,
     autosave_at: Option<Instant>,
+    /// Studio Preview scenes and running transitions (not saved).
+    view: ViewState,
+    clock: EngineClock,
+    /// Render graph generation (bumped on project and view changes).
+    generation: u64,
+    /// Canvas whose transition `transition_to` is starting right now.
+    starting: Option<CanvasId>,
 }
 
 impl Control {
+    /// When the earliest running transition ends, as an `Instant`.
+    fn transition_deadline(&self) -> Option<Instant> {
+        let now = self.clock.now();
+        self.view
+            .transitions
+            .values()
+            .map(|t| Instant::now() + Duration::from_nanos(t.end().0.saturating_sub(now.0)))
+            .min()
+    }
+
     fn run(&mut self, rx: Receiver<Request>) {
         loop {
-            let request = match self.autosave_at {
+            let deadline = match (self.autosave_at, self.transition_deadline()) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            };
+            let request = match deadline {
                 Some(at) => match rx.recv_deadline(at) {
                     Ok(r) => r,
                     Err(RecvTimeoutError::Timeout) => {
-                        self.autosave();
+                        self.expire_transitions();
+                        if self.autosave_at.is_some_and(|a| a <= Instant::now()) {
+                            self.autosave();
+                        }
                         continue;
                     }
                     Err(RecvTimeoutError::Disconnected) => break,
@@ -590,6 +677,23 @@ impl Control {
                     let _ = reply.send(self.finish_history(result, Origin::Redo));
                 }
                 Request::Seal => self.history.seal(),
+                Request::TransitionTo {
+                    canvas,
+                    scene,
+                    transition,
+                    reply,
+                } => {
+                    let _ = reply.send(self.transition_to(canvas, scene, transition));
+                }
+                Request::SetPreview { canvas, scene } => {
+                    let changed = match scene {
+                        Some(scene) => self.view.preview.insert(canvas, scene) != Some(scene),
+                        None => self.view.preview.remove(&canvas).is_some(),
+                    };
+                    if changed {
+                        self.publish_graph();
+                    }
+                }
                 Request::Save { path, reply } => {
                     let _ = reply.send(self.save(path));
                 }
@@ -627,8 +731,78 @@ impl Control {
                 None => Ok(()),
             },
             Command::Batch { commands } => commands.iter().try_for_each(|c| self.validate(c)),
+            Command::SetTransition { transition } => match &transition.kind {
+                TransitionKind::Shader { code } => {
+                    estream_gpu::validate_custom_transition(code).map_err(CommandError::Invalid)
+                }
+                _ => Ok(()),
+            },
             _ => Ok(()),
         }
+    }
+
+    /// Switches the program scene, recording a transition the video thread renders.
+    fn transition_to(
+        &mut self,
+        canvas: CanvasId,
+        scene: SceneId,
+        transition: Option<Transition>,
+    ) -> Result<u64, EngineError> {
+        let from = self
+            .project
+            .canvas(canvas)
+            .ok_or(CommandError::NoCanvas(canvas))?
+            .active_scene;
+        if from == Some(scene) {
+            return Ok(self.shared.revision.load(Ordering::Acquire));
+        }
+        let transition = transition.unwrap_or_else(|| self.project.transition.clone());
+        let previous = self.view.transitions.remove(&canvas);
+        if !transition.is_instant() {
+            self.view.transitions.insert(
+                canvas,
+                ActiveTransition {
+                    from,
+                    transition,
+                    start: self.clock.now(),
+                },
+            );
+        }
+        self.starting = Some(canvas);
+        let result = self.execute(Command::SetActiveScene {
+            canvas,
+            scene: Some(scene),
+        });
+        self.starting = None;
+        if result.is_err() {
+            // Nothing changed: restore the previous view state.
+            self.view.transitions.remove(&canvas);
+            if let Some(previous) = previous {
+                self.view.transitions.insert(canvas, previous);
+            }
+        }
+        result
+    }
+
+    /// Drops finished transitions so the graph (and audio mix) no longer include them.
+    fn expire_transitions(&mut self) {
+        let now = self.clock.now();
+        let before = self.view.transitions.len();
+        self.view.transitions.retain(|_, t| t.end() > now);
+        if self.view.transitions.len() != before {
+            self.publish_graph();
+        }
+    }
+
+    /// Rebuilds and publishes the render graph (project + view state).
+    fn publish_graph(&mut self) {
+        self.generation += 1;
+        self.shared.graph.store(Arc::new(RenderGraph::build_with(
+            &self.project,
+            self.generation,
+            &self.view,
+            self.clock.now(),
+        )));
     }
 
     fn finish_history(
@@ -654,9 +828,21 @@ impl Control {
             .store(self.history.can_redo(), Ordering::Release);
         let revision = self.shared.revision.fetch_add(1, Ordering::AcqRel) + 1;
         self.shared.snapshot.store(Arc::new(self.project.clone()));
-        self.shared
-            .graph
-            .store(Arc::new(RenderGraph::build(&self.project, revision)));
+        // A program change that isn't the transition just started (plain command, undo)
+        // is a cut: drop any transition running on that canvas.
+        for change in &changes {
+            if let Change::ActiveSceneChanged { canvas, .. } = change
+                && self.starting != Some(*canvas)
+            {
+                self.view.transitions.remove(canvas);
+            }
+        }
+        // Previews of scenes that no longer exist are dropped.
+        let project = &self.project;
+        self.view
+            .preview
+            .retain(|_, scene| project.scene(*scene).is_some());
+        self.publish_graph();
         self.shared.broadcast(Event::Changed {
             revision,
             origin,

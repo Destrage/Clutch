@@ -3,7 +3,10 @@
 export struct SceneRow {
     id: string,
     name: string,
+    /// Being edited (the Preview scene in studio mode, else the program scene).
     active: bool,
+    /// On program (shown separately in studio mode).
+    live: bool,
     items: int,
 }
 

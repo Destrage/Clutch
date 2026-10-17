@@ -5,8 +5,8 @@ import { Icons } from "icons.slint";
 import { SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SourceType, PropRow, MixerStrip, AudioInspect, SettingsForm, LiveRow, DestinationRow } from "types.slint";
 import { VSplitter, HSplitter, TooltipLayer, Hint } from "widgets.slint";
 import { Preview } from "preview.slint";
-import { TopBar, ScenesPanel, SourcesPanel, InspectorPanel, MixerPanel, StatusBar } from "panels.slint";
-import { CommandPalette, AddSourceDialog, SetupWizard, RecoveryPrompt, Toast, SettingsDialog, LivePanel } from "overlays.slint";
+import { TopBar, ScenesPanel, SourcesPanel, InspectorPanel, MixerPanel, StatusBar, TransitionColumn, ProgramView } from "panels.slint";
+import { CommandPalette, AddSourceDialog, SetupWizard, RecoveryPrompt, Toast, SettingsDialog, LivePanel, ShaderDialog } from "overlays.slint";
 
 export { Theme }
 
@@ -27,6 +27,21 @@ export component AppWindow inherits Window {
 
     // Preview
     in property <image> preview-frame;
+    // Studio mode and transitions
+    in property <bool> studio-mode;
+    in property <image> program-frame;
+    in property <int> transition-kind;
+    in property <int> transition-direction;
+    in property <float> transition-duration;
+    in property <string> transition-label;
+    in property <bool> transition-busy;
+    in-out property <bool> shader-open;
+    in property <string> shader-code;
+    in property <string> shader-error;
+    callback transition-set(string, float);
+    callback studio-go(string);
+    callback shader-apply(string);
+    callback shader-example();
     in property <float> canvas-w: 1920;
     in property <float> canvas-h: 1080;
     in property <CanvasBox> selection-box;
@@ -185,6 +200,8 @@ export component AppWindow inherits Window {
                 toggle-replay => { root.action("replay.toggle"); }
                 save-replay => { root.action("replay.save"); }
                 open-settings => { root.action("settings"); }
+                studio-mode: root.studio-mode;
+                toggle-studio => { root.action("studio.toggle"); }
             }
             HorizontalLayout {
                 padding-left: 10px;
@@ -200,6 +217,12 @@ export component AppWindow inherits Window {
                     duplicate(id) => { root.scene-duplicate(id); }
                     remove(id) => { root.scene-remove(id); }
                     rename(id, name) => { root.scene-rename(id, name); main-keys.focus(); }
+                    studio-mode: root.studio-mode;
+                    transition-kind: root.transition-kind;
+                    transition-direction: root.transition-direction;
+                    transition-duration: root.transition-duration;
+                    transition-set(k, v) => { root.transition-set(k, v); }
+                    edit-shader => { root.action("transition.shader"); }
                 }
                 VSplitter { size <=> root.scenes-width; minimum: 160px; maximum: 420px; }
 
@@ -211,19 +234,42 @@ export component AppWindow inherits Window {
                         border-width: 1px;
                         border-color: Theme.border;
                         clip: true;
-                        preview := Preview {
-                            frame: root.preview-frame;
-                            canvas-w: root.canvas-w;
-                            canvas-h: root.canvas-h;
-                            selection: root.selection-box;
-                            hover: root.hover-box;
-                            guides: root.guides;
-                            cursor: root.cursor;
-                            space-down: root.space-down;
-                            pointer(kind, x, y, px, shift, alt, ctrl) => {
-                                if (kind == "down") { main-keys.focus(); }
-                                root.preview-pointer(kind, x, y, px, shift, alt, ctrl);
+                        HorizontalLayout {
+                            preview := Preview {
+                                horizontal-stretch: 1;
+                                frame: root.preview-frame;
+                                canvas-w: root.canvas-w;
+                                canvas-h: root.canvas-h;
+                                selection: root.selection-box;
+                                hover: root.hover-box;
+                                guides: root.guides;
+                                cursor: root.cursor;
+                                space-down: root.space-down;
+                                pointer(kind, x, y, px, shift, alt, ctrl) => {
+                                    if (kind == "down") { main-keys.focus(); }
+                                    root.preview-pointer(kind, x, y, px, shift, alt, ctrl);
+                                }
                             }
+                            if root.studio-mode: TransitionColumn {
+                                label: root.transition-label;
+                                busy: root.transition-busy;
+                                go(mode) => { root.studio-go(mode); main-keys.focus(); }
+                            }
+                            if root.studio-mode: ProgramView {
+                                horizontal-stretch: 1;
+                                frame: root.program-frame;
+                                canvas-w: root.canvas-w;
+                                canvas-h: root.canvas-h;
+                            }
+                        }
+                        if root.studio-mode: Rectangle {
+                            x: 12px;
+                            y: 10px;
+                            width: preview-label.preferred-width + 14px;
+                            height: 20px;
+                            border-radius: 10px;
+                            background: Theme.ok;
+                            preview-label := Text { text: "PREVIEW"; color: Theme.on-accent; font-size: Theme.font-xs; font-weight: 700; }
                         }
                     }
                     HSplitter {
@@ -330,6 +376,14 @@ export component AppWindow inherits Window {
             root.add-source-open = false;
             main-keys.focus();
         }
+    }
+
+    if root.shader-open: ShaderDialog {
+        code: root.shader-code;
+        error: root.shader-error;
+        apply(code) => { root.shader-apply(code); }
+        example => { root.shader-example(); }
+        dismiss => { root.shader-open = false; main-keys.focus(); }
     }
 
     if root.live-panel-open: LivePanel {

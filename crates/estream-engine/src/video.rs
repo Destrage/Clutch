@@ -3,14 +3,16 @@
 
 use crate::feed::{ReadbackRing, VideoConsumer};
 use crate::frame_clock::{FrameClock, FrameTick, wait_until};
-use crate::graph::{CanvasGraph, RenderGraph};
+use crate::graph::{CanvasGraph, FlatItem, RenderGraph};
 use crate::source::{SourceContext, SourceRegistry, SourceStatus, VideoSource};
 use estream_core::color::srgb_to_linear;
-use estream_core::{CanvasId, EngineClock, SourceId, Timestamp};
+use estream_core::{CanvasId, EngineClock, Rgba8, SourceId, Timestamp};
 use estream_gpu::{
-    CANVAS_FORMAT, CanvasRenderer, Compositor, ConvertInput, DrawItem, GpuContext, OutputConverter,
+    BuiltinKind, CANVAS_FORMAT, CanvasRenderer, Compositor, ConvertInput, DrawItem, GpuContext,
+    OutputConverter, TransitionParams, TransitionRenderer, TransitionShader, TransitionTargets,
     wgpu,
 };
+use estream_project::TransitionKind;
 use glam::Vec2;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -128,6 +130,122 @@ struct CanvasSlot {
     background: wgpu::Color,
     /// NV12 readback for encoders (only while a consumer is attached).
     readback: Option<ReadbackRing>,
+    /// Renders the outgoing scene during transitions (separate uniform buffer).
+    from_renderer: Option<CanvasRenderer>,
+    /// Outgoing / incoming scratch canvases, allocated on the first transition.
+    transition_targets: Option<TransitionTargets>,
+    /// Studio-mode Preview render (only while studio mode is on).
+    preview: Option<StudioPreview>,
+}
+
+/// A second render of the canvas showing the studio Preview scene. UI only; never encoded.
+struct StudioPreview {
+    output: Arc<CanvasOutput>,
+    renderer: CanvasRenderer,
+    canvas_views: [wgpu::TextureView; OUTPUT_RING],
+    preview_views: [wgpu::TextureView; OUTPUT_RING],
+    inputs: [ConvertInput; OUTPUT_RING],
+    sequence: u64,
+    /// Slot rendered this frame, published with the program frame.
+    pending: Option<usize>,
+}
+
+impl StudioPreview {
+    fn publish(&mut self, timestamp: Timestamp) {
+        if let Some(slot) = self.pending.take() {
+            self.sequence += 1;
+            self.output.publish(self.sequence, slot, timestamp);
+            self.output.stats.rendered.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Collects drawable items for `flats` into `out` (sources without a frame draw nothing).
+fn push_items<'a>(
+    sources: &'a HashMap<SourceId, SourceSlot>,
+    flats: &[FlatItem],
+    out: &mut Vec<DrawItem<'a>>,
+) {
+    for flat in flats {
+        let Some(frame) = sources
+            .get(&flat.source)
+            .and_then(|s| s.instance.as_deref())
+            .and_then(|s| s.frame())
+        else {
+            continue;
+        };
+        let layout = flat.transform.layout(flat.crop, frame.size);
+        if layout.size.x <= 0.0 || layout.size.y <= 0.0 {
+            continue;
+        }
+        out.push(DrawItem {
+            binding: frame.binding,
+            matrix: flat.parent * layout.matrix,
+            uv_min: layout.uv_min,
+            uv_max: layout.uv_max,
+            opacity: flat.opacity,
+            blend: flat.blend,
+        });
+    }
+}
+
+/// Reuses a cleared `Vec<DrawItem>` allocation with a new lifetime (in-place collect
+/// keeps capacity, so steady-state frames don't allocate).
+fn reuse<'a>(scratch: &mut Vec<DrawItem<'static>>) -> Vec<DrawItem<'a>> {
+    std::mem::take(scratch)
+        .into_iter()
+        .map(|_| -> DrawItem<'a> { unreachable!("scratch is always empty") })
+        .collect()
+}
+
+fn recycle(mut items: Vec<DrawItem<'_>>, scratch: &mut Vec<DrawItem<'static>>) {
+    items.clear();
+    *scratch = items
+        .into_iter()
+        .map(|_| -> DrawItem<'static> { unreachable!("cleared above") })
+        .collect();
+}
+
+/// Shader and parameters for a transition kind at `progress`.
+fn transition_setup(
+    kind: &TransitionKind,
+    progress: f32,
+) -> (TransitionShader<'_>, TransitionParams) {
+    let mut params = TransitionParams {
+        progress,
+        ..Default::default()
+    };
+    let shader = match kind {
+        TransitionKind::Cut | TransitionKind::Fade => TransitionShader::Builtin(BuiltinKind::Fade),
+        TransitionKind::FadeToColor { color } => {
+            params.color = linear_premultiplied(*color);
+            TransitionShader::Builtin(BuiltinKind::FadeToColor)
+        }
+        TransitionKind::Slide { direction } => {
+            params.direction = direction.vector();
+            TransitionShader::Builtin(BuiltinKind::Slide)
+        }
+        TransitionKind::Swipe { direction } => {
+            params.direction = direction.vector();
+            TransitionShader::Builtin(BuiltinKind::Swipe)
+        }
+        TransitionKind::Wipe {
+            direction,
+            softness,
+        } => {
+            params.direction = direction.vector();
+            params.softness = softness.clamp(0.0, 1.0);
+            TransitionShader::Builtin(BuiltinKind::Wipe)
+        }
+        TransitionKind::Shader { code } => TransitionShader::Custom(code),
+    };
+    (shader, params)
+}
+
+fn linear_premultiplied(c: Rgba8) -> [f32; 4] {
+    let a = c.a as f32 / 255.0;
+    let lin = |v: u8| srgb_to_linear(v as f32 / 255.0) * a;
+    [lin(c.r), lin(c.g), lin(c.b), a]
 }
 
 /// Owns sources and canvas renderers. Used by the video thread and by headless rendering.
@@ -140,6 +258,8 @@ pub struct VideoCore {
     canvases: Vec<CanvasSlot>,
     graph: Arc<RenderGraph>,
     scratch: Vec<DrawItem<'static>>,
+    scratch_extra: Vec<DrawItem<'static>>,
+    transitions: TransitionRenderer,
 }
 
 impl VideoCore {
@@ -147,13 +267,23 @@ impl VideoCore {
         Self {
             compositor: Compositor::new(&gpu),
             converter: OutputConverter::new(&gpu),
+            transitions: TransitionRenderer::new(&gpu),
             gpu,
             registry,
             sources: HashMap::new(),
             canvases: Vec::new(),
             graph: Arc::new(RenderGraph::default()),
             scratch: Vec::new(),
+            scratch_extra: Vec::new(),
         }
+    }
+
+    /// Studio-mode Preview outputs of canvases that have one.
+    pub fn preview_outputs(&self) -> Vec<Arc<CanvasOutput>> {
+        self.canvases
+            .iter()
+            .filter_map(|c| c.preview.as_ref().map(|p| p.output.clone()))
+            .collect()
     }
 
     pub fn gpu(&self) -> &GpuContext {
@@ -262,9 +392,40 @@ impl VideoCore {
                 }
                 None => self.create_canvas(cg, now),
             };
+            let mut slot = slot;
+            match (&cg.preview, &slot.preview) {
+                (Some(_), None) => slot.preview = Some(self.create_preview(cg)),
+                (None, Some(_)) => slot.preview = None,
+                _ => {}
+            }
+            // Compile custom transition shaders before the first frame needs them.
+            if let Some(t) = &cg.transition
+                && let TransitionKind::Shader { code } = &t.kind
+            {
+                self.transitions.prepare_custom(&self.gpu, code);
+            }
             self.canvases.push(slot);
         }
         self.graph = graph;
+    }
+
+    fn create_preview(&self, cg: &CanvasGraph) -> StudioPreview {
+        let output = Arc::new(CanvasOutput::new(&self.gpu, cg.id, cg.width, cg.height));
+        let canvas_views =
+            std::array::from_fn(|i| output.slots[i].canvas.create_view(&Default::default()));
+        let preview_views =
+            std::array::from_fn(|i| estream_gpu::preview_target_view(&output.slots[i].preview));
+        let inputs =
+            std::array::from_fn(|i| self.converter.create_input(&self.gpu, &canvas_views[i]));
+        StudioPreview {
+            renderer: CanvasRenderer::new(&self.gpu, self.compositor.clone()),
+            output,
+            canvas_views,
+            preview_views,
+            inputs,
+            sequence: 0,
+            pending: None,
+        }
     }
 
     fn create_canvas(&self, cg: &CanvasGraph, now: Timestamp) -> CanvasSlot {
@@ -285,6 +446,9 @@ impl VideoCore {
             sequence: 0,
             background: background(cg),
             readback: None,
+            from_renderer: None,
+            transition_targets: None,
+            preview: None,
         }
     }
 
@@ -306,65 +470,113 @@ impl VideoCore {
         }
     }
 
-    /// Renders canvas `index` into its next output slot. Returns the slot used.
-    fn render_canvas(&mut self, index: usize, encoder: &mut wgpu::CommandEncoder) -> usize {
+    /// Renders canvas `index` for the frame at `now` into its next output slot (and the
+    /// studio Preview, if on). Returns the program slot used.
+    fn render_canvas(
+        &mut self,
+        index: usize,
+        encoder: &mut wgpu::CommandEncoder,
+        now: Timestamp,
+    ) -> usize {
         let Self {
             gpu,
+            compositor,
             converter,
             sources,
             canvases,
             graph,
             scratch,
+            scratch_extra,
+            transitions,
             ..
         } = self;
         let canvas = &mut canvases[index];
         let Some(cg) = graph.canvases.iter().find(|c| c.id == canvas.output.id) else {
             return 0;
         };
-
-        // Reuse the scratch allocation across frames (in-place collect keeps capacity).
-        let mut items: Vec<DrawItem<'_>> = std::mem::take(scratch)
-            .into_iter()
-            .map(|_| -> DrawItem<'_> { unreachable!("scratch is always empty") })
-            .collect();
-        for flat in &cg.items {
-            let Some(frame) = sources
-                .get(&flat.source)
-                .and_then(|s| s.instance.as_deref())
-                .and_then(|s| s.frame())
-            else {
-                continue; // no frame yet: draws nothing
-            };
-            let layout = flat.transform.layout(flat.crop, frame.size);
-            if layout.size.x <= 0.0 || layout.size.y <= 0.0 {
-                continue;
-            }
-            items.push(DrawItem {
-                binding: frame.binding,
-                matrix: flat.parent * layout.matrix,
-                uv_min: layout.uv_min,
-                uv_max: layout.uv_max,
-                opacity: flat.opacity,
-                blend: flat.blend,
-            });
-        }
-
+        let size = Vec2::new(cg.width as f32, cg.height as f32);
         let slot = ((canvas.sequence + 1) % OUTPUT_RING as u64) as usize;
-        canvas.renderer.render(
-            gpu,
-            encoder,
-            &canvas.canvas_views[slot],
-            Vec2::new(cg.width as f32, cg.height as f32),
-            canvas.background,
-            &items,
-        );
-        converter.to_srgb(encoder, &canvas.inputs[slot], &canvas.preview_views[slot]);
 
-        items.clear();
-        *scratch = items
-            .into_iter()
-            .map(|_| -> DrawItem<'static> { unreachable!("cleared above") })
-            .collect();
+        let mut items = reuse(scratch);
+        push_items(sources, &cg.items, &mut items);
+        let running = cg
+            .transition
+            .as_ref()
+            .and_then(|t| t.progress(now).map(|p| (t, p)));
+        match running {
+            Some((t, progress)) => {
+                // Outgoing scene → scratch A, program scene → scratch B, then blend.
+                let targets = match &mut canvas.transition_targets {
+                    Some(targets) if targets.width == cg.width && targets.height == cg.height => {
+                        targets
+                    }
+                    other => other.insert(transitions.create_targets(gpu, cg.width, cg.height)),
+                };
+                let from_renderer = canvas
+                    .from_renderer
+                    .get_or_insert_with(|| CanvasRenderer::new(gpu, compositor.clone()));
+                let mut from = reuse(scratch_extra);
+                push_items(sources, &t.from, &mut from);
+                from_renderer.render(
+                    gpu,
+                    encoder,
+                    &targets.from_view,
+                    size,
+                    canvas.background,
+                    &from,
+                );
+                recycle(from, scratch_extra);
+                canvas.renderer.render(
+                    gpu,
+                    encoder,
+                    &targets.to_view,
+                    size,
+                    canvas.background,
+                    &items,
+                );
+                let (shader, params) = transition_setup(&t.kind, progress);
+                transitions.render(
+                    gpu,
+                    encoder,
+                    targets,
+                    &canvas.canvas_views[slot],
+                    &shader,
+                    &params,
+                );
+            }
+            None => canvas.renderer.render(
+                gpu,
+                encoder,
+                &canvas.canvas_views[slot],
+                size,
+                canvas.background,
+                &items,
+            ),
+        }
+        converter.to_srgb(encoder, &canvas.inputs[slot], &canvas.preview_views[slot]);
+        recycle(items, scratch);
+
+        // Studio Preview (UI only).
+        if let (Some(preview), Some(flats)) = (&mut canvas.preview, &cg.preview) {
+            let pslot = ((preview.sequence + 1) % OUTPUT_RING as u64) as usize;
+            let mut items = reuse(scratch_extra);
+            push_items(sources, flats, &mut items);
+            preview.renderer.render(
+                gpu,
+                encoder,
+                &preview.canvas_views[pslot],
+                size,
+                canvas.background,
+                &items,
+            );
+            recycle(items, scratch_extra);
+            converter.to_srgb(
+                encoder,
+                &preview.inputs[pslot],
+                &preview.preview_views[pslot],
+            );
+            preview.pending = Some(pslot);
+        }
         slot
     }
 
@@ -374,7 +586,7 @@ impl VideoCore {
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
         self.tick_sources(&mut encoder, now);
         let slots: Vec<usize> = (0..self.canvases.len())
-            .map(|i| self.render_canvas(i, &mut encoder))
+            .map(|i| self.render_canvas(i, &mut encoder, now))
             .collect();
         self.gpu.queue.submit([encoder.finish()]);
         let _ = self.gpu.device.poll(wgpu::PollType::wait_indefinitely());
@@ -382,6 +594,9 @@ impl VideoCore {
             canvas.sequence += 1;
             canvas.output.publish(canvas.sequence, slot, now);
             canvas.output.stats.rendered.fetch_add(1, Ordering::Relaxed);
+            if let Some(preview) = &mut canvas.preview {
+                preview.publish(now);
+            }
         }
         self.outputs()
     }
@@ -437,7 +652,7 @@ impl VideoCore {
         for (i, due) in ticks.iter_mut().enumerate().take(count) {
             if self.canvases[i].clock.next_deadline() <= now {
                 let tick = self.canvases[i].clock.advance(now);
-                let slot = self.render_canvas(i, &mut encoder);
+                let slot = self.render_canvas(i, &mut encoder, tick.timestamp);
                 *due = Some((tick, slot));
                 maps[i] = self
                     .record_readback(i, slot, consumers, &mut encoder)
@@ -467,6 +682,9 @@ impl VideoCore {
                 rendered += 1;
                 canvas.sequence += 1;
                 canvas.output.publish(canvas.sequence, slot, tick.timestamp);
+                if let Some(preview) = &mut canvas.preview {
+                    preview.publish(tick.timestamp);
+                }
                 let stats = &canvas.output.stats;
                 stats.rendered.fetch_add(1, Ordering::Relaxed);
                 stats.lagged.fetch_add(tick.skipped, Ordering::Relaxed);
@@ -497,6 +715,7 @@ fn background(cg: &CanvasGraph) -> wgpu::Color {
 pub(crate) trait VideoSink: Send + Sync + 'static {
     fn graph(&self) -> Arc<RenderGraph>;
     fn publish(&self, outputs: Vec<Arc<CanvasOutput>>, statuses: HashMap<SourceId, SourceInfo>);
+    fn publish_previews(&self, previews: Vec<Arc<CanvasOutput>>);
     fn shutdown_requested(&self) -> &AtomicBool;
     fn consumers(&self) -> Arc<Vec<VideoConsumer>>;
 }
@@ -512,6 +731,7 @@ pub(crate) fn run(mut core: VideoCore, clock: EngineClock, sink: Arc<dyn VideoSi
         if changed {
             revision = graph.revision;
             core.sync(graph, clock.now());
+            sink.publish_previews(core.preview_outputs());
         }
         // Sources change state on their own (devices connect, windows close,
         // frame sizes change), so re-check a few times per second.

@@ -13,6 +13,9 @@ pub struct Project {
     pub sources: Vec<SourceDef>,
     #[serde(default)]
     pub audio: ProjectAudio,
+    /// Transition used when the program scene changes.
+    #[serde(default)]
+    pub transition: crate::Transition,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -342,6 +345,7 @@ impl Project {
             scenes: vec![scene],
             sources: Vec::new(),
             audio: ProjectAudio::default(),
+            transition: crate::Transition::default(),
         }
     }
 

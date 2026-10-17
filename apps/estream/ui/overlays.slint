@@ -1,7 +1,7 @@
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
 import { PaletteEntry, Preset, SourceType, SettingsForm, DestinationRow, LiveRow } from "types.slint";
-import { Button, IconButton, Icon, Badge, TextField, NumberField, Select, Toggle, SectionTitle } from "widgets.slint";
+import { Button, IconButton, Icon, Badge, TextField, TextArea, NumberField, Select, Toggle, SectionTitle } from "widgets.slint";
 import { KindIcon } from "panels.slint";
 
 // Full-window scrim with a centered card. Clicking the scrim calls `dismiss`.
@@ -815,6 +815,63 @@ export component LivePanel inherits Rectangle {
                     }
                 }
             }
+        }
+    }
+}
+
+/// Editor for a custom WGSL transition.
+export component ShaderDialog inherits Modal {
+    in property <string> code;
+    in property <string> error;
+    callback apply(string);
+    callback example();
+
+    // Typing breaks the editor's binding; "Load example" replaces the code.
+    changed code => { editor.text = root.code; }
+
+    card-width: 720px;
+    card-top: 60px;
+
+    HorizontalLayout {
+        padding: 18px;
+        padding-bottom: 4px;
+        spacing: 8px;
+        Text { text: "Custom transition shader"; color: Theme.text; font-size: Theme.font-xl; font-weight: 700; horizontal-stretch: 1; vertical-alignment: center; }
+        Button { text: "Load example"; kind: "ghost"; clicked => { root.example(); } }
+    }
+    VerticalLayout {
+        padding: 18px;
+        padding-top: 4px;
+        spacing: 10px;
+        Text {
+            text: "Write fn transition(uv: vec2<f32>, progress: f32) -> vec4<f32> in WGSL. Available: from_color(uv), to_color(uv), resolution(), ease(t), over(a, b). Colors are linear and premultiplied.";
+            color: Theme.text-muted;
+            font-size: Theme.font-s;
+            wrap: word-wrap;
+        }
+        editor := TextArea {
+            height: 300px;
+            label: "Shader code";
+            text: root.code;
+        }
+        if root.error != "": Rectangle {
+            border-radius: Theme.radius-s;
+            background: Theme.live.with-alpha(0.12);
+            height: err.preferred-height + 16px;
+            err := Text {
+                x: 8px;
+                width: parent.width - 16px;
+                text: root.error;
+                color: Theme.live;
+                font-size: Theme.font-s;
+                wrap: word-wrap;
+            }
+        }
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+            Button { text: "Cancel"; kind: "ghost"; clicked => { root.dismiss(); } }
+            Button { text: "Apply"; kind: "primary"; clicked => { root.apply(editor.text); } }
         }
     }
 }

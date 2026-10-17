@@ -7,6 +7,7 @@ pub mod context;
 pub mod convert;
 pub mod pool;
 pub mod readback;
+pub mod transition;
 pub mod yuv;
 
 pub use compositor::{CANVAS_FORMAT, CanvasRenderer, Compositor, DrawItem};
@@ -17,5 +18,9 @@ pub use convert::{
 };
 pub use glam;
 pub use pool::TexturePool;
+pub use transition::{
+    BuiltinKind, EXAMPLE_CUSTOM_TRANSITION, TransitionParams, TransitionRenderer, TransitionShader,
+    TransitionTargets, validate_custom_transition,
+};
 pub use wgpu;
 pub use yuv::{Nv12Frame, YUV_OUTPUT_FORMAT, YuvConverter, YuvMatrix};

@@ -84,6 +84,10 @@ pub struct App {
     stream_dests: Vec<LiveDest>,
     /// Destination being edited in Settings.
     dest_selected: Option<usize>,
+    /// Studio mode: edit the Preview scene off-air, program shown beside it.
+    studio: bool,
+    preview_scene: Option<SceneId>,
+    last_preview_sequence: u64,
     /// Last file written by a recording or replay save, for "Show in folder".
     last_output: Option<std::path::PathBuf>,
 }
@@ -367,6 +371,9 @@ impl App {
             stream: None,
             stream_dests: Vec::new(),
             dest_selected: None,
+            studio: false,
+            preview_scene: None,
+            last_preview_sequence: 0,
             last_output: None,
         };
         window.set_scenes(ModelRc::from(app.scenes_model.clone()));
@@ -571,16 +578,38 @@ impl App {
         let Some(w) = self.window() else { return };
         let mut changed = false;
         if let Some(engine) = &self.engine {
-            if let Some(canvas) = engine.snapshot().canvases.first().map(|c| c.id)
-                && let Some(output) = engine.canvas_output(canvas)
-                && let Some(frame) = output.latest()
-                && frame.sequence != self.last_sequence
-            {
-                self.last_sequence = frame.sequence;
-                match slint::Image::try_from(frame.preview.clone()) {
-                    Ok(image) => w.set_preview_frame(image),
-                    Err(e) => tracing::error!(error = %e, "preview texture rejected"),
+            let image = |frame: estream_engine::CanvasFrame<'_>| {
+                slint::Image::try_from(frame.preview.clone())
+                    .map_err(|e| tracing::error!(error = %e, "preview texture rejected"))
+                    .ok()
+            };
+            if let Some(canvas) = engine.snapshot().canvases.first().map(|c| c.id) {
+                // Program: the main view normally, the Program view in studio mode.
+                if let Some(output) = engine.canvas_output(canvas)
+                    && let Some(frame) = output.latest()
+                    && frame.sequence != self.last_sequence
+                {
+                    self.last_sequence = frame.sequence;
+                    if let Some(img) = image(frame) {
+                        if self.studio {
+                            w.set_program_frame(img);
+                        } else {
+                            w.set_preview_frame(img);
+                        }
+                    }
                 }
+                // Studio Preview: the editable main view.
+                if self.studio
+                    && let Some(output) = engine.preview_output(canvas)
+                    && let Some(frame) = output.latest()
+                    && frame.sequence != self.last_preview_sequence
+                {
+                    self.last_preview_sequence = frame.sequence;
+                    if let Some(img) = image(frame) {
+                        w.set_preview_frame(img);
+                    }
+                }
+                w.set_transition_busy(engine.is_transitioning(canvas));
             }
             let infos = engine.source_infos();
             if self
@@ -733,11 +762,19 @@ impl App {
 
     // ------------------------------------------------------------ model → UI
 
+    /// The scene being edited: the Preview scene in studio mode, else the program scene.
+    fn edit_scene(&self, canvas: &estream_project::Canvas, snapshot: &Project) -> Option<SceneId> {
+        match self.preview_scene {
+            Some(id) if self.studio && snapshot.scene(id).is_some() => Some(id),
+            _ => canvas.active_scene,
+        }
+    }
+
     fn canvas_and_scene(&self) -> Option<(Arc<Project>, CanvasId, Option<SceneId>)> {
         let snapshot = self.engine.as_ref()?.snapshot();
         let canvas = snapshot.canvases.first()?;
-        let (id, active) = (canvas.id, canvas.active_scene);
-        Some((snapshot, id, active))
+        let (id, edit) = (canvas.id, self.edit_scene(canvas, &snapshot));
+        Some((snapshot, id, edit))
     }
 
     /// Rebuilds every UI model from the latest engine snapshot.
@@ -748,8 +785,10 @@ impl App {
         let Some(canvas) = snapshot.canvases.first() else {
             return;
         };
-        let scene = canvas.active_scene.and_then(|id| snapshot.scene(id));
+        let editing = self.edit_scene(canvas, &snapshot);
+        let scene = editing.and_then(|id| snapshot.scene(id));
         let infos = engine.source_infos();
+        self.refresh_transition(&w, &snapshot);
 
         if let Some(sel) = self.selection
             && scene.is_none_or(|s| s.find_item(sel).is_none())
@@ -772,7 +811,8 @@ impl App {
                     SceneRow {
                         id: id_str(s.id),
                         name: s.name.clone().into(),
-                        active: Some(s.id) == canvas.active_scene,
+                        active: Some(s.id) == editing,
+                        live: Some(s.id) == canvas.active_scene,
                         items,
                     }
                 })
@@ -980,10 +1020,43 @@ impl App {
         };
         let Some(uuid) = parse_id(id) else { return };
         self.selection = None;
-        self.exec(Command::SetActiveScene {
-            canvas,
-            scene: Some(SceneId(uuid)),
-        });
+        let scene = SceneId(uuid);
+        if self.studio {
+            self.show_in_preview(canvas, scene);
+        } else if let Some(engine) = &self.engine
+            && let Err(e) = engine.transition_to(canvas, scene, None)
+        {
+            self.toast(e.to_string(), true);
+        }
+    }
+
+    /// Studio mode: shows `scene` in the Preview (off-air).
+    fn show_in_preview(&mut self, canvas: CanvasId, scene: SceneId) {
+        self.preview_scene = Some(scene);
+        if let Some(engine) = &self.engine {
+            engine.set_preview_scene(canvas, Some(scene));
+        }
+        self.refresh();
+    }
+
+    /// Adds a scene and shows it: in the Preview in studio mode, else on program.
+    fn add_scene_and_show(&mut self, canvas: CanvasId, scene: Scene, index: usize) -> bool {
+        let id = scene.id;
+        let mut commands = vec![Command::AddScene { scene, index }];
+        if !self.studio {
+            commands.push(Command::SetActiveScene {
+                canvas,
+                scene: Some(id),
+            });
+        }
+        if !self.exec(Command::Batch { commands }) {
+            return false;
+        }
+        self.selection = None;
+        if self.studio {
+            self.show_in_preview(canvas, id);
+        }
+        true
     }
 
     pub fn scene_add(&mut self) {
@@ -993,22 +1066,10 @@ impl App {
         let name = unique_name("Scene", snapshot.scenes.iter().map(|s| s.name.as_str()));
         let scene = Scene::new(name, canvas);
         let id = scene.id;
-        if self.exec(Command::Batch {
-            commands: vec![
-                Command::AddScene {
-                    scene,
-                    index: usize::MAX,
-                },
-                Command::SetActiveScene {
-                    canvas,
-                    scene: Some(id),
-                },
-            ],
-        }) {
-            self.selection = None;
-            if let Some(w) = self.window() {
-                w.set_renaming_scene(id_str(id));
-            }
+        if self.add_scene_and_show(canvas, scene, usize::MAX)
+            && let Some(w) = self.window()
+        {
+            w.set_renaming_scene(id_str(id));
         }
     }
 
@@ -1032,16 +1093,7 @@ impl App {
             canvas,
         );
         copy.items = source.items.iter().map(fresh_ids).collect();
-        let new_id = copy.id;
-        self.exec(Command::Batch {
-            commands: vec![
-                Command::AddScene { scene: copy, index },
-                Command::SetActiveScene {
-                    canvas,
-                    scene: Some(new_id),
-                },
-            ],
-        });
+        self.add_scene_and_show(canvas, copy, index);
     }
 
     pub fn scene_remove(&mut self, id: &str) {
@@ -1206,6 +1258,218 @@ impl App {
         self.refresh_settings_form();
         if let Some(w) = self.window() {
             w.set_settings_open(true);
+        }
+    }
+
+    // ------------------------------------------------------------ studio mode & transitions
+
+    fn toggle_studio(&mut self) {
+        let Some((snapshot, canvas, _)) = self.canvas_and_scene() else {
+            return;
+        };
+        self.studio = !self.studio;
+        self.selection = None;
+        self.last_sequence = 0;
+        self.last_preview_sequence = 0;
+        let program = snapshot.canvas(canvas).and_then(|c| c.active_scene);
+        if let Some(engine) = &self.engine {
+            if self.studio {
+                // Start by preparing a copy of what's on air.
+                self.preview_scene = self
+                    .preview_scene
+                    .filter(|id| snapshot.scene(*id).is_some())
+                    .or(program);
+                engine.set_preview_scene(canvas, self.preview_scene);
+            } else {
+                engine.set_preview_scene(canvas, None);
+            }
+        }
+        if let Some(w) = self.window() {
+            w.set_studio_mode(self.studio);
+        }
+        self.refresh();
+    }
+
+    /// Studio mode: send the Preview to Program ("go" = chosen transition, "cut", "fade").
+    pub fn studio_go(&mut self, mode: &str) {
+        if !self.studio {
+            self.toast("Turn on studio mode to use Preview / Program".into(), false);
+            return;
+        }
+        let Some((snapshot, canvas, _)) = self.canvas_and_scene() else {
+            return;
+        };
+        let Some(scene) = self.preview_scene else {
+            return;
+        };
+        let transition = match mode {
+            "cut" => Some(estream_project::Transition::CUT),
+            "fade" => Some(estream_project::Transition {
+                kind: estream_project::TransitionKind::Fade,
+                duration_ms: snapshot.transition.duration_ms.max(100),
+            }),
+            _ => None,
+        };
+        if let Some(engine) = &self.engine
+            && let Err(e) = engine.transition_to(canvas, scene, transition)
+        {
+            self.toast(e.to_string(), true);
+        }
+    }
+
+    /// Transition picker state for the UI.
+    fn refresh_transition(&self, w: &AppWindow, snapshot: &Project) {
+        use estream_project::{Direction, TransitionKind as K};
+        let t = &snapshot.transition;
+        let (kind, direction) = match &t.kind {
+            K::Cut => (0, None),
+            K::Fade => (1, None),
+            K::FadeToColor { .. } => (2, None),
+            K::Slide { direction } => (3, Some(*direction)),
+            K::Swipe { direction } => (4, Some(*direction)),
+            K::Wipe { direction, .. } => (5, Some(*direction)),
+            K::Shader { .. } => (6, None),
+        };
+        w.set_transition_kind(kind);
+        w.set_transition_direction(
+            direction
+                .and_then(|d| Direction::ALL.iter().position(|x| *x == d))
+                .unwrap_or(0) as i32,
+        );
+        w.set_transition_duration(t.duration_ms as f32);
+        w.set_transition_label(
+            if t.is_instant() {
+                "Cut".to_owned()
+            } else {
+                format!("{} · {} ms", t.kind.label(), t.duration_ms)
+            }
+            .into(),
+        );
+        w.set_studio_mode(self.studio);
+    }
+
+    /// Changes the program transition (undoable).
+    pub fn transition_set(&mut self, field: &str, value: f32) {
+        use estream_project::{Direction, Transition, TransitionKind as K};
+        let Some(engine) = &self.engine else { return };
+        let current = engine.snapshot().transition.clone();
+        let direction = match &current.kind {
+            K::Slide { direction } | K::Swipe { direction } | K::Wipe { direction, .. } => {
+                *direction
+            }
+            _ => Direction::Left,
+        };
+        let i = value.round().max(0.0) as usize;
+        let transition = match field {
+            "kind" => {
+                let kind = match i {
+                    0 => K::Cut,
+                    1 => K::Fade,
+                    2 => K::FadeToColor {
+                        color: estream_core::Rgba8::BLACK,
+                    },
+                    3 => K::Slide { direction },
+                    4 => K::Swipe { direction },
+                    5 => K::Wipe {
+                        direction,
+                        softness: 0.1,
+                    },
+                    _ => {
+                        // Custom shader: keep the current code if there is one.
+                        if !matches!(current.kind, K::Shader { .. }) {
+                            self.open_shader_editor();
+                        }
+                        return;
+                    }
+                };
+                Transition {
+                    kind,
+                    duration_ms: if current.duration_ms == 0 {
+                        300
+                    } else {
+                        current.duration_ms
+                    },
+                }
+            }
+            "duration" => Transition {
+                duration_ms: value.clamp(50.0, 10_000.0) as u32,
+                ..current.clone()
+            },
+            "direction" => {
+                let d = Direction::ALL.get(i).copied().unwrap_or_default();
+                let kind = match current.kind.clone() {
+                    K::Slide { .. } => K::Slide { direction: d },
+                    K::Swipe { .. } => K::Swipe { direction: d },
+                    K::Wipe { softness, .. } => K::Wipe {
+                        direction: d,
+                        softness,
+                    },
+                    other => other,
+                };
+                Transition {
+                    kind,
+                    ..current.clone()
+                }
+            }
+            _ => return,
+        };
+        if transition != current {
+            self.exec(Command::SetTransition { transition });
+        }
+    }
+
+    fn open_shader_editor(&mut self) {
+        let Some(engine) = &self.engine else { return };
+        let code = match &engine.snapshot().transition.kind {
+            estream_project::TransitionKind::Shader { code } => code.clone(),
+            _ => estream_gpu::EXAMPLE_CUSTOM_TRANSITION.to_owned(),
+        };
+        if let Some(w) = self.window() {
+            w.set_shader_code(code.into());
+            w.set_shader_error("".into());
+            w.set_shader_open(true);
+        }
+    }
+
+    pub fn shader_example(&mut self) {
+        if let Some(w) = self.window() {
+            w.set_shader_code(estream_gpu::EXAMPLE_CUSTOM_TRANSITION.into());
+            w.set_shader_error("".into());
+        }
+    }
+
+    /// Validates and applies a custom transition shader; errors stay in the dialog.
+    pub fn shader_apply(&mut self, code: &str) {
+        let Some(engine) = &self.engine else { return };
+        let duration_ms = match engine.snapshot().transition.duration_ms {
+            0 => 800,
+            d => d,
+        };
+        let transition = estream_project::Transition {
+            kind: estream_project::TransitionKind::Shader {
+                code: code.to_owned(),
+            },
+            duration_ms,
+        };
+        let result = engine.execute(Command::SetTransition { transition });
+        let Some(w) = self.window() else { return };
+        match result {
+            Ok(_) => {
+                w.set_shader_open(false);
+                self.toast("Custom transition applied".into(), false);
+                self.refresh();
+            }
+            Err(e) => {
+                // Keep the user's text in the editor and show what to fix.
+                let message = match e {
+                    estream_engine::EngineError::Command(
+                        estream_engine::CommandError::Invalid(message),
+                    ) => message,
+                    other => other.to_string(),
+                };
+                w.set_shader_code(code.into());
+                w.set_shader_error(message.into());
+            }
         }
     }
 
@@ -2682,6 +2946,10 @@ impl App {
             Action::ToggleRecording => self.toggle_recording(),
             Action::ToggleReplay => self.toggle_replay(),
             Action::ToggleStream => self.toggle_stream(),
+            Action::ToggleStudio => self.toggle_studio(),
+            Action::TransitionGo => self.studio_go("go"),
+            Action::TransitionCut => self.studio_go("cut"),
+            Action::TransitionShader => self.open_shader_editor(),
             Action::SaveReplay => self.save_replay(),
             Action::RevealOutput => self.reveal_output(),
             Action::OpenSettings => {
@@ -3191,6 +3459,10 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     on!(on_settings_set, |a, k, v| a.settings_set(&k, v));
     on!(on_settings_text, |a, k, v| a.settings_text(&k, &v));
     on!(on_live_toggle, |a, i| a.live_toggle(i.max(0) as usize));
+    on!(on_transition_set, |a, k, v| a.transition_set(&k, v));
+    on!(on_studio_go, |a, m| a.studio_go(&m));
+    on!(on_shader_apply, |a, c| a.shader_apply(&c));
+    on!(on_shader_example, |a| a.shader_example());
     on!(on_settings_browse, |a| a.settings_browse());
 
     {

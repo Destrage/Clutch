@@ -1423,6 +1423,7 @@ dependencies = [
  "bytemuck",
  "estream-core",
  "glam",
+ "naga",
  "png",
  "pollster 1.0.1",
  "thiserror 2.0.21",

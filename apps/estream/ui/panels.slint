@@ -19,6 +19,8 @@ export component TopBar inherits Rectangle {
     in property <string> stream-time;
     callback open-palette();
     callback toggle-stream();
+    in property <bool> studio-mode;
+    callback toggle-studio();
     callback open-destinations();
     in property <bool> live-panel-open;
     callback undo();
@@ -144,6 +146,17 @@ export component TopBar inherits Rectangle {
 
         VerticalLayout {
             alignment: center;
+            Button {
+                text: "Studio mode";
+                has-icon: true;
+                icon: Icons.layout-dashboard;
+                kind: root.studio-mode ? "primary" : "ghost";
+                tooltip: root.studio-mode ? "Leave studio mode (Ctrl+Shift+T)" : "Prepare scenes off-air (Ctrl+Shift+T)";
+                clicked => { root.toggle-studio(); }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
             IconButton {
                 icon: Theme.dark ? Icons.sun : Icons.moon;
                 tooltip: Theme.dark ? "Switch to light theme" : "Switch to dark theme";
@@ -216,6 +229,57 @@ export component TopBar inherits Rectangle {
     }
 }
 
+/// Transition used when the program scene changes (bottom of the Scenes panel).
+export component TransitionBar inherits Rectangle {
+    // kind: 0 cut, 1 fade, 2 fade to black, 3 slide, 4 swipe, 5 wipe, 6 custom shader
+    in property <int> kind;
+    in property <int> direction;
+    in property <float> duration;
+    callback set(string, float);
+    callback edit-shader();
+
+    border-width: 1px;
+    border-color: Theme.border;
+    background: Theme.surface;
+    VerticalLayout {
+        padding: 8px;
+        spacing: 6px;
+        Text { text: "TRANSITION"; color: Theme.text-faint; font-size: Theme.font-xs; font-weight: 700; }
+        HorizontalLayout {
+            spacing: 6px;
+            Select {
+                label: "Transition";
+                options: ["Cut", "Fade", "Fade to black", "Slide", "Swipe", "Wipe", "Custom shader…"];
+                current-index: root.kind;
+                selected(i) => { root.set("kind", i); }
+            }
+            if root.kind != 0: NumberField {
+                width: 92px;
+                label: "";
+                value: root.duration;
+                minimum: 50;
+                maximum: 10000;
+                step: 50;
+                suffix: "ms";
+                changed(v) => { root.set("duration", v); }
+            }
+        }
+        if root.kind >= 3 && root.kind <= 5: Select {
+            label: "Direction";
+            options: ["Towards the left", "Towards the right", "Upwards", "Downwards"];
+            current-index: root.direction;
+            selected(i) => { root.set("direction", i); }
+        }
+        if root.kind == 6: Button {
+            text: "Edit shader…";
+            has-icon: true;
+            icon: Icons.sparkles;
+            kind: "ghost";
+            clicked => { root.edit-shader(); }
+        }
+    }
+}
+
 export component ScenesPanel inherits Panel {
     in property <[SceneRow]> scenes;
     in-out property <string> renaming;
@@ -224,6 +288,12 @@ export component ScenesPanel inherits Panel {
     callback duplicate(string);
     callback remove(string);
     callback rename(string, string);
+    in property <bool> studio-mode;
+    in property <int> transition-kind;
+    in property <int> transition-direction;
+    in property <float> transition-duration;
+    callback transition-set(string, float);
+    callback edit-shader();
 
     PanelHeader {
         title: "SCENES";
@@ -316,9 +386,86 @@ export component ScenesPanel inherits Panel {
                             }
                         }
                     }
+                    if root.studio-mode && scene.live: VerticalLayout {
+                        alignment: center;
+                        Badge { text: "LIVE"; tone: Theme.live; }
+                    }
                 }
             }
         }
+    }
+    TransitionBar {
+        kind: root.transition-kind;
+        direction: root.transition-direction;
+        duration: root.transition-duration;
+        set(k, v) => { root.transition-set(k, v); }
+        edit-shader => { root.edit-shader(); }
+    }
+}
+
+/// Between Preview and Program in studio mode.
+export component TransitionColumn inherits VerticalLayout {
+    in property <string> label;
+    in property <bool> busy;
+    callback go(string);
+
+    width: 116px;
+    alignment: center;
+    spacing: 8px;
+    padding: 8px;
+    Button {
+        text: "Transition";
+        kind: "primary";
+        enabled: !root.busy;
+        tooltip: "Send Preview to Program (" + root.label + ")";
+        clicked => { root.go("go"); }
+    }
+    Button { text: "Cut"; kind: "ghost"; enabled: !root.busy; tooltip: "Switch instantly"; clicked => { root.go("cut"); } }
+    Button { text: "Fade"; kind: "ghost"; enabled: !root.busy; tooltip: "Quick crossfade"; clicked => { root.go("fade"); } }
+    Text {
+        text: root.label;
+        color: Theme.text-faint;
+        font-size: Theme.font-xs;
+        horizontal-alignment: center;
+        wrap: word-wrap;
+    }
+}
+
+/// Read-only view of the program output in studio mode.
+export component ProgramView inherits Rectangle {
+    in property <image> frame;
+    in property <float> canvas-w: 1920;
+    in property <float> canvas-h: 1080;
+    property <float> fit: max(0.01, min((self.width - 48px) / 1px / canvas-w, (self.height - 48px) / 1px / canvas-h));
+
+    background: Theme.bg;
+    accessible-role: image;
+    accessible-label: "Program output";
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: root.canvas-w * root.fit * 1px;
+        height: root.canvas-h * root.fit * 1px;
+        Image {
+            width: parent.width;
+            height: parent.height;
+            source: root.frame;
+            image-fit: fill;
+        }
+        // Drawn over the image so the on-air frame is always visible.
+        Rectangle {
+            border-width: 2px;
+            border-color: Theme.live;
+        }
+    }
+    Rectangle {
+        x: 12px;
+        y: 10px;
+        width: label.preferred-width + 14px;
+        height: 20px;
+        border-radius: 10px;
+        background: Theme.live;
+        label := Text { text: "PROGRAM"; color: Theme.on-accent; font-size: Theme.font-xs; font-weight: 700; }
     }
 }
 

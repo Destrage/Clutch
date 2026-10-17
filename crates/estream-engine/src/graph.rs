@@ -2,12 +2,44 @@
 //! the engine thread hands to the video thread after every change.
 
 use estream_audio::{AudioGraph, AudioNode};
-use estream_core::{BlendMode, CanvasId, Crop, ItemTransform, Rational, Rgba8, SourceId};
-use estream_project::{ItemContent, Project, SceneItem, SourceDef};
+use estream_core::{
+    BlendMode, CanvasId, Crop, ItemTransform, Rational, Rgba8, SceneId, SourceId, Timestamp,
+};
+use estream_project::{ItemContent, Project, SceneItem, SourceDef, Transition, TransitionKind};
 use glam::Affine2;
+use std::collections::HashMap;
+
+/// Runtime view state that is not part of the document: what the studio Preview shows
+/// and which transitions are running.
+#[derive(Clone, Debug, Default)]
+pub struct ViewState {
+    /// Studio-mode Preview scene per canvas (absent = studio mode off).
+    pub preview: HashMap<CanvasId, SceneId>,
+    pub transitions: HashMap<CanvasId, ActiveTransition>,
+}
+
+/// A program transition in progress.
+#[derive(Clone, Debug)]
+pub struct ActiveTransition {
+    /// The scene being left (`None` = the background).
+    pub from: Option<SceneId>,
+    pub transition: Transition,
+    pub start: Timestamp,
+}
+
+impl ActiveTransition {
+    pub fn end(&self) -> Timestamp {
+        Timestamp(
+            self.start
+                .0
+                .saturating_add(self.transition.duration_ms as u64 * 1_000_000),
+        )
+    }
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct RenderGraph {
+    /// Generation counter: changes whenever the project or the view state changes.
     pub revision: u64,
     pub canvases: Vec<CanvasGraph>,
     /// Every source in the project; all stay alive even when not on screen.
@@ -23,8 +55,33 @@ pub struct CanvasGraph {
     pub height: u32,
     pub fps: Rational,
     pub background: Rgba8,
-    /// Visible items of the active scene, bottom first.
+    /// Visible items of the active (program) scene, bottom first.
     pub items: Vec<FlatItem>,
+    /// A running transition into `items`.
+    pub transition: Option<TransitionGraph>,
+    /// Studio-mode Preview scene items (`None` = studio mode off).
+    pub preview: Option<Vec<FlatItem>>,
+}
+
+/// What the video thread needs to draw a transition.
+#[derive(Clone, Debug)]
+pub struct TransitionGraph {
+    /// Items of the scene being left.
+    pub from: Vec<FlatItem>,
+    pub kind: TransitionKind,
+    pub start: Timestamp,
+    pub duration_ns: u64,
+}
+
+impl TransitionGraph {
+    /// Progress at `t`, or `None` outside the transition.
+    pub fn progress(&self, t: Timestamp) -> Option<f32> {
+        if t < self.start || self.duration_ns == 0 {
+            return None;
+        }
+        let elapsed = t.0 - self.start.0;
+        (elapsed < self.duration_ns).then(|| elapsed as f32 / self.duration_ns as f32)
+    }
 }
 
 /// A visible source item with its group transforms and opacity resolved.
@@ -41,21 +98,44 @@ pub struct FlatItem {
 
 impl RenderGraph {
     pub fn build(project: &Project, revision: u64) -> Self {
+        Self::build_with(project, revision, &ViewState::default(), Timestamp(0))
+    }
+
+    /// Builds the graph including view state. Transitions that ended before `now` are left out.
+    pub fn build_with(project: &Project, revision: u64, view: &ViewState, now: Timestamp) -> Self {
+        let scene_items = |id: Option<SceneId>| {
+            let mut items = Vec::new();
+            if let Some(scene) = id.and_then(|id| project.scene(id)) {
+                flatten(&scene.items, Affine2::IDENTITY, 1.0, &mut items);
+            }
+            items
+        };
         let canvases = project
             .canvases
             .iter()
             .map(|canvas| {
-                let mut items = Vec::new();
-                if let Some(scene) = canvas.active_scene.and_then(|id| project.scene(id)) {
-                    flatten(&scene.items, Affine2::IDENTITY, 1.0, &mut items);
-                }
+                let transition = view
+                    .transitions
+                    .get(&canvas.id)
+                    .filter(|t| t.end() > now)
+                    .map(|t| TransitionGraph {
+                        from: scene_items(t.from),
+                        kind: t.transition.kind.clone(),
+                        start: t.start,
+                        duration_ns: t.transition.duration_ms as u64 * 1_000_000,
+                    });
                 CanvasGraph {
                     id: canvas.id,
                     width: canvas.width,
                     height: canvas.height,
                     fps: canvas.fps,
                     background: canvas.background,
-                    items,
+                    items: scene_items(canvas.active_scene),
+                    transition,
+                    preview: view
+                        .preview
+                        .get(&canvas.id)
+                        .map(|scene| scene_items(Some(*scene))),
                 }
             })
             .collect();
@@ -63,13 +143,14 @@ impl RenderGraph {
             revision,
             canvases,
             sources: project.sources.clone(),
-            audio: audio_graph(project),
+            audio: audio_graph(project, view, now),
         }
     }
 }
 
-/// Global audio sources, then sources visible in the first canvas's active scene.
-fn audio_graph(project: &Project) -> AudioGraph {
+/// Global audio sources, then sources visible in the first canvas's active scene (and in the
+/// scene being left while a transition runs).
+fn audio_graph(project: &Project, view: &ViewState, now: Timestamp) -> AudioGraph {
     let mut ids: Vec<SourceId> = project
         .sources
         .iter()
@@ -88,13 +169,17 @@ fn audio_graph(project: &Project) -> AudioGraph {
             }
         }
     }
-    if let Some(scene) = project
-        .canvases
-        .first()
-        .and_then(|c| c.active_scene)
-        .and_then(|id| project.scene(id))
-    {
-        visible(&scene.items, &mut ids);
+    if let Some(canvas) = project.canvases.first() {
+        let leaving = view
+            .transitions
+            .get(&canvas.id)
+            .filter(|t| t.end() > now)
+            .and_then(|t| t.from);
+        for id in [canvas.active_scene, leaving].into_iter().flatten() {
+            if let Some(scene) = project.scene(id) {
+                visible(&scene.items, &mut ids);
+            }
+        }
     }
     AudioGraph {
         nodes: ids

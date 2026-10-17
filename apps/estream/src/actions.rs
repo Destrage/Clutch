@@ -38,6 +38,10 @@ pub enum Action {
     ToggleRecording,
     ToggleReplay,
     ToggleStream,
+    ToggleStudio,
+    TransitionGo,
+    TransitionCut,
+    TransitionShader,
     SaveReplay,
     RevealOutput,
     OpenSettings,
@@ -168,6 +172,10 @@ actions! {
     ToggleRecording, "record.toggle", "Start / stop recording", "Output", None, true;
     ToggleReplay, "replay.toggle", "Start / stop replay buffer", "Output", None, true;
     ToggleStream, "stream.toggle", "Go live / end stream", "Output", None, true;
+    ToggleStudio, "studio.toggle", "Studio mode", "Scenes", Some(Shortcut::ctrl_shift('t')), true;
+    TransitionGo, "transition.go", "Transition Preview to Program", "Scenes", None, true;
+    TransitionCut, "transition.cut", "Cut Preview to Program", "Scenes", None, true;
+    TransitionShader, "transition.shader", "Edit custom transition shader…", "Scenes", None, true;
     SaveReplay, "replay.save", "Save replay", "Output", Some(Shortcut::ctrl_shift('r')), true;
     RevealOutput, "output.reveal", "Show last recording in folder", "Output", None, true;
     OpenSettings, "settings", "Settings…", "General", Some(Shortcut::ctrl(',')), true;

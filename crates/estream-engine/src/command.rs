@@ -6,6 +6,7 @@ use estream_core::{
 };
 use estream_project::{
     AudioConfig, Canvas, ItemContent, Project, ProjectAudio, Scene, SceneItem, SourceDef,
+    Transition,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -145,6 +146,10 @@ pub enum Command {
     SetProjectAudio {
         audio: ProjectAudio,
     },
+    /// Replaces the program transition (custom shaders are validated by the engine first).
+    SetTransition {
+        transition: Transition,
+    },
     AddItem {
         scene: SceneId,
         parent: Option<ItemId>,
@@ -176,6 +181,8 @@ pub enum Command {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Change {
+    /// The program transition settings changed.
+    TransitionChanged,
     CanvasAdded {
         canvas: CanvasId,
     },
@@ -519,6 +526,13 @@ impl Command {
                     UpdateSourceAudio { source, audio: old },
                     Change::SourceChanged { source },
                 ))
+            }
+            SetTransition { transition } => {
+                let old = std::mem::replace(&mut project.transition, transition);
+                Ok(Applied {
+                    inverse: SetTransition { transition: old },
+                    changes: vec![Change::TransitionChanged],
+                })
             }
             SetProjectAudio { audio } => {
                 let old = std::mem::replace(&mut project.audio, audio);

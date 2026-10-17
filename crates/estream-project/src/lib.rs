@@ -3,9 +3,11 @@
 
 pub mod model;
 pub mod persist;
+pub mod transition;
 
 pub use model::{
     AudioConfig, AudioFilterDef, Canvas, ItemContent, Monitoring, Project, ProjectAudio, Scene,
     SceneItem, SourceDef,
 };
 pub use persist::{CURRENT_SCHEMA, LoadWarning, Loaded, PersistError};
+pub use transition::{Direction, Transition, TransitionKind};
