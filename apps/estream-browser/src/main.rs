@@ -5,6 +5,10 @@
 //! straight alpha) and page audio into a shared ring, both read by eStream. Closing stdin
 //! (eStream exiting) closes every page and ends the process.
 
+// No console windows for the helper or the CEF subprocesses it relaunches (its pipes to
+// eStream are redirected handles, which work for GUI-subsystem processes too).
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use cef::*;
 use estream_shm::{AudioWriter, FrameWriter};
 use serde::Deserialize;

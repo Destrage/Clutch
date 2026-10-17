@@ -5,3 +5,6 @@ FFMPEG_DIR = { value = "third_party/ffmpeg", relative = true }
 CEF_PATH = { value = "third_party/cef", relative = true }
 # Clang for bindgen (installed by `winget install LLVM.LLVM`).
 LIBCLANG_PATH = "C:\\Program Files\\LLVM\\bin"
+
+[alias]
+xtask = "run --package xtask --"

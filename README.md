@@ -62,6 +62,26 @@ The first build takes a while because it compiles CEF's wrapper and many depende
 
 Debug builds (`cargo build -p estream -p estream-browser -p estream-vcam`, then `.\target\debug\estream.exe`) work but run more slowly. Use them for development.
 
+### Windows installer
+
+```powershell
+cargo xtask package
+```
+
+This produces `target\installer\eStream-<version>-x64.msi`. The command:
+- builds release binaries with the C runtime linked in, so the VC++ redistributable isn't needed;
+- stages them with FFmpeg, the CEF runtime and the license notices;
+- builds the MSI with WiX 3.14, which downloads once into `third_party/wix`.
+
+The installer:
+- installs to `C:\Program Files\eStream` with Start menu and desktop shortcuts;
+- registers the virtual camera for all users, so eStream never has to ask for that permission later;
+- upgrades older versions in place.
+
+Uninstall it from Windows Settings → Apps.
+
+`cargo xtask icon` regenerates the app icon (`apps/estream/assets/estream.ico`).
+
 ### Where your data goes
 
 Settings, scene collections and logs are stored in `%APPDATA%\eStream`. To use a separate folder, for example for testing, set `ESTREAM_HOME`:

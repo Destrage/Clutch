@@ -243,6 +243,14 @@ pub extern "system" fn DllRegisterServer() -> HRESULT {
 pub extern "system" fn DllUnregisterServer() -> HRESULT {
     // SAFETY: deletes our own class key.
     let status = unsafe { RegDeleteTreeW(HKEY_LOCAL_MACHINE, &HSTRING::from(class_key())) };
+    // Remove the installed copies and the log (a copy Frame Server still holds stays behind).
+    let dir = crate::install_dir();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+    let _ = std::fs::remove_dir(&dir);
     if status == ERROR_SUCCESS || status.0 == 2 {
         S_OK
     } else {
