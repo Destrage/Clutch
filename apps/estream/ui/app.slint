@@ -2,7 +2,7 @@
 
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
-import { SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SourceType, PropRow, MixerStrip, AudioInspect, SettingsForm, LiveRow, DestinationRow, VideoFilterRow } from "types.slint";
+import { SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SourceType, PropRow, MixerStrip, AudioInspect, SettingsForm, LiveRow, DestinationRow, VideoFilterRow, MediaInspect } from "types.slint";
 import { VSplitter, HSplitter, TooltipLayer, Hint } from "widgets.slint";
 import { Preview } from "preview.slint";
 import { TopBar, ScenesPanel, SourcesPanel, InspectorPanel, MixerPanel, StatusBar, TransitionColumn, ProgramView } from "panels.slint";
@@ -33,6 +33,8 @@ export component AppWindow inherits Window {
     in property <int> transition-kind;
     in property <int> transition-direction;
     in property <float> transition-duration;
+    in property <string> transition-file;
+    in property <float> transition-point;
     in property <string> transition-label;
     in property <bool> transition-busy;
     in-out property <bool> shader-open;
@@ -45,6 +47,9 @@ export component AppWindow inherits Window {
     in property <string> shader-title: "Custom transition shader";
     in property <string> shader-help;
     in property <[VideoFilterRow]> video-filters;
+    in property <MediaInspect> media-inspect;
+    callback media-control(string);
+    callback media-seek(float);
     in property <[string]> video-filter-kinds;
     callback vfilter-add(int);
     callback vfilter-remove(string);
@@ -232,6 +237,8 @@ export component AppWindow inherits Window {
                     transition-kind: root.transition-kind;
                     transition-direction: root.transition-direction;
                     transition-duration: root.transition-duration;
+                    transition-file: root.transition-file;
+                    transition-point: root.transition-point;
                     transition-set(k, v) => { root.transition-set(k, v); }
                     edit-shader => { root.action("transition.shader"); }
                 }
@@ -346,6 +353,9 @@ export component AppWindow inherits Window {
                     filter-param(id, k, v) => { root.filter-param(id, k, v); }
                     filter-move(id, up) => { root.filter-move(id, up); }
                     video-filters: root.video-filters;
+                    media: root.media-inspect;
+                    media-control(c) => { root.media-control(c); }
+                    media-seek(f) => { root.media-seek(f); }
                     video-filter-kinds: root.video-filter-kinds;
                     vfilter-add(i) => { root.vfilter-add(i); }
                     vfilter-remove(id) => { root.vfilter-remove(id); }

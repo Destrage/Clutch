@@ -164,7 +164,7 @@ Each change below gets its own `openspec/changes/<id>/` when work starts. ✅ = 
 | 2 | ✅ `add-multistream` | N simultaneous destinations; shared or per-destination encoders | Beyond OBS |
 | 2 | ✅ `add-studio-mode-transitions` | Preview/Program, cut/fade/slide/stinger/shader transitions | Parity |
 | 2 | ✅ `add-video-filters` | Color correction, LUT, chroma/luma key, crop/pad, blur, mask, sharpen, custom WGSL shaders | Parity + shaders built in |
-| 2 | `add-media-sources` | Media files/playlists, image slideshow, VLC-like playlist | Parity |
+| 2 | ✅ `add-media-sources` | Media files/playlists, image slideshow, VLC-like playlist | Parity |
 | 3 – Pro | `add-multi-canvas` | Multiple canvases (vertical + horizontal), per-canvas outputs | Beyond OBS |
 | 3 | `add-browser-source` | Out-of-process CEF, transparent overlays, custom CSS, audio | Parity + isolation |
 | 3 | `add-remote-api` | obs-websocket v5 compatible server | Parity (ecosystem compatible) |

@@ -7,8 +7,8 @@ use crate::presets::{self, PRESETS};
 use crate::settings::{PanelLayout, Paths, Settings, ThemeMode, WindowState};
 use crate::ui::{
     AppWindow, AudioInspect, CanvasBox, DestinationRow, FilterParamRow, FilterRow, Guide, Inspect,
-    LayerRow, LiveRow, MixerStrip, PaletteEntry, Preset, PropRow, SceneRow, SettingsForm,
-    SourceType, Theme, VideoFilterRow,
+    LayerRow, LiveRow, MediaInspect, MixerStrip, PaletteEntry, Preset, PropRow, SceneRow,
+    SettingsForm, SourceType, Theme, VideoFilterRow,
 };
 use estream_core::{BlendMode, BoundsMode, CanvasId, ItemId, Rgba8, SceneId, SourceId};
 use estream_engine::{
@@ -516,6 +516,7 @@ impl App {
     fn start(&mut self, project: Project) {
         let mut registry = estream_engine::SourceRegistry::with_builtins();
         estream_capture::register_all(&mut registry);
+        estream_media::media_source::register(&mut registry);
         if let Some(w) = self.window() {
             w.set_source_types(ModelRc::new(VecModel::from(source_types(&registry))));
         }
@@ -625,6 +626,7 @@ impl App {
                 }
                 w.set_transition_busy(engine.is_transitioning(canvas));
             }
+            w.set_media_inspect(self.media_inspect());
             let infos = engine.source_infos();
             if self
                 .last_infos
@@ -1344,6 +1346,7 @@ impl App {
             K::Swipe { direction } => (4, Some(*direction)),
             K::Wipe { direction, .. } => (5, Some(*direction)),
             K::Shader { .. } => (6, None),
+            K::Stinger { .. } => (7, None),
         };
         w.set_transition_kind(kind);
         w.set_transition_direction(
@@ -1352,6 +1355,17 @@ impl App {
                 .unwrap_or(0) as i32,
         );
         w.set_transition_duration(t.duration_ms as f32);
+        let (file, point) = match &t.kind {
+            K::Stinger { file, point_ms } => (
+                std::path::Path::new(file)
+                    .file_name()
+                    .map_or(file.clone(), |n| n.to_string_lossy().into_owned()),
+                *point_ms as f32,
+            ),
+            _ => (String::new(), 0.0),
+        };
+        w.set_transition_file(file.into());
+        w.set_transition_point(point);
         w.set_transition_label(
             if t.is_instant() {
                 "Cut".to_owned()
@@ -1389,6 +1403,13 @@ impl App {
                         direction,
                         softness: 0.1,
                     },
+                    7 => {
+                        // Stinger: keep the current video, or ask for one.
+                        if !matches!(current.kind, K::Stinger { .. }) {
+                            self.choose_stinger();
+                        }
+                        return;
+                    }
                     _ => {
                         // Custom shader: keep the current code if there is one.
                         if !matches!(current.kind, K::Shader { .. }) {
@@ -1410,6 +1431,20 @@ impl App {
                 duration_ms: value.clamp(50.0, 10_000.0) as u32,
                 ..current.clone()
             },
+            "point" => match current.kind.clone() {
+                K::Stinger { file, .. } => Transition {
+                    kind: K::Stinger {
+                        file,
+                        point_ms: value.clamp(0.0, current.duration_ms as f32) as u32,
+                    },
+                    ..current.clone()
+                },
+                _ => return,
+            },
+            "stinger-file" => {
+                self.choose_stinger();
+                return;
+            }
             "direction" => {
                 let d = Direction::ALL.get(i).copied().unwrap_or_default();
                 let kind = match current.kind.clone() {
@@ -1431,6 +1466,37 @@ impl App {
         if transition != current {
             self.exec(Command::SetTransition { transition });
         }
+    }
+
+    /// Picks a stinger video and makes it the transition (switching halfway by default).
+    fn choose_stinger(&mut self) {
+        use estream_project::{Transition, TransitionKind as K};
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Stinger video (with transparency)")
+            .add_filter("Video", estream_media::player::VIDEO_EXTENSIONS)
+            .pick_file()
+        else {
+            return;
+        };
+        let Some(engine) = &self.engine else { return };
+        let current = engine.snapshot().transition.clone();
+        let duration_ms = match current.duration_ms {
+            d if d >= 500 => d,
+            _ => 1500,
+        };
+        let point_ms = match current.kind {
+            K::Stinger { point_ms, .. } => point_ms.min(duration_ms),
+            _ => duration_ms / 2,
+        };
+        self.exec(Command::SetTransition {
+            transition: Transition {
+                kind: K::Stinger {
+                    file: path.to_string_lossy().into_owned(),
+                    point_ms,
+                },
+                duration_ms,
+            },
+        });
     }
 
     fn open_shader_editor(&mut self) {
@@ -2290,6 +2356,84 @@ impl App {
                 }
             }
         });
+    }
+
+    // ------------------------------------------------------------ media controls
+
+    /// The player of the selected media source, if any.
+    fn selected_player(&self) -> Option<Arc<estream_media::player::Player>> {
+        let snapshot = self.engine.as_ref()?.snapshot();
+        let source = self
+            .current_source(&snapshot)
+            .and_then(|id| snapshot.source(id))
+            .filter(|s| s.kind == "media")?;
+        estream_media::player::get(&source.id.to_string())
+    }
+
+    fn media_inspect(&self) -> MediaInspect {
+        use estream_media::player::PlayState;
+        let Some(player) = self.selected_player() else {
+            return MediaInspect::default();
+        };
+        let s = player.status();
+        let clock = |d: Duration| {
+            let secs = d.as_secs();
+            if secs >= 3600 {
+                format!("{}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60)
+            } else {
+                format!("{}:{:02}", secs / 60, secs % 60)
+            }
+        };
+        let time = match s.duration {
+            Some(d) => format!("{} / {}", clock(s.position), clock(d)),
+            None => clock(s.position),
+        };
+        MediaInspect {
+            has: true,
+            item: match (&s.state, s.item.is_empty()) {
+                (PlayState::Idle, _) | (_, true) => s
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "Choose a file".into())
+                    .into(),
+                _ => s.item.clone().into(),
+            },
+            index: if s.count > 1 {
+                format!("{} / {}", s.index + 1, s.count).into()
+            } else {
+                "".into()
+            },
+            time: time.into(),
+            progress: s.duration.map_or(0.0, |d| {
+                (s.position.as_secs_f32() / d.as_secs_f32().max(0.001)).clamp(0.0, 1.0)
+            }),
+            paused: s.state == PlayState::Paused,
+            ended: s.state == PlayState::Ended,
+        }
+    }
+
+    pub fn media_control(&mut self, command: &str) {
+        let Some(player) = self.selected_player() else {
+            return;
+        };
+        match command {
+            "toggle" => player.toggle_pause(),
+            "restart" => {
+                player.set_paused(false);
+                player.restart();
+            }
+            "next" => player.next(),
+            "previous" => player.previous(),
+            _ => {}
+        }
+    }
+
+    pub fn media_seek(&mut self, fraction: f32) {
+        if let Some(player) = self.selected_player()
+            && let Some(duration) = player.status().duration
+        {
+            player.seek(duration.mul_f32(fraction.clamp(0.0, 1.0)));
+        }
     }
 
     // ------------------------------------------------------------ video filters
@@ -3729,6 +3873,8 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     on!(on_vfilter_move, |a, id, up| a.vfilter_move(&id, up));
     on!(on_vfilter_browse, |a, id| a.vfilter_browse(&id));
     on!(on_vfilter_code, |a, id| a.vfilter_code(&id));
+    on!(on_media_control, |a, c| a.media_control(&c));
+    on!(on_media_seek, |a, f| a.media_seek(f));
     on!(on_settings_browse, |a| a.settings_browse());
 
     {

@@ -44,6 +44,11 @@ fn main() -> anyhow::Result<()> {
 
     let settings = Settings::load(&paths.settings());
     let gpu = GpuContext::new_headless(&GpuOptions::default())?;
+    // Slint keeps the device and queue in a thread-local that is dropped during process
+    // exit, after wgpu's own thread-locals are gone (which panics in wgpu's lock tracing).
+    // Holding one reference for the life of the process means the GPU objects are never
+    // torn down there; the OS reclaims them when the process exits.
+    std::mem::forget(gpu.clone());
     slint::BackendSelector::new()
         .require_wgpu_30(slint::wgpu_30::WGPUConfiguration::Manual {
             instance: gpu.instance.clone(),

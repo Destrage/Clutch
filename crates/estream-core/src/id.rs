@@ -16,6 +16,11 @@ macro_rules! define_id {
             pub fn new() -> Self {
                 Self(Uuid::now_v7())
             }
+
+            /// A deterministic ID (e.g. for engine-made helper objects).
+            pub fn from_u128(value: u128) -> Self {
+                Self(Uuid::from_u128(value))
+            }
         }
 
         impl Default for $name {

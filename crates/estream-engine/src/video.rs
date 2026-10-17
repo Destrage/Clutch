@@ -169,19 +169,7 @@ fn push_items<'a>(
     out: &mut Vec<DrawItem<'a>>,
 ) {
     for flat in flats {
-        // The filtered frame if the source has filters, else the raw frame.
-        let frame = match filters.output(flat.source) {
-            Some(f) => Some((
-                f.binding,
-                estream_core::Size::new(f.width as f32, f.height as f32),
-            )),
-            None => sources
-                .get(&flat.source)
-                .and_then(|s| s.instance.as_deref())
-                .and_then(|s| s.frame())
-                .map(|f| (f.binding, f.size)),
-        };
-        let Some((binding, size)) = frame else {
+        let Some((binding, size)) = source_frame(sources, filters, flat.source) else {
             continue;
         };
         let layout = flat.transform.layout(flat.crop, size);
@@ -196,6 +184,25 @@ fn push_items<'a>(
             opacity: flat.opacity,
             blend: flat.blend,
         });
+    }
+}
+
+/// What to draw for a source: its filtered frame if it has filters, else its raw frame.
+fn source_frame<'a>(
+    sources: &'a HashMap<SourceId, SourceSlot>,
+    filters: &'a Filters,
+    id: SourceId,
+) -> Option<(&'a wgpu::BindGroup, estream_core::Size)> {
+    match filters.output(id) {
+        Some(f) => Some((
+            f.binding,
+            estream_core::Size::new(f.width as f32, f.height as f32),
+        )),
+        None => sources
+            .get(&id)
+            .and_then(|s| s.instance.as_deref())
+            .and_then(|s| s.frame())
+            .map(|f| (f.binding, f.size)),
     }
 }
 
@@ -226,7 +233,10 @@ fn transition_setup(
         ..Default::default()
     };
     let shader = match kind {
-        TransitionKind::Cut | TransitionKind::Fade => TransitionShader::Builtin(BuiltinKind::Fade),
+        // Stingers are drawn as an overlay; Fade is only a fallback.
+        TransitionKind::Cut | TransitionKind::Fade | TransitionKind::Stinger { .. } => {
+            TransitionShader::Builtin(BuiltinKind::Fade)
+        }
         TransitionKind::FadeToColor { color } => {
             params.color = linear_premultiplied(*color);
             TransitionShader::Builtin(BuiltinKind::FadeToColor)
@@ -529,11 +539,36 @@ impl VideoCore {
         let slot = ((canvas.sequence + 1) % OUTPUT_RING as u64) as usize;
 
         let mut items = reuse(scratch);
-        push_items(sources, filters, &cg.items, &mut items);
         let running = cg
             .transition
             .as_ref()
             .and_then(|t| t.progress(now).map(|p| (t, p)));
+        // Stinger: the outgoing scene until the switch point, then the program scene, with
+        // the stinger video stretched over the canvas on top. One normal render pass.
+        let stinger = running.and_then(|(t, _)| t.overlay.map(|o| (t, o)));
+        match stinger {
+            Some((t, (overlay, point))) => {
+                let before = now.0.saturating_sub(t.start.0) < point;
+                push_items(
+                    sources,
+                    filters,
+                    if before { &t.from } else { &cg.items },
+                    &mut items,
+                );
+                if let Some((binding, _)) = source_frame(sources, filters, overlay) {
+                    items.push(DrawItem {
+                        binding,
+                        matrix: glam::Affine2::from_scale(size),
+                        uv_min: Vec2::ZERO,
+                        uv_max: Vec2::ONE,
+                        opacity: 1.0,
+                        blend: estream_core::BlendMode::Normal,
+                    });
+                }
+            }
+            None => push_items(sources, filters, &cg.items, &mut items),
+        }
+        let running = if stinger.is_some() { None } else { running };
         match running {
             Some((t, progress)) => {
                 // Outgoing scene → scratch A, program scene → scratch B, then blend.

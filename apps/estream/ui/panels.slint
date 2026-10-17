@@ -1,6 +1,6 @@
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
-import { SceneRow, LayerRow, Inspect, PropRow, MixerStrip, AudioInspect, FilterRow, VideoFilterRow } from "types.slint";
+import { SceneRow, LayerRow, Inspect, PropRow, MixerStrip, AudioInspect, FilterRow, VideoFilterRow, MediaInspect } from "types.slint";
 import {
     Button, IconButton, Icon, TextField, TextArea, NumberField, Toggle, Slider, Select, Panel,
     PanelHeader, SectionTitle, Badge, EmptyState, Hint,
@@ -231,10 +231,13 @@ export component TopBar inherits Rectangle {
 
 /// Transition used when the program scene changes (bottom of the Scenes panel).
 export component TransitionBar inherits Rectangle {
-    // kind: 0 cut, 1 fade, 2 fade to black, 3 slide, 4 swipe, 5 wipe, 6 custom shader
+    // kind: 0 cut, 1 fade, 2 fade to black, 3 slide, 4 swipe, 5 wipe, 6 custom shader, 7 stinger
     in property <int> kind;
     in property <int> direction;
     in property <float> duration;
+    /// Stinger video file name and switch point (ms).
+    in property <string> file;
+    in property <float> point;
     callback set(string, float);
     callback edit-shader();
 
@@ -249,7 +252,7 @@ export component TransitionBar inherits Rectangle {
             spacing: 6px;
             Select {
                 label: "Transition";
-                options: ["Cut", "Fade", "Fade to black", "Slide", "Swipe", "Wipe", "Custom shader…"];
+                options: ["Cut", "Fade", "Fade to black", "Slide", "Swipe", "Wipe", "Custom shader…", "Stinger…"];
                 current-index: root.kind;
                 selected(i) => { root.set("kind", i); }
             }
@@ -277,6 +280,32 @@ export component TransitionBar inherits Rectangle {
             kind: "ghost";
             clicked => { root.edit-shader(); }
         }
+        if root.kind == 7: HorizontalLayout {
+            spacing: 6px;
+            Text {
+                text: root.file != "" ? root.file : "No video chosen";
+                color: root.file != "" ? Theme.text : Theme.text-faint;
+                font-size: Theme.font-xs;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+            Button { text: "Video…"; kind: "ghost"; clicked => { root.set("stinger-file", 0); } }
+        }
+        if root.kind == 7: HorizontalLayout {
+            spacing: 6px;
+            Text { text: "Switch at"; color: Theme.text-muted; font-size: Theme.font-xs; vertical-alignment: center; horizontal-stretch: 1; }
+            NumberField {
+                width: 92px;
+                label: "";
+                value: root.point;
+                minimum: 0;
+                maximum: root.duration;
+                step: 50;
+                suffix: "ms";
+                changed(v) => { root.set("point", v); }
+            }
+        }
     }
 }
 
@@ -292,6 +321,8 @@ export component ScenesPanel inherits Panel {
     in property <int> transition-kind;
     in property <int> transition-direction;
     in property <float> transition-duration;
+    in property <string> transition-file;
+    in property <float> transition-point;
     callback transition-set(string, float);
     callback edit-shader();
 
@@ -398,6 +429,8 @@ export component ScenesPanel inherits Panel {
         kind: root.transition-kind;
         direction: root.transition-direction;
         duration: root.transition-duration;
+        file: root.transition-file;
+        point: root.transition-point;
         set(k, v) => { root.transition-set(k, v); }
         edit-shader => { root.edit-shader(); }
     }
@@ -705,6 +738,9 @@ export component InspectorPanel inherits Panel {
     callback filter-param(string, string, float);
     callback filter-move(string, bool);
     in property <[VideoFilterRow]> video-filters;
+    in property <MediaInspect> media;
+    callback media-control(string);
+    callback media-seek(float);
     in property <[string]> video-filter-kinds;
     callback vfilter-add(int);
     callback vfilter-remove(string);
@@ -999,6 +1035,47 @@ export component InspectorPanel inherits Panel {
                     set-index(i) => { root.prop-index(prop.key, i); }
                     browse => { root.prop-browse(prop.key); }
                     commit => { root.commit(); }
+                }
+            }
+
+            // Media playback controls
+            if root.media.has: VerticalLayout {
+                spacing: 8px;
+                SectionTitle { text: "MEDIA"; }
+                HorizontalLayout {
+                    spacing: 6px;
+                    Text { text: root.media.item; color: Theme.text; font-size: Theme.font-s; font-weight: 600; overflow: elide; horizontal-stretch: 1; vertical-alignment: center; }
+                    if root.media.index != "": Badge { text: root.media.index; }
+                }
+                // Seek bar
+                Rectangle {
+                    height: 14px;
+                    seek-ta := TouchArea {
+                        mouse-cursor: MouseCursor.pointer;
+                        clicked => { root.media-seek(clamp(self.mouse-x / self.width, 0, 1)); }
+                    }
+                    Rectangle {
+                        y: (parent.height - 4px) / 2;
+                        height: 4px;
+                        border-radius: 2px;
+                        background: Theme.surface-3;
+                    }
+                    Rectangle {
+                        x: 0;
+                        y: (parent.height - 4px) / 2;
+                        width: parent.width * clamp(root.media.progress, 0, 1);
+                        height: 4px;
+                        border-radius: 2px;
+                        background: Theme.accent;
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 2px;
+                    IconButton { icon: Icons.skip-back; tooltip: "Previous item"; size: 26px; icon-size: 13px; clicked => { root.media-control("previous"); } }
+                    IconButton { icon: root.media.paused || root.media.ended ? Icons.play : Icons.pause; tooltip: root.media.paused ? "Play" : root.media.ended ? "Play again" : "Pause"; size: 26px; icon-size: 13px; clicked => { root.media-control(root.media.ended ? "restart" : "toggle"); } }
+                    IconButton { icon: Icons.refresh; tooltip: "Restart"; size: 26px; icon-size: 13px; clicked => { root.media-control("restart"); } }
+                    IconButton { icon: Icons.skip-forward; tooltip: "Next item"; size: 26px; icon-size: 13px; clicked => { root.media-control("next"); } }
+                    Text { text: root.media.time; color: Theme.text-muted; font-size: Theme.font-xs; horizontal-alignment: right; vertical-alignment: center; horizontal-stretch: 1; }
                 }
             }
 

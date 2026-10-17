@@ -4,9 +4,11 @@
 pub use ffmpeg_next as ffmpeg;
 
 pub mod encode;
+pub mod media_source;
 pub mod multistream;
 pub mod mux;
 pub mod output;
+pub mod player;
 pub mod settings;
 pub mod stream;
 

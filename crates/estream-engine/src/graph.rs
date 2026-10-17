@@ -71,6 +71,8 @@ pub struct TransitionGraph {
     pub kind: TransitionKind,
     pub start: Timestamp,
     pub duration_ns: u64,
+    /// Stinger: the helper media source drawn on top, and when the scene switches.
+    pub overlay: Option<(SourceId, u64)>,
 }
 
 impl TransitionGraph {
@@ -110,6 +112,8 @@ impl RenderGraph {
             }
             items
         };
+        // Helper sources that exist only while a transition runs (stinger videos).
+        let mut helpers = Vec::new();
         let canvases = project
             .canvases
             .iter()
@@ -118,11 +122,19 @@ impl RenderGraph {
                     .transitions
                     .get(&canvas.id)
                     .filter(|t| t.end() > now)
-                    .map(|t| TransitionGraph {
-                        from: scene_items(t.from),
-                        kind: t.transition.kind.clone(),
-                        start: t.start,
-                        duration_ns: t.transition.duration_ms as u64 * 1_000_000,
+                    .map(|t| {
+                        let overlay = stinger_source(canvas.id, t).map(|(def, point)| {
+                            let id = def.id;
+                            helpers.push(def);
+                            (id, point)
+                        });
+                        TransitionGraph {
+                            from: scene_items(t.from),
+                            kind: t.transition.kind.clone(),
+                            start: t.start,
+                            duration_ns: t.transition.duration_ms as u64 * 1_000_000,
+                            overlay,
+                        }
                     });
                 CanvasGraph {
                     id: canvas.id,
@@ -139,13 +151,46 @@ impl RenderGraph {
                 }
             })
             .collect();
+        let mut audio = audio_graph(project, view, now);
+        audio.nodes.extend(helpers.iter().map(|s| AudioNode {
+            source: s.id,
+            kind: s.kind.clone(),
+            settings: runtime_settings(s),
+            config: s.audio.clone(),
+        }));
         Self {
             revision,
             canvases,
-            sources: project.sources.clone(),
-            audio: audio_graph(project, view, now),
+            sources: project
+                .sources
+                .iter()
+                .chain(&helpers)
+                .map(|s| SourceDef {
+                    settings: runtime_settings(s),
+                    ..s.clone()
+                })
+                .collect(),
+            audio,
         }
     }
+}
+
+/// The helper media source playing a stinger, and the switch point (ns after the start).
+/// Its id depends on the transition's start, so every stinger plays from the beginning.
+fn stinger_source(canvas: CanvasId, t: &ActiveTransition) -> Option<(SourceDef, u64)> {
+    let TransitionKind::Stinger { file, point_ms } = &t.transition.kind else {
+        return None;
+    };
+    const SALT: u128 = 0x5354_494e_4745_5200_0000_0000_0000_0000; // "STINGER"
+    let id = SourceId::from_u128(canvas.0.as_u128() ^ ((t.start.0 as u128) << 32) ^ SALT);
+    let mut def = SourceDef::new(
+        "Stinger",
+        "media",
+        serde_json::json!({ "file": file, "loop": false }),
+    );
+    def.id = id;
+    def.audio.global = true;
+    Some((def, *point_ms as u64 * 1_000_000))
 }
 
 /// Global audio sources, then sources visible in the first canvas's active scene (and in the
@@ -188,12 +233,23 @@ fn audio_graph(project: &Project, view: &ViewState, now: Timestamp) -> AudioGrap
             .map(|s| AudioNode {
                 source: s.id,
                 kind: s.kind.clone(),
-                settings: s.settings.clone(),
+                settings: runtime_settings(s),
                 config: s.audio.clone(),
             })
             .collect(),
         monitor_device: project.audio.monitor_device.clone(),
     }
+}
+
+/// Settings handed to source factories: the stored settings plus `_source_id`, so a source's
+/// video and audio sides can find each other (e.g. a shared media player). Never saved.
+pub fn runtime_settings(def: &SourceDef) -> serde_json::Value {
+    let mut settings = match &def.settings {
+        serde_json::Value::Object(_) => def.settings.clone(),
+        _ => serde_json::json!({}),
+    };
+    settings["_source_id"] = serde_json::Value::from(def.id.to_string());
+    settings
 }
 
 fn flatten(items: &[SceneItem], parent: Affine2, opacity: f32, out: &mut Vec<FlatItem>) {

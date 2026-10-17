@@ -78,6 +78,8 @@ pub enum TransitionKind {
     Swipe { direction: Direction },
     /// A moving edge reveals the new scene.
     Wipe { direction: Direction, softness: f32 },
+    /// A video (ideally with alpha) played over the change; the scene switches at `point_ms`.
+    Stinger { file: String, point_ms: u32 },
     /// A user WGSL function `transition(uv, progress) -> vec4<f32>`.
     Shader { code: String },
 }
@@ -91,6 +93,7 @@ impl TransitionKind {
             TransitionKind::Slide { .. } => "Slide",
             TransitionKind::Swipe { .. } => "Swipe",
             TransitionKind::Wipe { .. } => "Wipe",
+            TransitionKind::Stinger { .. } => "Stinger",
             TransitionKind::Shader { .. } => "Custom shader",
         }
     }
