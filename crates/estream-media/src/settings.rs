@@ -230,6 +230,91 @@ impl Service {
             _ => None,
         }
     }
+
+    /// The platforms offered in the quick Go Live box (Custom stays in Settings).
+    pub const PLATFORMS: [Service; 4] = [
+        Service::Twitch,
+        Service::YouTube,
+        Service::Kick,
+        Service::Facebook,
+    ];
+
+    /// The platform's recommended H.264 video bitrate for a canvas (its published guidance,
+    /// capped at its limit). Vertical canvases use their short side like landscape ones.
+    pub fn recommended_kbps(self, width: u32, height: u32, fps: f64) -> u32 {
+        let lines = width.min(height);
+        let high_fps = fps > 40.0;
+        let kbps = match self {
+            Service::Twitch => match (lines >= 1080, high_fps) {
+                (true, true) => 6_000,
+                (true, false) | (false, true) => 4_500,
+                (false, false) => 3_000,
+            },
+            Service::YouTube => match (lines, high_fps) {
+                (l, true) if l >= 1440 => 18_000,
+                (l, false) if l >= 1440 => 12_000,
+                (l, true) if l >= 1080 => 9_000,
+                (l, false) if l >= 1080 => 6_000,
+                (_, true) => 6_000,
+                (_, false) => 4_000,
+            },
+            Service::Kick => match (lines >= 1080, high_fps) {
+                (true, true) => 8_000,
+                (true, false) => 6_000,
+                (false, _) => 4_500,
+            },
+            Service::Facebook => {
+                if lines >= 1080 {
+                    6_000
+                } else {
+                    4_000
+                }
+            }
+            Service::Custom => {
+                if lines >= 1080 {
+                    6_000
+                } else {
+                    4_500
+                }
+            }
+        };
+        self.max_video_kbps().map_or(kbps, |max| kbps.min(max))
+    }
+
+    /// The page where the platform shows your stream key.
+    pub fn key_page(self) -> Option<&'static str> {
+        match self {
+            Service::Twitch => Some("https://dashboard.twitch.tv/settings/stream"),
+            Service::YouTube => Some("https://www.youtube.com/live_dashboard"),
+            Service::Kick => Some("https://kick.com/dashboard/settings/stream"),
+            Service::Facebook => Some("https://www.facebook.com/live/producer"),
+            Service::Custom => None,
+        }
+    }
+
+    /// Recognises the platform from a stream key's format.
+    pub fn from_key(key: &str) -> Option<Service> {
+        let key = key.trim();
+        if key.starts_with("live_") {
+            return Some(Service::Twitch);
+        }
+        if key.starts_with("sk_") {
+            return Some(Service::Kick);
+        }
+        if key.starts_with("FB-") {
+            return Some(Service::Facebook);
+        }
+        // YouTube: five groups of four letters/digits, e.g. "abcd-efgh-ijkl-mnop-qrst".
+        let groups: Vec<&str> = key.split('-').collect();
+        if groups.len() == 5
+            && groups
+                .iter()
+                .all(|g| g.len() == 4 && g.chars().all(|c| c.is_ascii_alphanumeric()))
+        {
+            return Some(Service::YouTube);
+        }
+        None
+    }
 }
 
 /// The RTMP server without a trailing slash, with Amazon IVS's `/app` added when it's missing.
@@ -462,6 +547,41 @@ mod tests {
         assert_eq!(Protocol::of("https://x/whip"), Some(Protocol::Whip));
         assert_eq!(Protocol::of("ftp://x"), None);
         assert_eq!(Protocol::of("live.twitch.tv"), None);
+    }
+
+    #[test]
+    fn platform_presets() {
+        assert_eq!(Service::Twitch.recommended_kbps(1920, 1080, 60.0), 6_000);
+        assert_eq!(Service::Twitch.recommended_kbps(1920, 1080, 30.0), 4_500);
+        assert_eq!(
+            Service::Twitch.recommended_kbps(2560, 1440, 60.0),
+            6_000,
+            "capped"
+        );
+        assert_eq!(Service::YouTube.recommended_kbps(1920, 1080, 60.0), 9_000);
+        assert_eq!(
+            Service::YouTube.recommended_kbps(1080, 1920, 30.0),
+            6_000,
+            "vertical"
+        );
+        assert_eq!(Service::Kick.recommended_kbps(1920, 1080, 60.0), 8_000);
+        assert_eq!(Service::Facebook.recommended_kbps(1280, 720, 30.0), 4_000);
+        for s in Service::PLATFORMS {
+            assert!(s.key_page().is_some_and(|u| u.starts_with("https://")));
+        }
+
+        assert_eq!(
+            Service::from_key("live_123456789_AbCdEf"),
+            Some(Service::Twitch)
+        );
+        assert_eq!(Service::from_key(" sk_us-west-2_abc "), Some(Service::Kick));
+        assert_eq!(Service::from_key("FB-123456789"), Some(Service::Facebook));
+        assert_eq!(
+            Service::from_key("ab12-cd34-ef56-gh78-ij90"),
+            Some(Service::YouTube)
+        );
+        assert_eq!(Service::from_key("ab12-cd34-ef56"), None);
+        assert_eq!(Service::from_key("rtmp://x/app"), None);
     }
 
     #[test]

@@ -232,18 +232,24 @@ export component AddSourceDialog inherits Modal {
 }
 
 export component SetupWizard inherits Modal {
+    /// What the user wants to do (label + detail).
+    in property <[Preset]> purposes;
+    in-out property <int> purpose;
+    /// What will be set up, from device detection.
+    in property <[string]> summary;
     in property <[Preset]> presets;
-    in property <string> gpu;
-    in property <string> encoders;
     in-out property <int> current;
-    callback create(int);
+    /// Show the resolution list (otherwise the purpose decides).
+    in-out property <bool> custom;
+    callback purpose-changed(int);
+    callback create();
 
-    card-width: 600px;
+    card-width: 640px;
     dismissable: false;
 
     VerticalLayout {
         padding: 28px;
-        spacing: 18px;
+        spacing: 16px;
         HorizontalLayout {
             spacing: 14px;
             Rectangle {
@@ -257,34 +263,94 @@ export component SetupWizard inherits Modal {
                 alignment: center;
                 spacing: 2px;
                 Text { text: "Welcome to eStream"; color: Theme.text; font-size: 22px; font-weight: 700; }
-                Text { text: "Let's set up your canvas. You can change it any time."; color: Theme.text-muted; font-size: Theme.font-m; }
+                Text { text: "What will you use it for? We'll set everything up for you."; color: Theme.text-muted; font-size: Theme.font-m; }
             }
         }
+
+        // Purpose cards, two per row.
+        for row in [0, 2]: HorizontalLayout {
+            spacing: 10px;
+            for k in [0, 1]: Rectangle {
+                property <int> i: row + k;
+                property <bool> on: i == root.purpose;
+                height: 74px;
+                horizontal-stretch: 1;
+                // Equal halves whatever the text length.
+                min-width: 0px;
+                preferred-width: 0px;
+                border-radius: Theme.radius-m;
+                border-width: on ? 2px : 1px;
+                border-color: on ? Theme.accent : Theme.border;
+                background: on ? Theme.accent-soft : card-ta.has-hover ? Theme.hover : Theme.surface-2;
+                accessible-role: radio-button;
+                accessible-label: i < root.purposes.length ? root.purposes[i].label : "";
+                accessible-checked: on;
+                card-ta := TouchArea {
+                    mouse-cursor: MouseCursor.pointer;
+                    clicked => {
+                        root.purpose = i;
+                        root.purpose-changed(i);
+                    }
+                    double-clicked => {
+                        root.purpose = i;
+                        root.create();
+                    }
+                }
+                HorizontalLayout {
+                    padding: 14px;
+                    spacing: 12px;
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 36px;
+                            height: 36px;
+                            border-radius: 10px;
+                            background: on ? Theme.accent : Theme.surface-3;
+                            Icon {
+                                source: i == 0 ? Icons.gamepad : i == 1 ? Icons.camera : i == 2 ? Icons.film : Icons.scan;
+                                size: 18px;
+                                tint: on ? #ffffff : Theme.text-muted;
+                            }
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 2px;
+                        horizontal-stretch: 1;
+                        Text { text: i < root.purposes.length ? root.purposes[i].label : ""; color: Theme.text; font-size: Theme.font-m; font-weight: 700; }
+                        Text { text: i < root.purposes.length ? root.purposes[i].detail : ""; color: Theme.text-muted; font-size: Theme.font-s; overflow: elide; }
+                    }
+                }
+            }
+        }
+
+        // What will be set up.
         Rectangle {
-            height: hw.preferred-height + 20px;
+            height: found.preferred-height;
             border-radius: Theme.radius-m;
             background: Theme.surface-2;
-            hw := VerticalLayout {
-                padding: 10px;
+            found := VerticalLayout {
+                padding: 12px;
                 padding-left: 14px;
-                spacing: 4px;
-                HorizontalLayout {
+                spacing: 5px;
+                Text { text: "WE'LL SET UP"; color: Theme.text-faint; font-size: Theme.font-xs; font-weight: 700; }
+                for line in root.summary: HorizontalLayout {
                     spacing: 8px;
-                    Icon { source: Icons.gauge; size: 14px; tint: Theme.ok; }
-                    Text { text: "GPU: " + root.gpu; color: Theme.text; font-size: Theme.font-s; }
-                }
-                HorizontalLayout {
-                    spacing: 8px;
-                    Icon { source: Icons.film; size: 14px; tint: Theme.text-muted; }
-                    Text { text: "Hardware encoding: " + root.encoders; color: Theme.text-muted; font-size: Theme.font-s; wrap: word-wrap; }
+                    VerticalLayout {
+                        alignment: center;
+                        Icon { source: Icons.check; size: 13px; tint: Theme.ok; }
+                    }
+                    Text { text: line; color: Theme.text; font-size: Theme.font-s; overflow: elide; horizontal-stretch: 1; }
                 }
             }
         }
-        VerticalLayout {
+
+        if root.custom: VerticalLayout {
             spacing: 4px;
+            Text { text: "Resolution"; color: Theme.text-muted; font-size: Theme.font-s; }
             for preset[i] in root.presets: Rectangle {
-                height: 46px;
-                border-radius: Theme.radius-m;
+                height: 36px;
+                border-radius: Theme.radius-s;
                 border-width: 1px;
                 border-color: i == root.current ? Theme.accent : Theme.border;
                 background: i == root.current ? Theme.accent-soft : preset-ta.has-hover ? Theme.hover : transparent;
@@ -294,39 +360,29 @@ export component SetupWizard inherits Modal {
                 preset-ta := TouchArea {
                     mouse-cursor: MouseCursor.pointer;
                     clicked => { root.current = i; }
-                    double-clicked => { root.create(i); }
                 }
                 HorizontalLayout {
-                    padding-left: 14px;
-                    padding-right: 14px;
+                    padding-left: 12px;
+                    padding-right: 12px;
                     spacing: 10px;
-                    VerticalLayout {
-                        alignment: center;
-                        Rectangle {
-                            width: 16px;
-                            height: 16px;
-                            border-radius: 8px;
-                            border-width: 2px;
-                            border-color: i == root.current ? Theme.accent : Theme.border-strong;
-                            Rectangle {
-                                width: 8px;
-                                height: 8px;
-                                border-radius: 4px;
-                                background: i == root.current ? Theme.accent : transparent;
-                            }
-                        }
-                    }
-                    Text { text: preset.label; color: Theme.text; font-size: Theme.font-m; font-weight: 600; vertical-alignment: center; }
-                    Text { text: preset.detail; color: Theme.text-muted; font-size: Theme.font-s; vertical-alignment: center; horizontal-stretch: 1; horizontal-alignment: right; }
+                    Text { text: preset.label; color: Theme.text; font-size: Theme.font-s; font-weight: 600; vertical-alignment: center; }
+                    Text { text: preset.detail; color: Theme.text-muted; font-size: Theme.font-xs; vertical-alignment: center; horizontal-stretch: 1; horizontal-alignment: right; }
                 }
             }
         }
+
         HorizontalLayout {
-            alignment: end;
+            spacing: 8px;
             Button {
-                text: "Create scene collection";
+                text: root.custom ? "Use the recommended resolution" : "Choose the resolution myself";
+                kind: "ghost";
+                clicked => { root.custom = !root.custom; }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Button {
+                text: "Get started";
                 kind: "primary";
-                clicked => { root.create(root.current); }
+                clicked => { root.create(); }
             }
         }
     }
@@ -854,6 +910,7 @@ export component LivePanel inherits Rectangle {
     in property <[LiveRow]> rows;
     callback toggle(int);
     callback manage();
+    callback add-platform();
     callback dismiss();
 
     // Click-away layer.
@@ -880,10 +937,11 @@ export component LivePanel inherits Rectangle {
             spacing: 6px;
             HorizontalLayout {
                 Text { text: "Destinations"; color: Theme.text; font-size: Theme.font-m; font-weight: 700; vertical-alignment: center; horizontal-stretch: 1; }
+                Button { text: "Add platform"; kind: "ghost"; clicked => { root.add-platform(); } }
                 Button { text: "Manage…"; kind: "ghost"; clicked => { root.manage(); } }
             }
             if root.rows.length == 0: Text {
-                text: "No destinations yet. Add one in Settings.";
+                text: "No destinations yet. Click Add platform to stream to Twitch, YouTube, Kick or Facebook.";
                 color: Theme.text-faint;
                 font-size: Theme.font-s;
                 wrap: word-wrap;

@@ -16,6 +16,11 @@ A modern streaming and recording studio written from scratch in Rust. It is an a
 
 Windows 10/11 (x64) is the supported platform today.
 
+## Getting started
+
+1. **First run.** Pick what you'll use eStream for: streaming games, talking to camera, recording videos, or vertical video. eStream finds your screen, webcam, microphone and encoder, then builds a ready scene. Noise suppression is on for the mic. "Choose the resolution myself" shows every canvas preset.
+2. **Go live.** Click **Go Live**, pick Twitch, YouTube, Kick or Facebook Live, and paste your stream key. "Where do I find it?" opens the platform's key page. eStream recognizes the platform from the key, catches a pasted server address, and picks the server, the encoder and the platform's recommended bitrate. Use **More options** for custom servers, SRT/RIST/WHIP, or your own encoder settings. To stream to another platform as well, use **Add platform** in the menu next to Go Live.
+
 ## Requirements
 
 | Tool | Why | Install |

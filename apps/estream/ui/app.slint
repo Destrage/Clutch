@@ -9,6 +9,7 @@ import { TopBar, ScenesPanel, SourcesPanel, InspectorPanel, MixerPanel, StatusBa
 import { CommandPalette, AddSourceDialog, SetupWizard, RecoveryPrompt, Toast, SettingsDialog, LivePanel, ShaderDialog } from "overlays.slint";
 import { AutomationDialog } from "automation.slint";
 import { StatsDialog } from "stats.slint";
+import { GoLiveDialog } from "golive.slint";
 
 export { Theme }
 
@@ -109,8 +110,10 @@ export component AppWindow inherits Window {
     in-out property <bool> add-source-open;
     in property <[SourceType]> source-types;
     in property <[Preset]> presets;
-    in property <string> wizard-gpu;
-    in property <string> wizard-encoders;
+    in property <[Preset]> wizard-purposes;
+    in-out property <int> wizard-purpose;
+    in property <[string]> wizard-summary;
+    in-out property <bool> wizard-custom;
     in-out property <int> wizard-current;
     in property <bool> recording;
     in property <string> record-time;
@@ -127,6 +130,18 @@ export component AppWindow inherits Window {
     in-out property <bool> settings-open;
     in-out property <bool> automation-open;
     in-out property <bool> stats-open;
+    in-out property <bool> golive-open;
+    in property <[string]> golive-platforms;
+    in property <int> golive-platform: -1;
+    in-out property <string> golive-key;
+    in property <string> golive-message;
+    in property <bool> golive-message-error;
+    in property <string> golive-auto;
+    callback golive-pick(int);
+    callback golive-open-key-page();
+    callback golive-go();
+    callback golive-more();
+    callback golive-key-edited(string);
     in property <StatsForm> stats-form;
     in property <int> health;
     in property <string> health-text: "Healthy";
@@ -182,7 +197,8 @@ export component AppWindow inherits Window {
     callback palette-query-changed(string);
     callback palette-run(string);
     callback add-source-pick(string);
-    callback wizard-create(int);
+    callback wizard-create();
+    callback wizard-purpose-changed(int);
     callback recovery-restore();
     callback recovery-discard();
     callback toggle-theme();
@@ -468,6 +484,7 @@ export component AppWindow inherits Window {
         rows: root.live-rows;
         toggle(i) => { root.live-toggle(i); }
         manage => { root.live-panel-open = false; root.action("settings"); }
+        add-platform => { root.live-panel-open = false; root.action("go-live-setup"); }
         dismiss => { root.live-panel-open = false; }
     }
 
@@ -491,6 +508,24 @@ export component AppWindow inherits Window {
         }
     }
 
+    if root.golive-open: GoLiveDialog {
+        platforms: root.golive-platforms;
+        platform: root.golive-platform;
+        key <=> root.golive-key;
+        message: root.golive-message;
+        message-error: root.golive-message-error;
+        auto-settings: root.golive-auto;
+        pick(i) => { root.golive-pick(i); }
+        key-edited(t) => { root.golive-key-edited(t); }
+        open-key-page => { root.golive-open-key-page(); }
+        go => { root.golive-go(); }
+        more-options => { root.golive-more(); }
+        dismiss => {
+            root.golive-open = false;
+            main-keys.focus();
+        }
+    }
+
     if root.automation-open: AutomationDialog {
         form: root.automation-form;
         edit(f, i, v) => { root.automation-edit(f, i, v); }
@@ -505,10 +540,13 @@ export component AppWindow inherits Window {
 
     if root.startup == "wizard": SetupWizard {
         presets: root.presets;
-        gpu: root.wizard-gpu;
-        encoders: root.wizard-encoders;
+        purposes: root.wizard-purposes;
+        purpose <=> root.wizard-purpose;
+        summary: root.wizard-summary;
+        custom <=> root.wizard-custom;
         current <=> root.wizard-current;
-        create(i) => { root.wizard-create(i); }
+        purpose-changed(i) => { root.wizard-purpose-changed(i); }
+        create => { root.wizard-create(); }
     }
 
     if root.startup == "recovery": RecoveryPrompt {

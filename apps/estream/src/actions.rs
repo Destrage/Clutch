@@ -38,6 +38,7 @@ pub enum Action {
     ToggleRecording,
     ToggleReplay,
     ToggleStream,
+    GoLiveSetup,
     ToggleStudio,
     ToggleVirtualCamera,
     TransitionGo,
@@ -175,6 +176,7 @@ actions! {
     ToggleRecording, "record.toggle", "Start / stop recording", "Output", None, true;
     ToggleReplay, "replay.toggle", "Start / stop replay buffer", "Output", None, true;
     ToggleStream, "stream.toggle", "Go live / end stream", "Output", None, true;
+    GoLiveSetup, "go-live-setup", "Add a streaming platform (Twitch, YouTube, Kick…)", "Output", None, true;
     ToggleStudio, "studio.toggle", "Studio mode", "Scenes", Some(Shortcut::ctrl_shift('t')), true;
     ToggleVirtualCamera, "vcam.toggle", "Start / stop virtual camera", "Output", None, true;
     TransitionGo, "transition.go", "Transition Preview to Program", "Scenes", None, true;

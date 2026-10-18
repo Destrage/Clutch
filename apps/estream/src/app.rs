@@ -16,6 +16,7 @@ use estream_engine::{
     Subscription,
 };
 use estream_gpu::GpuContext;
+use estream_media::Service;
 use estream_project::{
     AudioConfig, AudioFilterDef, ItemContent, Monitoring, Project, Scene, SceneItem, SourceDef,
     persist,
@@ -110,6 +111,8 @@ pub struct App {
     vcam_install: Option<(std::sync::mpsc::Receiver<Result<(), String>>, bool)>,
     /// Last camera failure shown (not repeated every tick).
     vcam_error_shown: bool,
+    /// Devices found for the first-run wizard.
+    wizard_detected: Option<presets::Detected>,
     /// Macros and triggers (taken out while it calls back into the app).
     runner: Option<estream_automation::Runner>,
     /// Macro open in the Automation dialog.
@@ -174,13 +177,33 @@ fn protocol_label(s: &estream_media::StreamSettings, long: bool) -> String {
     }
 }
 
+/// A common mistake in a pasted stream key, in words the user can act on.
+fn golive_key_problem(key: &str) -> Option<&'static str> {
+    let lower = key.to_ascii_lowercase();
+    if ["rtmp://", "rtmps://", "srt://", "http://", "https://"]
+        .iter()
+        .any(|p| lower.starts_with(p))
+    {
+        return Some(
+            "That's the server address, not the stream key. eStream fills in the server \
+             for you, so paste the stream key instead.",
+        );
+    }
+    if key.chars().any(char::is_whitespace) {
+        return Some(
+            "Stream keys have no spaces. Copy the key again with the Copy button on the platform's page.",
+        );
+    }
+    None
+}
+
 /// The Stream section of the settings form: the destination list and the selected
 /// destination's editor fields (other fields left default).
 fn stream_form(
     dests: &[crate::settings::DestinationConfig],
     selected: Option<usize>,
 ) -> SettingsForm {
-    use estream_media::{Service, VideoCodec, encode};
+    use estream_media::{VideoCodec, encode};
     let rows: Vec<DestinationRow> = dests
         .iter()
         .map(|d| DestinationRow {
@@ -426,6 +449,7 @@ impl App {
             vcam: None,
             vcam_install: None,
             vcam_error_shown: false,
+            wizard_detected: None,
             runner: Some(estream_automation::Runner::new(true)),
             auto_selected: None,
             auto_recording: None,
@@ -477,8 +501,18 @@ impl App {
                     })
                     .collect::<Vec<_>>(),
             )));
-            w.set_wizard_gpu(info.name.clone().into());
-            w.set_wizard_encoders(presets::likely_encoders(info.vendor).into());
+            w.set_wizard_purposes(ModelRc::new(VecModel::from(
+                presets::Purpose::ALL
+                    .iter()
+                    .map(|p| Preset {
+                        label: p.label().into(),
+                        detail: p.detail().into(),
+                    })
+                    .collect::<Vec<_>>(),
+            )));
+            self.wizard_detected = Some(self.detect_devices());
+            w.set_wizard_purpose(0);
+            self.wizard_purpose_changed(0);
             w.set_startup("wizard".into());
         } else if persist::find_recovery(&self.collection).is_some() {
             w.set_startup("recovery".into());
@@ -509,28 +543,95 @@ impl App {
             .unwrap_or_else(|| "Untitled".into())
     }
 
-    pub fn wizard_create(&mut self, index: i32) {
-        let preset = PRESETS
+    /// What the first run can use: primary screen, first webcam, default mic, encoder.
+    fn detect_devices(&self) -> presets::Detected {
+        let monitors = estream_capture::windows::enumerate::monitors();
+        let monitor = monitors
+            .iter()
+            .enumerate()
+            .find(|(_, m)| m.primary)
+            .or_else(|| monitors.iter().enumerate().next())
+            .map(|(i, m)| {
+                (
+                    m.id.clone(),
+                    format!("Display {} ({} × {})", i + 1, m.width, m.height),
+                )
+            });
+        let camera = estream_capture::windows::camera::devices()
+            .into_iter()
+            .next()
+            .map(|c| (c.id, c.name));
+        let mic = estream_engine::audio_engine::devices::devices(
+            estream_engine::audio_engine::devices::Direction::Input,
+        )
+        .into_iter()
+        .find(|d| d.is_default)
+        .map(|d| d.name);
+        let encoder = match self.gpu.info.vendor {
+            0x10de => "NVIDIA NVENC (hardware, light on your PC)",
+            0x1002 | 0x1022 => "AMD AMF (hardware, light on your PC)",
+            0x8086 => "Intel Quick Sync (hardware, light on your PC)",
+            _ => "Software (uses the CPU)",
+        };
+        presets::Detected {
+            monitor,
+            camera,
+            mic,
+            encoder: encoder.into(),
+        }
+    }
+
+    /// The wizard's purpose changed: show what will be set up and its default resolution.
+    pub fn wizard_purpose_changed(&mut self, index: i32) {
+        let Some(w) = self.window() else { return };
+        let purpose = presets::Purpose::ALL
             .get(index.max(0) as usize)
             .copied()
-            .unwrap_or(PRESETS[0]);
-        let mut project = Project::new_default(preset.width, preset.height, preset.fps);
-        project.scenes[0].name = "Main".into();
-        // Like OBS: desktop audio and the default microphone in every scene.
-        for (name, kind) in [
-            ("Desktop Audio", "audio_output"),
-            ("Microphone", "audio_input"),
-        ] {
-            let mut source = SourceDef::new(name, kind, serde_json::json!({ "device": "" }));
-            source.audio.global = true;
-            project.sources.push(source);
+            .unwrap_or(presets::Purpose::Gaming);
+        let detected = self.wizard_detected.clone().unwrap_or_default();
+        let preset = purpose.preset();
+        let mut lines = vec![format!("Canvas: {}", preset.label)];
+        lines.extend(presets::summary(purpose, &detected));
+        w.set_wizard_summary(ModelRc::new(VecModel::from(
+            lines
+                .into_iter()
+                .map(SharedString::from)
+                .collect::<Vec<_>>(),
+        )));
+        if let Some(i) = PRESETS.iter().position(|p| *p == preset) {
+            w.set_wizard_current(i as i32);
         }
+    }
+
+    /// Creates the first scene collection for the chosen purpose.
+    pub fn wizard_create(&mut self) {
+        let Some(w) = self.window() else { return };
+        let purpose = presets::Purpose::ALL
+            .get(w.get_wizard_purpose().max(0) as usize)
+            .copied()
+            .unwrap_or(presets::Purpose::Gaming);
+        let preset = if w.get_wizard_custom() {
+            PRESETS
+                .get(w.get_wizard_current().max(0) as usize)
+                .copied()
+                .unwrap_or_else(|| purpose.preset())
+        } else {
+            purpose.preset()
+        };
+        let detected = self
+            .wizard_detected
+            .take()
+            .unwrap_or_else(|| self.detect_devices());
+        let project = presets::build_project(purpose, preset, &detected);
         if let Err(e) = persist::save(&self.collection, &project) {
             self.toast(format!("Couldn't create the scene collection: {e}"), true);
             return;
         }
         self.start(project);
-        self.toast(format!("Canvas set to {}", preset.label), false);
+        self.toast(
+            "You're all set. Click Go Live or Record when you're ready.".into(),
+            false,
+        );
     }
 
     pub fn recovery(&mut self, restore: bool) {
@@ -1365,6 +1466,187 @@ impl App {
         }
     }
 
+    /// Opens the quick Go Live box: pick a platform, paste the key.
+    fn open_golive(&mut self) {
+        let Some(w) = self.window() else { return };
+        w.set_golive_platforms(ModelRc::new(VecModel::from(
+            Service::PLATFORMS
+                .iter()
+                .map(|s| SharedString::from(s.label()))
+                .collect::<Vec<_>>(),
+        )));
+        w.set_golive_platform(-1);
+        w.set_golive_key(SharedString::new());
+        w.set_golive_message(SharedString::new());
+        w.set_golive_message_error(false);
+        w.set_golive_auto(SharedString::new());
+        w.set_golive_open(true);
+    }
+
+    fn golive_service(w: &AppWindow) -> Option<Service> {
+        Service::PLATFORMS
+            .get(usize::try_from(w.get_golive_platform()).ok()?)
+            .copied()
+    }
+
+    /// What eStream picks for a platform, shown under the key.
+    fn golive_auto_line(&self, service: Service) -> String {
+        let (width, height, fps) = self
+            .engine
+            .as_ref()
+            .and_then(|e| {
+                let s = e.snapshot();
+                s.canvases.first().map(|c| (c.width, c.height, c.fps))
+            })
+            .map_or((1920, 1080, 60.0), |(w, h, f)| (w, h, f.as_f64()));
+        let encoder = match self.gpu.info.vendor {
+            0x10de => "NVIDIA NVENC",
+            0x1002 | 0x1022 => "AMD AMF",
+            0x8086 => "Intel Quick Sync",
+            _ => "software encoder",
+        };
+        let kbps = service.recommended_kbps(width, height, fps);
+        format!(
+            "eStream sets up the rest: {} server, {encoder}, {kbps} kbps for {width} × {height} at {} fps. \
+             Change any of it in More options.",
+            service.label(),
+            fps.round()
+        )
+    }
+
+    pub fn golive_pick(&mut self, index: i32) {
+        let Some(w) = self.window() else { return };
+        w.set_golive_platform(index);
+        if let Some(service) = Self::golive_service(&w) {
+            w.set_golive_auto(self.golive_auto_line(service).into());
+        }
+        if !w.get_golive_message_error() {
+            w.set_golive_message(SharedString::new());
+        }
+    }
+
+    /// Checks the key as it is typed and recognises the platform from it.
+    pub fn golive_key_edited(&mut self, key: &str) {
+        let Some(w) = self.window() else { return };
+        let key = key.trim();
+        if let Some(problem) = golive_key_problem(key) {
+            w.set_golive_message(problem.into());
+            w.set_golive_message_error(true);
+            return;
+        }
+        w.set_golive_message_error(false);
+        let found = Service::from_key(key).and_then(|s| {
+            Service::PLATFORMS
+                .iter()
+                .position(|p| *p == s)
+                .map(|i| (s, i))
+        });
+        match found {
+            Some((service, i)) => {
+                if w.get_golive_platform() != i as i32 {
+                    self.golive_pick(i as i32);
+                }
+                w.set_golive_message(format!("Looks like a {} key", service.label()).into());
+            }
+            None => w.set_golive_message(SharedString::new()),
+        }
+    }
+
+    pub fn golive_open_key_page(&mut self) {
+        let Some(w) = self.window() else { return };
+        let Some(url) = Self::golive_service(&w).and_then(Service::key_page) else {
+            return;
+        };
+        let opener = if cfg!(windows) {
+            "explorer"
+        } else if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        };
+        if let Err(e) = std::process::Command::new(opener).arg(url).spawn() {
+            self.toast(format!("Couldn't open your browser: {e}"), true);
+        }
+    }
+
+    /// Saves the platform as a destination (or updates the existing one) and goes live on it.
+    pub fn golive_go(&mut self) {
+        let Some(w) = self.window() else { return };
+        let key = w.get_golive_key().trim().to_owned();
+        let fail = |text: &str| {
+            w.set_golive_message(text.into());
+            w.set_golive_message_error(true);
+        };
+        if let Some(problem) = golive_key_problem(&key) {
+            return fail(problem);
+        }
+        let service = Self::golive_service(&w)
+            .or_else(|| Service::from_key(&key).filter(|s| Service::PLATFORMS.contains(s)));
+        let Some(service) = service else {
+            return fail("Pick where you stream first.");
+        };
+        if key.is_empty() {
+            return fail("Paste your stream key to go live.");
+        }
+        let (width, height, fps) = self
+            .engine
+            .as_ref()
+            .and_then(|e| {
+                e.snapshot()
+                    .canvases
+                    .first()
+                    .map(|c| (c.width, c.height, c.fps))
+            })
+            .map_or((1920, 1080, 60.0), |(w, h, f)| (w, h, f.as_f64()));
+        // Reuse a destination already pointing at this platform rather than adding a twin.
+        let index = match self
+            .settings
+            .destinations
+            .iter()
+            .position(|d| d.stream.service == service)
+        {
+            Some(i) => i,
+            None => {
+                self.settings
+                    .destinations
+                    .push(crate::settings::DestinationConfig {
+                        name: service.label().into(),
+                        stream: estream_media::StreamSettings {
+                            service,
+                            server: service.default_server().into(),
+                            bitrate_kbps: service.recommended_kbps(width, height, fps),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    });
+                self.settings.destinations.len() - 1
+            }
+        };
+        let dest = &mut self.settings.destinations[index];
+        dest.enabled = true;
+        dest.set_key(&key);
+        self.settings.save(&self.paths.settings());
+        w.set_golive_open(false);
+        w.set_golive_key(SharedString::new());
+        let already_live = self.stream_dests.iter().any(|d| d.config == index);
+        if self.stream.is_some() {
+            if !already_live {
+                self.live_toggle(index);
+            }
+            self.update_outputs();
+        } else {
+            self.toggle_stream();
+        }
+    }
+
+    /// The box's "More options": the full destination settings.
+    pub fn golive_more(&mut self) {
+        if let Some(w) = self.window() {
+            w.set_golive_open(false);
+        }
+        self.open_stream_settings();
+    }
+
     // ------------------------------------------------------------ canvases
 
     fn refresh_canvases(&self, w: &AppWindow, snapshot: &Project) {
@@ -1836,8 +2118,7 @@ impl App {
         }
         let enabled = self.settings.enabled_destinations();
         if enabled.is_empty() {
-            self.toast("Add a stream destination first".into(), true);
-            self.open_stream_settings();
+            self.open_golive();
             return;
         }
         let dests: Vec<_> = enabled.iter().map(|(_, d)| d.clone()).collect();
@@ -2450,7 +2731,7 @@ impl App {
 
     /// Applies a numeric editor field to a destination's stream settings.
     fn set_stream_field(s: &mut estream_media::StreamSettings, field: &str, value: f32, i: usize) {
-        use estream_media::{Service, VideoCodec, encode};
+        use estream_media::{VideoCodec, encode};
         match field {
             "stream-service" => {
                 s.service = Service::ALL.get(i).copied().unwrap_or_default();
@@ -4721,6 +5002,7 @@ impl App {
             Action::RevealOutput => self.reveal_output(),
             Action::OpenAutomation => self.open_automation(),
             Action::OpenStats => self.open_stats(),
+            Action::GoLiveSetup => self.open_golive(),
             Action::OpenSettings => {
                 self.refresh_settings_form();
                 w.set_settings_open(true);
@@ -5498,7 +5780,14 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     on!(on_palette_query_changed, |a, q| a.palette_filter(&q));
     on!(on_palette_run, |a, id| a.run_id(&id));
     on!(on_add_source_pick, |a, kind| a.add_source(&kind));
-    on!(on_wizard_create, |a, i| a.wizard_create(i));
+    on!(on_wizard_create, |a| a.wizard_create());
+    on!(on_wizard_purpose_changed, |a, i| a
+        .wizard_purpose_changed(i));
+    on!(on_golive_pick, |a, i| a.golive_pick(i));
+    on!(on_golive_key_edited, |a, t| a.golive_key_edited(&t));
+    on!(on_golive_open_key_page, |a| a.golive_open_key_page());
+    on!(on_golive_go, |a| a.golive_go());
+    on!(on_golive_more, |a| a.golive_more());
     on!(on_recovery_restore, |a| a.recovery(true));
     on!(on_recovery_discard, |a| a.recovery(false));
     on!(on_toggle_theme, |a| a.toggle_theme());
@@ -5610,6 +5899,17 @@ mod tests {
         };
         assert_ne!(a[0].id, b[0].id);
         assert_eq!(a[0].source_id(), b[0].source_id(), "sources are shared");
+    }
+
+    #[test]
+    fn pasted_server_addresses_are_caught() {
+        assert!(
+            golive_key_problem("rtmps://fa723fc1b171.global-contribute.live-video.net/app/")
+                .is_some()
+        );
+        assert!(golive_key_problem("live_123 456").is_some());
+        assert_eq!(golive_key_problem("live_123456_abcdef"), None);
+        assert_eq!(golive_key_problem(""), None);
     }
 
     #[test]

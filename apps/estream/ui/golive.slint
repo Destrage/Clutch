@@ -1,0 +1,143 @@
+// Go Live in two steps: pick the platform, paste the key. eStream picks everything else.
+
+import { Theme } from "theme.slint";
+import { Icons } from "icons.slint";
+import { Button, Icon, TextField } from "widgets.slint";
+import { Modal } from "overlays.slint";
+
+export component GoLiveDialog inherits Modal {
+    in property <[string]> platforms;
+    in property <int> platform: -1;
+    in-out property <string> key;
+    /// Feedback under the key ("Looks like a Twitch key", or a problem).
+    in property <string> message;
+    in property <bool> message-error;
+    /// What eStream picked: server, encoder, bitrate.
+    in property <string> auto-settings;
+    property <bool> reveal: false;
+    callback pick(int);
+    callback key-edited(string);
+    callback open-key-page();
+    callback go();
+    callback more-options();
+
+    card-width: 560px;
+
+    FocusScope {
+        height: 0px;
+        key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                root.dismiss();
+                return EventResult.accept;
+            }
+            return EventResult.reject;
+        }
+    }
+    VerticalLayout {
+        padding: 26px;
+        spacing: 16px;
+        HorizontalLayout {
+            spacing: 12px;
+            Rectangle {
+                width: 40px;
+                height: 40px;
+                border-radius: 11px;
+                background: Theme.live;
+                Icon { source: Icons.radio; size: 20px; tint: #ffffff; }
+            }
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                Text { text: "Go live"; color: Theme.text; font-size: Theme.font-xl; font-weight: 700; }
+                Text { text: "Two steps. eStream picks the best settings for your PC."; color: Theme.text-muted; font-size: Theme.font-s; }
+            }
+        }
+
+        Text { text: "1. Where do you stream?"; color: Theme.text; font-size: Theme.font-m; font-weight: 700; }
+        HorizontalLayout {
+            spacing: 8px;
+            for name[i] in root.platforms: Rectangle {
+                property <bool> on: i == root.platform;
+                height: 44px;
+                horizontal-stretch: 1;
+                min-width: 0px;
+                preferred-width: 0px;
+                border-radius: Theme.radius-m;
+                border-width: on ? 2px : 1px;
+                border-color: on ? Theme.accent : Theme.border;
+                background: on ? Theme.accent-soft : tile-ta.has-hover ? Theme.hover : Theme.surface-2;
+                accessible-role: radio-button;
+                accessible-label: name;
+                accessible-checked: on;
+                tile-ta := TouchArea {
+                    mouse-cursor: MouseCursor.pointer;
+                    clicked => { root.pick(i); }
+                }
+                Text {
+                    text: name;
+                    color: on ? Theme.text : Theme.text-muted;
+                    font-size: Theme.font-m;
+                    font-weight: on ? 700 : 500;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        HorizontalLayout {
+            Text { text: "2. Paste your stream key"; color: Theme.text; font-size: Theme.font-m; font-weight: 700; vertical-alignment: center; horizontal-stretch: 1; }
+            if root.platform >= 0: Button {
+                text: "Where do I find it?";
+                kind: "ghost";
+                tooltip: "Opens the page with your stream key";
+                clicked => { root.open-key-page(); }
+            }
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            key-field := TextField {
+                label: "Stream key";
+                placeholder: "Paste your stream key here";
+                text <=> root.key;
+                input-type: root.reveal ? InputType.text : InputType.password;
+                edited(t) => { root.key-edited(t); }
+                accepted => { root.go(); }
+            }
+            Button {
+                text: root.reveal ? "Hide" : "Show";
+                kind: "ghost";
+                clicked => { root.reveal = !root.reveal; }
+            }
+        }
+        if root.message != "": Text {
+            text: root.message;
+            color: root.message-error ? Theme.live : Theme.ok;
+            font-size: Theme.font-s;
+            wrap: word-wrap;
+        }
+        if root.auto-settings != "": HorizontalLayout {
+            spacing: 8px;
+            VerticalLayout {
+                alignment: center;
+                Icon { source: Icons.sliders-horizontal; size: 14px; tint: Theme.text-faint; }
+            }
+            Text { text: root.auto-settings; color: Theme.text-faint; font-size: Theme.font-xs; wrap: word-wrap; horizontal-stretch: 1; }
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            Button { text: "More options"; kind: "ghost"; tooltip: "Custom servers, encoder and bitrate"; clicked => { root.more-options(); } }
+            Rectangle { horizontal-stretch: 1; }
+            Button { text: "Cancel"; kind: "ghost"; clicked => { root.dismiss(); } }
+            Button {
+                text: "Go Live";
+                kind: "live";
+                has-icon: true;
+                icon: Icons.radio;
+                clicked => { root.go(); }
+            }
+        }
+    }
+
+    init => { key-field.focus(); }
+}
