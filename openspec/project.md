@@ -27,7 +27,8 @@ OBS Studio feature set and improve on it in performance, reliability, UX and ext
 
 ### Non-goals (for now)
 
-- Video editing / NLE features beyond simple trimming of recordings.
+- Multi-track NLE features (multiple video tracks, keyframed effects, color grading) beyond the
+  clip trimmer (`add-clips`) and the single-track montage editor (`add-montage-editor`).
 - A cloud service or account system. eStream is a local-first desktop app.
 - Binary compatibility with OBS C plugins. (We import OBS scene collections instead.)
 

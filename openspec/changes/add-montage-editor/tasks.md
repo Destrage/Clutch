@@ -1,7 +1,7 @@
 # Tasks: add-montage-editor
 
 ## 0. Project context
-- [ ] 0.1 Narrow the editing non-goal and add `add-clips` / `add-montage-editor` to the roadmap in `openspec/project.md`
+- [x] 0.1 Narrow the editing non-goal and add `add-clips` / `add-montage-editor` to the roadmap in `openspec/project.md`
 
 ## 1. Media
 - [ ] 1.1 Frame-accurate seeking decoder (hardware decode to GPU textures, look-ahead)
