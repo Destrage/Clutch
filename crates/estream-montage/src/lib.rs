@@ -3,6 +3,7 @@
 //!
 //! Nothing here touches the live studio engine; montage work runs on its own threads.
 
+pub mod beats;
 pub mod history;
 pub mod model;
 
