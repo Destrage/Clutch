@@ -16,4 +16,4 @@
 - [x] 3.3 README
 
 ## 4. Check
-- [ ] 4.1 Tests, clippy, release build and installer; upgrade over an eStream 0.2.0 install keeps settings and scenes
+- [x] 4.1 Tests, clippy, release build and installer; upgrade over an eStream 0.2.0 install keeps settings and scenes
