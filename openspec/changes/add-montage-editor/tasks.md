@@ -13,7 +13,7 @@
 - [x] 2.3 Highlight scan (markers + offline hype, merge, score)
 - [x] 2.4 Beat detection (spectral flux, tempo, DP beat tracking)
 - [x] 2.5 Auto-assembly (allocation, anchoring, beat snapping, transitions, slow-mo, vertical crop, title)
-- [ ] 2.6 Renderer: segment decoders, crop/scale, transition shaders, titles
+- [x] 2.6 Renderer: segment decoders, crop/scale, transition shaders, titles
 - [ ] 2.7 Audio render: speed/time-stretch, music fades, ducking
 - [ ] 2.8 Preview playback (real-time pacing, scrubbing, frame dropping)
 - [ ] 2.9 Export (background, progress, cancel, presets)
@@ -30,6 +30,6 @@
 - [ ] 4.3 Beat detection tests (click tracks at known BPMs, test loops)
       (click tracks at 92–174 BPM with accents pass; real music loops still to add)
 - [x] 4.4 Auto-assembly snapshot tests (target length, beat-aligned cuts, dropped low scores)
-- [ ] 4.5 Render golden tests (crossfade midpoint, dip, crop for 9:16, title)
+- [x] 4.5 Render golden tests (crossfade midpoint, dip, crop for 9:16, title)
 - [ ] 4.6 Export test: ffprobe duration matches timeline, A/V in sync
 - [ ] 4.7 In-app check: 10 CS2 clips + music → 60 s vertical montage, edit, export

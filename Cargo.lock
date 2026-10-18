@@ -1805,8 +1805,10 @@ dependencies = [
 name = "estream-montage"
 version = "0.1.3"
 dependencies = [
+ "estream-capture",
  "estream-clips",
  "estream-core",
+ "estream-gpu",
  "estream-media",
  "serde",
  "serde_json",

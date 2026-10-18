@@ -109,7 +109,12 @@ It is deterministic for the same inputs, so it can be tested with snapshots of t
     before it and decodes forward; asking for the next frames just decodes on (one frame of
     look-ahead decides whether the next frame is due).
 - **Compositing** on a wgpu render target of the montage format:
-  - each segment is drawn with crop → scale (Lanczos at export, bilinear in preview);
+  - each segment is drawn with crop → fit (letterboxed when the crop's shape differs from the
+    format) using the compositor's bilinear sampling, the same in preview and export (a sharper
+    export scaler is a later improvement);
+  - passes: the video (one segment, or both segments into the transition textures and the
+    transition shader into the video texture), then the canvas (video + titles, with the end
+    fade as opacity). Each pass has its own `CanvasRenderer` so they share one submission;
   - transitions are shaders (crossfade mix, dip, whip with a directional blur and offset);
   - titles reuse the text source renderer (`estream-capture::media::text`) to draw to textures,
     with fade/slide-in presets.
