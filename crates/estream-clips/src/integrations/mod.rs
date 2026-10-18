@@ -1,6 +1,7 @@
 //! Game integrations: official local event APIs that report kills, wins and objectives.
 
 pub mod gsi;
+pub mod league;
 pub mod steam;
 
 use crate::event::EventKind;
