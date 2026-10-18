@@ -441,20 +441,30 @@ pub fn parse_hex(hex: &str) -> Option<(u8, u8, u8)> {
 }
 
 /// True if the OS is in dark mode (Windows registry); defaults to dark elsewhere.
+///
+/// Read with the registry API, not `reg.exe`: this runs every few seconds on the UI thread,
+/// and launching a console program from the windowed app flashed a console each time.
 pub fn system_prefers_dark() -> bool {
     #[cfg(windows)]
     {
-        let out = std::process::Command::new("reg")
-            .args([
-                "query",
-                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
-                "/v",
-                "AppsUseLightTheme",
-            ])
-            .output();
-        if let Ok(out) = out {
-            let text = String::from_utf8_lossy(&out.stdout);
-            return !text.contains("0x1");
+        use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
+        use windows::core::w;
+        let mut value = 0u32;
+        let mut size = size_of::<u32>() as u32;
+        // SAFETY: `value` and `size` outlive the call; `size` is the buffer length in bytes.
+        let status = unsafe {
+            RegGetValueW(
+                HKEY_CURRENT_USER,
+                w!(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"),
+                w!("AppsUseLightTheme"),
+                RRF_RT_REG_DWORD,
+                None,
+                Some((&raw mut value).cast()),
+                Some(&mut size),
+            )
+        };
+        if status.is_ok() {
+            return value == 0;
         }
     }
     true
@@ -463,6 +473,25 @@ pub fn system_prefers_dark() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The registry read agrees with what `reg.exe` reports.
+    #[cfg(windows)]
+    #[test]
+    fn system_theme_matches_the_registry() {
+        let out = std::process::Command::new("reg")
+            .args([
+                "query",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+                "/v",
+                "AppsUseLightTheme",
+            ])
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        if text.contains("AppsUseLightTheme") {
+            assert_eq!(system_prefers_dark(), !text.contains("0x1"));
+        }
+    }
 
     #[test]
     fn round_trip_and_defaults() {
