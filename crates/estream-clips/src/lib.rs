@@ -7,6 +7,7 @@
 pub mod event;
 pub mod games;
 pub mod hype;
+pub mod integrations;
 pub mod platform;
 pub mod scheduler;
 
