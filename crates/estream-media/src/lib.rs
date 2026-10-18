@@ -11,6 +11,7 @@ pub mod output;
 pub mod player;
 pub mod settings;
 pub mod stream;
+pub mod trim;
 pub mod vcam;
 
 pub use multistream::{Destination, LiveDestination, MultiStream};

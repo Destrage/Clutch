@@ -797,7 +797,7 @@ fn has_alpha(format: format::Pixel) -> bool {
 }
 
 /// Converts a decoded frame to tightly packed NV12 (or RGBA if it has alpha).
-fn convert_video(
+pub(crate) fn convert_video(
     decoded: &frame::Video,
     scaler: &mut Option<(
         software::scaling::Context,
@@ -876,7 +876,7 @@ fn convert_video(
 }
 
 /// Resamples a decoded audio frame to interleaved f32 stereo at 48 kHz.
-fn convert_audio(
+pub(crate) fn convert_audio(
     decoded: &frame::Audio,
     resampler: &mut Option<software::resampling::Context>,
 ) -> Result<Vec<f32>, String> {

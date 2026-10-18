@@ -99,7 +99,7 @@ favorite, delete, reveal and copy a clip.
 
 ### Requirement: Clip Trimming
 The system SHALL trim a clip to an in and out point, either losslessly (cutting at keyframes) or
-precisely (re-encoding only around the cut), saving it as a new clip or replacing the original
+precisely (re-encoding the kept range), saving it as a new clip or replacing the original
 only after the trimmed file has been written successfully.
 
 #### Scenario: Precise trim

@@ -116,12 +116,12 @@ Default auto-clip windows (each one editable per event):
 
 ## Trim (`estream_media::trim`)
 - **Lossless:** stream copy from the keyframe at or before `in` up to `out`.
-- **Precise ("smart cut"):**
-  1. decode and re-encode from `in` to the next keyframe with the same codec settings;
-  2. stream-copy the rest;
-  3. audio is cut to the sample.
-  - If the codec parameters can't be matched (unusual encoders), it falls back to re-encoding the
-    whole clip, with progress shown.
+- **Precise:** decode and re-encode the kept range (same codec, bitrate matched to the source,
+  hardware encoder when available), with audio cut to the sample and progress shown.
+  - A "smart cut" (re-encode only up to the next keyframe, stream-copy the rest) was considered
+    and dropped: the two parts need identical encoder parameters, which breaks whenever the
+    encoder differs from the one that recorded the clip. Clips are at most a few minutes, so
+    re-encoding the whole range takes seconds with a hardware encoder.
 - Both write to a temp file and then rename it, so the original is only replaced after success.
 
 ## Commands and settings

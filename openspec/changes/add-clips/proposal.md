@@ -49,7 +49,7 @@ library of tagged clips that the montage editor (`add-montage-editor`) builds on
       to the clipboard as a file.
   - **Trim:**
     - lossless trim cuts at keyframes (stream copy);
-    - precise trim re-encodes only from the cut to the next keyframe;
+    - precise trim re-encodes the kept range, so it starts on the exact frame;
     - either can be saved as a new clip or replace the original.
   - **Storage cap:** auto-clips beyond a size limit (default 20 GB) are deleted oldest first.
     Favorites and manual clips are never deleted automatically.
@@ -74,7 +74,7 @@ library of tagged clips that the montage editor (`add-montage-editor`) builds on
 ## Impact
 - Affected specs: `clips` (new), `automation` (game event trigger, save clip step)
 - Affected code:
-  - `estream-media`: `PacketRing::save_range`, trim (stream copy and smart cut), thumbnails;
+  - `estream-media`: `PacketRing::save_range`, trim (stream copy and precise re-encode), thumbnails;
   - new `crates/estream-clips`:
     - game detection;
     - game integrations (GSI HTTP listener, League poller);
