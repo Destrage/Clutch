@@ -9,6 +9,7 @@ pub mod beats;
 pub mod export;
 pub mod history;
 pub mod model;
+pub mod preview;
 pub mod render;
 pub mod scan;
 

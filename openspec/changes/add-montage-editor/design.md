@@ -130,10 +130,13 @@ It is deterministic for the same inputs, so it can be tested with snapshots of t
   - ducking: the music drops by *d* dB (default 8) when clip audio is above −35 dBFS, with
     150 ms attack and 600 ms release.
 - **Preview:**
-  - runs on the montage worker thread, paced to real time;
-  - frames are presented through the same Slint–wgpu texture path as the studio preview;
-  - while scrubbing, it seeks only and skips the look-ahead;
-  - when it falls behind, the preview drops frames instead of slowing down.
+  - a worker thread owns the renderer and three preview textures, and publishes the newest
+    frame; the UI shows it through the same Slint–wgpu texture path as the studio preview;
+  - the audio mix plays on the default output device and is the clock (a timer stands in when
+    there is no device); the mix is rendered when play starts after an edit;
+  - commands (set montage, play, pause, seek) are drained each turn and only the last seek
+    counts, so scrubbing never queues up work;
+  - when rendering falls behind, frames are skipped rather than slowing playback.
 - **Export:**
   - runs the same graph as fast as possible into the `estream-media` encoder;
   - progress is reported every 0.5 s;
@@ -168,7 +171,8 @@ It is deterministic for the same inputs, so it can be tested with snapshots of t
 
 ## Risks
 - **Decoder count:** a 4K HEVC source plus a crossfade means two hardware decodes plus encode.
-  The preview falls back to half resolution when decoding can't keep up.
+  The preview skips frames when decoding can't keep up; a half-resolution fallback is a later
+  improvement.
 - **Variable frame rate sources:** recordings are CFR. Clips imported from elsewhere may be VFR,
   so segments are resampled to the montage fps by timestamp.
 - **Scope creep toward a full NLE** is held back by the project's narrowed non-goal.

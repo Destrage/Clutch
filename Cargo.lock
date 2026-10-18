@@ -1805,6 +1805,7 @@ dependencies = [
 name = "estream-montage"
 version = "0.1.3"
 dependencies = [
+ "cpal",
  "estream-audio",
  "estream-capture",
  "estream-clips",

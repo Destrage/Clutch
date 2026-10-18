@@ -15,7 +15,7 @@
 - [x] 2.5 Auto-assembly (allocation, anchoring, beat snapping, transitions, slow-mo, vertical crop, title)
 - [x] 2.6 Renderer: segment decoders, crop/scale, transition shaders, titles
 - [x] 2.7 Audio render: speed/time-stretch, music fades, ducking
-- [ ] 2.8 Preview playback (real-time pacing, scrubbing, frame dropping)
+- [x] 2.8 Preview playback (real-time pacing, scrubbing, frame dropping)
 - [x] 2.9 Export (background, progress, cancel, presets)
 
 ## 3. Studio
