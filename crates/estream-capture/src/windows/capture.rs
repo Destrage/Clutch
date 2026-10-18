@@ -1,8 +1,10 @@
 //! Display, window and game capture sources (Windows.Graphics.Capture).
 
+use super::capture_audio::CaptureAudio;
 use super::d3d::D3D11Interop;
 use super::enumerate::{self, WindowInfo};
 use super::wgc::{RingReader, Target, WgcCapture};
+use estream_audio::AudioSource as _;
 use estream_core::Timestamp;
 use estream_engine::source::parse;
 use estream_engine::{
@@ -132,7 +134,7 @@ impl CaptureSource {
     }
 }
 
-fn waiting_message(kind: CaptureKind, settings: &CaptureSettings) -> String {
+pub(crate) fn waiting_message(kind: CaptureKind, settings: &CaptureSettings) -> String {
     {
         match (kind, settings.mode.as_str()) {
             (CaptureKind::Game, "auto") => "Waiting for a fullscreen game or app".into(),
@@ -320,6 +322,7 @@ pub fn source_types() -> Vec<SourceType> {
                 )
                 .hint("Re-attaches automatically when the app restarts"),
                 Property::bool("cursor", "Capture cursor", true),
+                audio_property("The app's sound, on its own fader"),
             ])
         },
         |ctx, settings| {
@@ -327,7 +330,12 @@ pub fn source_types() -> Vec<SourceType> {
             s.update(ctx, settings)?;
             Ok(Box::new(s))
         },
-    );
+    )
+    .with_audio(|settings| {
+        let mut a = CaptureAudio::new(CaptureKind::Window);
+        a.update(settings)?;
+        Ok(Box::new(a))
+    });
     let game = SourceType::new(
         "game_capture",
         "Game capture",
@@ -351,6 +359,7 @@ pub fn source_types() -> Vec<SourceType> {
                 )
                 .hint("Used in “Specific window” mode"),
                 Property::bool("cursor", "Capture cursor", false),
+                audio_property("The game's sound, on its own fader"),
             ])
         },
         |ctx, settings| {
@@ -358,7 +367,12 @@ pub fn source_types() -> Vec<SourceType> {
             s.update(ctx, settings)?;
             Ok(Box::new(s))
         },
-    );
+    )
+    .with_audio(|settings| {
+        let mut a = CaptureAudio::new(CaptureKind::Game);
+        a.update(settings)?;
+        Ok(Box::new(a))
+    });
     let display = display.with_validation(|_| {
         PropertySchema::new(vec![
             Property::select("monitor", "Display", vec![], ""),
@@ -369,6 +383,7 @@ pub fn source_types() -> Vec<SourceType> {
         PropertySchema::new(vec![
             Property::select("window", "Window", vec![], ""),
             Property::bool("cursor", "Capture cursor", true),
+            Property::bool("audio", "Capture audio", true),
         ])
     });
     let game = game.with_validation(|_| {
@@ -376,7 +391,15 @@ pub fn source_types() -> Vec<SourceType> {
             Property::select("mode", "Mode", vec![], "auto"),
             Property::select("window", "Window", vec![], ""),
             Property::bool("cursor", "Capture cursor", false),
+            Property::bool("audio", "Capture audio", true),
         ])
     });
     vec![display, window, game]
+}
+
+/// The "Capture audio" switch of Game and Window capture.
+fn audio_property(what: &str) -> Property {
+    Property::bool("audio", "Capture audio", true).hint(&format!(
+        "{what}. Desktop audio leaves it out, so you never hear it twice."
+    ))
 }

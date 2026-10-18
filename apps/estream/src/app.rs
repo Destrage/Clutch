@@ -5312,6 +5312,15 @@ impl App {
             .iter()
             .filter_map(|(id, meter)| {
                 let def = snapshot.source(*id)?;
+                // A capture with "Capture audio" off has no fader.
+                if def
+                    .settings
+                    .get("audio")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(false)
+                {
+                    return None;
+                }
                 let mut s = strip(*id, meter.read());
                 s.name = def.name.clone().into();
                 s.kind = def.kind.clone().into();

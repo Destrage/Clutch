@@ -134,7 +134,12 @@ pub fn trigger_kind(kind: &EventKind) -> Option<GameEventKind> {
 }
 
 /// Source kinds whose audio counts as game sound, and as a microphone.
-const GAME_AUDIO: &[&str] = &["audio_output", "app_audio"];
+const GAME_AUDIO: &[&str] = &[
+    "audio_output",
+    "app_audio",
+    "game_capture",
+    "window_capture",
+];
 const MIC_AUDIO: &[&str] = &["audio_input"];
 /// Source kinds that show a game on screen.
 const GAME_VIDEO: &[&str] = &["game_capture", "display_capture", "window_capture"];
@@ -698,8 +703,8 @@ fn shows_game(engine: &Engine) -> bool {
     })
 }
 
-/// A small engine that captures the fullscreen game, desktop audio and the default mic at
-/// 1080p60. It has no collection file, so nothing about it is ever saved.
+/// A small engine that captures the fullscreen game with its sound, desktop audio (which then
+/// leaves the game out) and the default mic at 1080p60. It has no collection file, so nothing about it is ever saved.
 fn clip_engine(gpu: &GpuContext) -> Result<Engine, String> {
     use estream_core::{Alignment, BoundsMode, ItemTransform, Rational};
     use estream_project::{Project, SceneItem, SourceDef};
@@ -708,7 +713,7 @@ fn clip_engine(gpu: &GpuContext) -> Result<Engine, String> {
     let game = SourceDef::new(
         "Game",
         "game_capture",
-        serde_json::json!({ "mode": "auto", "cursor": false }),
+        serde_json::json!({ "mode": "auto", "cursor": false, "audio": true }),
     );
     let mut item = SceneItem::source(game.id);
     item.transform = ItemTransform {

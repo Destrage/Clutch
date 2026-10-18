@@ -93,6 +93,8 @@ pub struct WindowInfo {
     pub class: String,
     /// Executable file name, e.g. `obs64.exe`.
     pub exe: String,
+    /// The owning process.
+    pub pid: u32,
 }
 
 impl WindowInfo {
@@ -234,6 +236,7 @@ fn describe(hwnd: HWND) -> Option<WindowInfo> {
             title,
             class,
             exe,
+            pid,
         })
     }
 }
@@ -272,6 +275,7 @@ mod tests {
             title: title.into(),
             class: class.into(),
             exe: exe.into(),
+            pid: 0,
         }
     }
 

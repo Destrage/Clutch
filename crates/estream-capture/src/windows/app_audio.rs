@@ -11,7 +11,7 @@ use estream_core::{SourceStatus, Timestamp};
 use estream_engine::{Property, PropertySchema, SelectOption, SourceType};
 use serde_json::Value;
 use std::mem::ManuallyDrop;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, channel, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -91,13 +91,17 @@ pub fn find_app(exe: &str) -> Option<u32> {
         .map(|(pid, _, _)| *pid)
 }
 
-fn activate(pid: u32) -> Result<IAudioClient, String> {
+fn activate(pid: u32, exclude: bool) -> Result<IAudioClient, String> {
     let mut params = AUDIOCLIENT_ACTIVATION_PARAMS {
         ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
         Anonymous: AUDIOCLIENT_ACTIVATION_PARAMS_0 {
             ProcessLoopbackParams: AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS {
                 TargetProcessId: pid,
-                ProcessLoopbackMode: PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
+                ProcessLoopbackMode: if exclude {
+                    PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE
+                } else {
+                    PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE
+                },
             },
         },
     };
@@ -143,13 +147,16 @@ fn activate(pid: u32) -> Result<IAudioClient, String> {
     }
 }
 
-/// Captures `pid` until it exits, `stop` is set, or an error occurs.
-fn capture(
+/// Captures `pid` (or, with `exclude`, everything except it) until it exits, `stop` is set,
+/// `wanted` returns false (checked twice a second), or an error occurs.
+pub(crate) fn capture(
     pid: u32,
+    exclude: bool,
     stop: &AtomicBool,
+    wanted: &dyn Fn() -> bool,
     tx: &std::sync::mpsc::Sender<StereoConsumer>,
 ) -> Result<(), String> {
-    let client = activate(pid)?;
+    let client = activate(pid, exclude)?;
     let format = WAVEFORMATEX {
         wFormatTag: 3, // WAVE_FORMAT_IEEE_FLOAT
         nChannels: 2,
@@ -182,7 +189,8 @@ fn capture(
         let _ = tx.send(consumer);
         let mut converter = InputConverter::new(2, SAMPLE_RATE);
         client.Start().map_err(|e| e.message())?;
-        tracing::info!(pid, "application audio capture started");
+        tracing::info!(pid, exclude, "process audio capture started");
+        let mut next_check = std::time::Instant::now() + Duration::from_millis(500);
 
         let mut silence: Vec<f32> = Vec::new();
         let result = loop {
@@ -191,6 +199,12 @@ fn capture(
             }
             if WaitForSingleObject(process, 0) == WAIT_OBJECT_0 {
                 break Err("Application closed".to_owned());
+            }
+            if std::time::Instant::now() >= next_check {
+                next_check = std::time::Instant::now() + Duration::from_millis(500);
+                if !wanted() {
+                    break Ok(());
+                }
             }
             let _ = WaitForSingleObject(event, 100);
             loop {
@@ -227,8 +241,70 @@ fn capture(
     }
 }
 
+/// Which processes sources already capture on their own, so the same sound isn't captured
+/// twice. Sources refresh their claim while the mixer reads them; claims expire shortly after.
+pub(crate) mod claims {
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum By {
+        /// A game or window capture's audio.
+        Capture,
+        /// An Application audio source.
+        App,
+    }
+
+    const FRESH: Duration = Duration::from_millis(500);
+    static CLAIMS: Mutex<Vec<(u32, By, Instant)>> = Mutex::new(Vec::new());
+
+    /// Refreshes a claim. Never blocks (it runs on the audio thread): skipped when busy.
+    pub fn claim(pid: u32, by: By) {
+        let Ok(mut list) = CLAIMS.try_lock() else {
+            return;
+        };
+        let now = Instant::now();
+        list.retain(|(_, _, at)| now.duration_since(*at) < FRESH);
+        match list.iter_mut().find(|(p, b, _)| *p == pid && *b == by) {
+            Some(c) => c.2 = now,
+            None => list.push((pid, by, now)),
+        }
+    }
+
+    /// Whether an Application audio source captures `pid`.
+    pub fn by_app(pid: u32) -> bool {
+        let now = Instant::now();
+        CLAIMS.lock().is_ok_and(|list| {
+            list.iter()
+                .any(|(p, b, at)| *p == pid && *b == By::App && now.duration_since(*at) < FRESH)
+        })
+    }
+
+    /// The process Desktop audio should leave out: a captured game first, else an app.
+    /// `None` when the list is busy (keep the current choice).
+    pub fn desktop_exclusion() -> Option<Option<u32>> {
+        let list = CLAIMS.try_lock().ok()?;
+        let now = Instant::now();
+        let fresh = |by: By| {
+            list.iter()
+                .find(|(_, b, at)| *b == by && now.duration_since(*at) < FRESH)
+                .map(|(p, _, _)| *p)
+        };
+        Some(fresh(By::Capture).or_else(|| fresh(By::App)))
+    }
+
+    #[cfg(test)]
+    pub fn clear() {
+        if let Ok(mut list) = CLAIMS.lock() {
+            list.clear();
+        }
+    }
+}
+
 pub struct AppAudioSource {
     exe: Option<String>,
+    /// The process being captured (0 = none).
+    pid: Arc<AtomicU32>,
     stop: Arc<AtomicBool>,
     rx: Option<Receiver<StereoConsumer>>,
     consumer: Option<StereoConsumer>,
@@ -239,6 +315,7 @@ impl AppAudioSource {
     fn new() -> Self {
         Self {
             exe: None,
+            pid: Arc::new(AtomicU32::new(0)),
             stop: Arc::new(AtomicBool::new(true)),
             rx: None,
             consumer: None,
@@ -264,6 +341,9 @@ impl AppAudioSource {
         } else {
             let stop_flag = stop.clone();
             let name = exe.clone();
+            // A fresh cell, so the previous thread can't clear the new process ID.
+            self.pid = Arc::new(AtomicU32::new(0));
+            let current = self.pid.clone();
             let _ = std::thread::Builder::new()
                 .name("estream-app-audio".into())
                 .spawn(move || {
@@ -273,7 +353,10 @@ impl AppAudioSource {
                         match find_app(&name) {
                             Some(pid) => {
                                 set(SourceStatus::Active);
-                                if let Err(e) = capture(pid, &stop_flag, &tx) {
+                                current.store(pid, Ordering::Release);
+                                let result = capture(pid, false, &stop_flag, &|| true, &tx);
+                                current.store(0, Ordering::Release);
+                                if let Err(e) = result {
                                     set(SourceStatus::Unavailable(format!(
                                         "{e} — waiting for {name}"
                                     )));
@@ -324,6 +407,10 @@ impl AudioSource for AppAudioSource {
         let Some(c) = &mut self.consumer else {
             return 0;
         };
+        let pid = self.pid.load(Ordering::Acquire);
+        if pid != 0 {
+            claims::claim(pid, claims::By::App);
+        }
         let available = c.available();
         if available > SAMPLE_RATE as usize * 60 / 1000 {
             c.skip(available - SAMPLE_RATE as usize * 20 / 1000);
@@ -412,7 +499,7 @@ mod tests {
             let stop = stop.clone();
             std::thread::spawn(move || {
                 let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-                capture(pid, &stop, &tx)
+                capture(pid, false, &stop, &|| true, &tx)
             })
         };
         let mut consumer = rx
