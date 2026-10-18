@@ -6,7 +6,7 @@
 - [x] 1.3 Thumbnail extraction (one frame → 320 px JPEG)
 
 ## 2. Clips core (`crates/estream-clips`)
-- [ ] 2.1 Clip window scheduler (merge, post-roll wait, max length)
+- [x] 2.1 Clip window scheduler (merge, post-roll wait, max length)
 - [ ] 2.2 Known-games table, foreground game detection, start/stop edges
 - [ ] 2.3 Hype detector (live from meters, offline `scan`)
 - [ ] 2.4 CS2 / Dota 2 GSI: Steam library lookup, config writer, token-checked HTTP listener, event diffing

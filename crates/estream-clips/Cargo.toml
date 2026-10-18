@@ -1,0 +1,17 @@
+[package]
+name = "estream-clips"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Clipping for eStream: game detection, game integrations, hype detection, clip scheduling and the clip library"
+
+[lints]
+workspace = true
+
+[dependencies]
+estream-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
