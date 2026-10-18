@@ -70,7 +70,9 @@ pub trait Studio {
         output: Output,
         active: bool,
     ) -> Result<Option<PathBuf>, String>;
-    fn save_replay(&mut self) -> Result<PathBuf, String>;
+    /// Saves a clip of the replay buffer (the clip hotkey's length). Saving finishes in the
+    /// background; the file is reported through [`Studio::last_replay`] once written.
+    fn save_replay(&mut self) -> Result<(), String>;
     fn last_replay(&self) -> Option<PathBuf>;
     /// The file of the most recent finished recording.
     fn last_recording(&self) -> Option<PathBuf>;

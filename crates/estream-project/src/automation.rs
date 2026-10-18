@@ -114,6 +114,56 @@ pub enum Trigger {
     SceneActivated { scene: SceneId },
     /// An output starts (`started`) or stops.
     Output { output: OutputKind, started: bool },
+    /// A game reports an event (kill, win…) or hype is detected. `game` limits it to one
+    /// game (by name); `None` is any game.
+    GameEvent {
+        #[serde(default)]
+        game: Option<String>,
+        event: GameEventKind,
+    },
+}
+
+/// The kinds of game event a trigger can wait for (see the clip integrations).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GameEventKind {
+    #[default]
+    Kill,
+    /// Two or more kills in a row (as the game counts them), including an ace.
+    MultiKill,
+    Ace,
+    Death,
+    RoundWin,
+    MatchWin,
+    Objective,
+    /// A loudness spike in game audio or the mic.
+    Hype,
+}
+
+impl GameEventKind {
+    pub const ALL: [GameEventKind; 8] = [
+        GameEventKind::Kill,
+        GameEventKind::MultiKill,
+        GameEventKind::Ace,
+        GameEventKind::Death,
+        GameEventKind::RoundWin,
+        GameEventKind::MatchWin,
+        GameEventKind::Objective,
+        GameEventKind::Hype,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            GameEventKind::Kill => "Kill",
+            GameEventKind::MultiKill => "Multi-kill",
+            GameEventKind::Ace => "Ace",
+            GameEventKind::Death => "Death",
+            GameEventKind::RoundWin => "Round win",
+            GameEventKind::MatchWin => "Match win",
+            GameEventKind::Objective => "Objective",
+            GameEventKind::Hype => "Hype",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -140,6 +190,12 @@ pub enum Step {
         mode: Toggle,
     },
     SaveReplay,
+    /// Saves a clip of `before` seconds before now and `after` seconds after (waits for the
+    /// after part), through the same path as the clip hotkey.
+    SaveClip {
+        before: u32,
+        after: u32,
+    },
     /// Studio mode: send the Preview to Program.
     StudioTransition,
     /// Any command palette action, by id (e.g. `"studio.toggle"`).

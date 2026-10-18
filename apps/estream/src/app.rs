@@ -123,6 +123,16 @@ pub struct App {
     monitor: estream_health::Monitor,
     system: estream_health::SystemSampler,
     health_at: Instant,
+    /// Clip mode, the clip hotkey, auto-clip and the clip library.
+    clipper: crate::clips::Clipper,
+    /// Markers for the recording in progress: its file, when it started, the markers so far.
+    markers: Option<(PathBuf, Instant, estream_clips::markers::Markers)>,
+    /// A fullscreen program offered as a game (exe, window title), until answered.
+    clip_ask: Option<(String, String)>,
+    /// The Clips view.
+    clips_ui: crate::clips::ClipsUi,
+    /// Settings → Clips: the game whose auto-clip rules are shown.
+    clip_rule_game: usize,
 }
 
 /// What the shader editor dialog applies to.
@@ -398,6 +408,7 @@ fn key_from_text(text: &str) -> Option<Key> {
 
 impl App {
     pub fn new(window: &AppWindow, paths: Paths, settings: Settings, gpu: GpuContext) -> Shared {
+        let clipper = crate::clips::Clipper::new(&settings.clips, &settings.recording);
         let app = App {
             window: window.as_weak(),
             collection: paths.default_collection(),
@@ -456,6 +467,11 @@ impl App {
             monitor: estream_health::Monitor::new(),
             system: estream_health::SystemSampler::start(),
             health_at: Instant::now(),
+            clipper,
+            markers: None,
+            clip_ask: None,
+            clips_ui: crate::clips::ClipsUi::default(),
+            clip_rule_game: 0,
         };
         window.set_scenes(ModelRc::from(app.scenes_model.clone()));
         window.set_layers(ModelRc::from(app.layers_model.clone()));
@@ -675,6 +691,9 @@ impl App {
         };
         // The camera follows the collection (it reads from the engine being replaced).
         let had_vcam = self.vcam.take().map(|cam| cam.stop()).is_some();
+        if let Some(old) = &self.engine {
+            self.clipper.studio_engine_closing(old);
+        }
         match Engine::start(project, config) {
             Ok(engine) => {
                 self.subscription = Some(engine.subscribe());
@@ -712,6 +731,7 @@ impl App {
             cam.stop();
         }
         // Finish files cleanly before the engine goes away.
+        self.clipper.shutdown(self.engine.as_ref());
         if let Some(engine) = &self.engine {
             if let Some(rec) = self.recording.take() {
                 let _ = rec.stop(engine);
@@ -857,6 +877,8 @@ impl App {
             self.apply_theme();
         }
         self.tick_api();
+        self.tick_clips();
+        self.tick_clips_view();
         self.tick_automation();
         if self.health_at.elapsed() >= Duration::from_secs(1) {
             self.health_at = Instant::now();
@@ -2189,14 +2211,28 @@ impl App {
                         ),
                     };
                     self.toast(message, false);
+                    // The markers follow the recording if it was remuxed to MP4.
+                    if let (Some((original, ..)), Some(last)) = (self.markers.take(), paths.first())
+                        && let Err(e) = estream_clips::markers::Markers::rename(&original, last)
+                    {
+                        tracing::warn!(error = %e, "couldn't move the recording markers");
+                    }
                     self.last_recording = paths.first().cloned();
                     self.last_output = paths.into_iter().next();
                 }
-                Err(e) => self.toast(format!("Recording failed: {e}"), true),
+                Err(e) => {
+                    self.markers = None;
+                    self.toast(format!("Recording failed: {e}"), true);
+                }
             }
         } else {
             match estream_media::Recording::start(engine, &self.settings.recording) {
                 Ok(rec) => {
+                    self.markers = Some((
+                        rec.path.clone(),
+                        Instant::now(),
+                        estream_clips::markers::Markers::default(),
+                    ));
                     self.recording = Some(rec);
                     self.toast("Recording started".into(), false);
                 }
@@ -2229,19 +2265,471 @@ impl App {
         self.update_outputs();
     }
 
+    /// Saves a clip of the clip hotkey's length into the clip library (Ctrl+Shift+R, the
+    /// palette, the remote API and macros all land here). It finishes in the background.
     fn save_replay(&mut self) {
-        let Some(replay) = &self.replay else {
-            self.toast("Start the replay buffer first".into(), false);
-            return;
-        };
-        match replay.save() {
-            Ok(path) => {
-                self.toast(format!("Replay saved: {}", path.display()), false);
+        let secs = self.settings.clips.hotkey_seconds.clamp(5, 600) as u64;
+        if let Err(e) = self.request_clip(Duration::from_secs(secs), Duration::ZERO) {
+            self.toast(e, false);
+        }
+    }
+
+    /// Asks the clipper for a manual clip around now.
+    fn request_clip(&mut self, before: Duration, after: Duration) -> Result<(), String> {
+        self.clipper.request(
+            estream_clips::EventKind::Manual,
+            None,
+            Instant::now(),
+            before,
+            after,
+            self.replay.is_some(),
+        )
+    }
+
+    // ------------------------------------------------------------ clips
+
+    fn tick_clips(&mut self) {
+        let notices = self.clipper.tick(crate::clips::Ctx {
+            studio: self.engine.as_ref(),
+            studio_replay: self.replay.as_ref(),
+            settings: &self.settings.clips,
+            recording: &self.settings.recording,
+            gpu: &self.gpu,
+        });
+        for notice in notices {
+            self.on_clip_notice(notice);
+        }
+        // The listener took another port (the usual one was busy): the games' config files
+        // still name the old one, so they need connecting again.
+        if let Some(port) = self.clipper.gsi_port()
+            && port != self.settings.clips.gsi_port
+        {
+            self.settings.clips.gsi_port = port;
+            self.settings.save(&self.paths.settings());
+            self.toast(
+                format!("Game integrations moved to port {port}: press Connect again in Settings → Clips"),
+                true,
+            );
+        }
+    }
+
+    fn on_clip_notice(&mut self, notice: crate::clips::Notice) {
+        use crate::clips::Notice;
+        match notice {
+            Notice::Saved { path, title } => {
+                if self.settings.clips.sound {
+                    crate::clips::play_saved_sound();
+                }
+                self.toast(format!("Clip saved: {title}"), false);
+                // Remote tools hear about it as a saved replay (ReplayBufferSaved).
                 self.last_replay = Some(path.clone());
                 self.last_output = Some(path);
+                if self.window().is_some_and(|w| w.get_clips_open()) {
+                    self.refresh_clips();
+                }
             }
-            Err(e) => self.toast(format!("Couldn't save the replay: {e}"), true),
+            Notice::Failed(e) => self.toast(e, true),
+            Notice::GameStarted(game) => {
+                if self.settings.clips.mode {
+                    self.toast(format!("Clip mode: {game}"), false);
+                }
+                self.update_outputs();
+            }
+            Notice::GameStopped(game) => {
+                if self.settings.clips.mode {
+                    self.toast(format!("{game} closed"), false);
+                }
+                self.update_outputs();
+            }
+            Notice::AskIsGame { exe, title } => {
+                self.toast(
+                    format!("Is {exe} a game? Answer in Settings → Clips to clip it."),
+                    false,
+                );
+                self.clip_ask = Some((exe, title));
+            }
+            Notice::HotkeyConflict(key) => self.toast(
+                format!("Another program already uses {key}; pick another clip hotkey in Settings"),
+                true,
+            ),
+            Notice::Event { game, kind, at } => {
+                // Hype outside a known game still fires "any game" triggers.
+                if let Some(t) = crate::clips::trigger_kind(&kind)
+                    && let Some(mut runner) = self.runner.take()
+                {
+                    runner.game_event(game.as_deref().unwrap_or(""), t, at);
+                    self.runner = Some(runner);
+                }
+                if let Some((path, started, markers)) = &mut self.markers {
+                    markers.push(estream_clips::markers::Marker {
+                        kind,
+                        game,
+                        at: at.saturating_duration_since(*started).as_secs_f64(),
+                    });
+                    if let Err(e) = markers.save(path) {
+                        tracing::warn!(error = %e, "couldn't save the recording markers");
+                    }
+                }
+            }
         }
+    }
+
+    fn open_clips(&mut self) {
+        self.clipper.library.refresh();
+        self.clips_ui.refreshed_at = Instant::now();
+        self.refresh_clips();
+        if let Some(w) = self.window() {
+            w.set_clips_open(true);
+        }
+    }
+
+    /// While the Clips view is open: frame previews, trims, and a rescan every 30 s.
+    fn tick_clips_view(&mut self) {
+        if !self.window().is_some_and(|w| w.get_clips_open()) {
+            return;
+        }
+        let (mut changed, done) = self.clips_ui.poll();
+        if let Some(done) = done {
+            self.trim_finished(done);
+            changed = true;
+        }
+        if self.clips_ui.refreshed_at.elapsed() >= Duration::from_secs(30) {
+            self.clips_ui.refreshed_at = Instant::now();
+            self.clipper.library.refresh();
+            changed = true;
+        }
+        if changed {
+            self.refresh_clips();
+        }
+    }
+
+    /// The games in the filter: "All games" first.
+    fn clips_filter_games(&self) -> Vec<String> {
+        std::iter::once("All games".to_owned())
+            .chain(self.clipper.library.games())
+            .collect()
+    }
+
+    fn refresh_clips(&mut self) {
+        use crate::clips::{format_length, format_when};
+        use crate::ui::{ClipRow, ClipsForm};
+        use estream_clips::library::Trigger;
+        let Some(w) = self.window() else { return };
+        let games = self.clips_filter_games();
+        let game = games
+            .get(self.clips_ui.game_filter)
+            .filter(|_| self.clips_ui.game_filter > 0);
+        let search = self.clips_ui.search.trim().to_lowercase();
+        let kind = self.clips_ui.kind_filter;
+        let shown: Vec<estream_clips::Clip> = self
+            .clipper
+            .library
+            .clips()
+            .iter()
+            .filter(|c| game.is_none_or(|g| c.meta.game.as_deref() == Some(g.as_str())))
+            .filter(|c| match kind {
+                1 => c.meta.trigger == Trigger::Auto,
+                2 => c.meta.trigger == Trigger::Manual,
+                3 => c.meta.favorite,
+                _ => true,
+            })
+            .filter(|c| {
+                search.is_empty() || c.meta.display_title().to_lowercase().contains(&search)
+            })
+            .cloned()
+            .collect();
+        if self
+            .clips_ui
+            .selected
+            .as_ref()
+            .is_some_and(|p| self.clipper.library.get(p).is_none())
+        {
+            self.clips_ui.select(None);
+        }
+        self.clips_ui.visible = shown.iter().map(|c| c.path.clone()).collect();
+        let rows: Vec<ClipRow> = shown
+            .iter()
+            .map(|c| {
+                let thumb = c.thumbnail.as_ref().and_then(|t| self.clips_ui.thumb(t));
+                ClipRow {
+                    title: c.meta.display_title().into(),
+                    game: c.meta.game.clone().unwrap_or_default().into(),
+                    when: format_when(c.meta.created).into(),
+                    length: format_length(c.meta.duration).into(),
+                    has_thumb: thumb.is_some(),
+                    thumb: thumb.unwrap_or_default(),
+                    favorite: c.meta.favorite,
+                    auto: c.meta.trigger == Trigger::Auto,
+                }
+            })
+            .collect();
+        let selected = self.clips_ui.selected.clone();
+        let index = selected
+            .as_ref()
+            .and_then(|p| self.clips_ui.visible.iter().position(|v| v == p))
+            .map_or(-1, |i| i as i32);
+        let clip = selected.as_ref().and_then(|p| self.clipper.library.get(p));
+        let lib = &self.clipper.library;
+        let gb = |b: u64| b as f64 / 1e9;
+        let auto = lib.total_size(|c| c.meta.trigger == Trigger::Auto);
+        let summary = format!(
+            "{} clips · {:.1} GB (automatic {:.1} of {:.0} GB)",
+            lib.clips().len(),
+            gb(lib.total_size(|_| true)),
+            gb(auto),
+            self.settings.clips.storage_cap_gb
+        );
+        let events = clip
+            .map(|c| {
+                c.meta
+                    .events
+                    .iter()
+                    .map(|m| format!("{} {}", m.kind.label(), format_length(m.at)))
+                    .collect::<Vec<_>>()
+                    .join(" · ")
+            })
+            .unwrap_or_default();
+        let subtitle = clip
+            .map(|c| {
+                let mut parts = Vec::new();
+                if let Some(g) = &c.meta.game {
+                    parts.push(g.clone());
+                }
+                parts.push(format_when(c.meta.created));
+                parts.push(format_length(c.meta.duration));
+                parts.push(format!("{:.0} MB", c.size as f64 / 1e6));
+                if c.meta.trigger == Trigger::Auto {
+                    parts.push("auto-clip".into());
+                }
+                parts.join(" · ")
+            })
+            .unwrap_or_default();
+        let strings = |v: Vec<String>| {
+            ModelRc::new(VecModel::from(
+                v.into_iter().map(SharedString::from).collect::<Vec<_>>(),
+            ))
+        };
+        w.set_clips_form(ClipsForm {
+            items: ModelRc::new(VecModel::from(rows)),
+            games: strings(games),
+            game_filter: self.clips_ui.game_filter as i32,
+            kind_filter: self.clips_ui.kind_filter as i32,
+            search: self.clips_ui.search.clone().into(),
+            selected: index,
+            title: clip
+                .map(|c| c.meta.display_title())
+                .unwrap_or_default()
+                .into(),
+            subtitle: subtitle.into(),
+            events: events.into(),
+            favorite: clip.is_some_and(|c| c.meta.favorite),
+            duration: clip.map_or(0.0, |c| c.meta.duration as f32),
+            trim_in: self.clips_ui.trim_in as f32,
+            trim_out: self.clips_ui.trim_out as f32,
+            trim_mode: i32::from(self.clips_ui.precise),
+            has_preview: self.clips_ui.preview.is_some(),
+            preview: self.clips_ui.preview.clone().unwrap_or_default(),
+            progress: self.clips_ui.trim_progress().unwrap_or(-1.0),
+            summary: summary.into(),
+        });
+    }
+
+    pub fn clips_action(&mut self, field: &str, index: i32, value: f32) {
+        let i = index.max(0) as usize;
+        let at = |s: &Self| s.clips_ui.visible.get(i).cloned();
+        let duration =
+            |s: &Self, p: &PathBuf| s.clipper.library.get(p).map_or(0.0, |c| c.meta.duration);
+        match field {
+            "close" => self.clips_ui.cancel_trim(),
+            "select" => {
+                if let Some(p) = at(self) {
+                    let d = duration(self, &p);
+                    self.clips_ui.select(Some((&p, d)));
+                }
+            }
+            "filter-game" => self.clips_ui.game_filter = i,
+            "filter-kind" => self.clips_ui.kind_filter = i,
+            "play" => {
+                if let Some(p) = at(self)
+                    && let Err(e) = crate::clips::open_in_player(&p)
+                {
+                    self.toast(format!("Couldn't open the clip: {e}"), true);
+                }
+            }
+            "reveal" => {
+                if let Some(p) = at(self)
+                    && let Err(e) = crate::clips::reveal(&p)
+                {
+                    self.toast(format!("Couldn't open the folder: {e}"), true);
+                }
+            }
+            "open-folder" => {
+                let root = self.clipper.library.root().to_path_buf();
+                let _ = std::fs::create_dir_all(&root);
+                if let Err(e) = crate::clips::open_in_player(&root) {
+                    self.toast(format!("Couldn't open the folder: {e}"), true);
+                }
+            }
+            "copy" => {
+                if let Some(p) = at(self) {
+                    match crate::clips::copy_file_to_clipboard(&p) {
+                        Ok(()) => {
+                            self.toast("Clip copied — paste it into a chat or folder".into(), false)
+                        }
+                        Err(e) => self.toast(format!("Couldn't copy the clip: {e}"), true),
+                    }
+                }
+            }
+            "delete" => {
+                if let Some(p) = at(self) {
+                    match self.clipper.library.delete(&p) {
+                        Ok(()) => {
+                            self.clips_ui.select(None);
+                            self.toast("Clip deleted".into(), false);
+                        }
+                        Err(e) => self.toast(format!("Couldn't delete the clip: {e}"), true),
+                    }
+                }
+            }
+            "favorite" => {
+                if let Some(p) = at(self)
+                    && let Err(e) = self
+                        .clipper
+                        .library
+                        .update(&p, |m| m.favorite = !m.favorite)
+                {
+                    self.toast(format!("Couldn't save: {e}"), true);
+                }
+            }
+            "trim-in" | "trim-out" => {
+                if let Some(p) = self.clips_ui.selected.clone() {
+                    let d = duration(self, &p);
+                    self.clips_ui.set_trim(field == "trim-out", value as f64, d);
+                }
+            }
+            "trim-mode" => self.clips_ui.precise = i == 1,
+            "trim-new" | "trim-replace" => {
+                let Some(source) = self.clips_ui.selected.clone() else {
+                    return;
+                };
+                let replace = field == "trim-replace";
+                let output = if replace {
+                    source.clone()
+                } else {
+                    let clip = self.clipper.library.get(&source);
+                    let game = clip.and_then(|c| c.meta.game.clone());
+                    let title = format!(
+                        "{} (trimmed)",
+                        clip.map(|c| c.meta.display_title()).unwrap_or_default()
+                    );
+                    self.clipper.library.new_clip_path(
+                        game.as_deref(),
+                        chrono::Utc::now(),
+                        &title,
+                        "mp4",
+                    )
+                };
+                self.clips_ui.start_trim(source, output, replace);
+            }
+            "trim-cancel" => self.clips_ui.cancel_trim(),
+            _ => {}
+        }
+        self.refresh_clips();
+    }
+
+    pub fn clips_text(&mut self, field: &str, text: &str) {
+        match field {
+            "search" => self.clips_ui.search = text.to_owned(),
+            "title" => {
+                if let Some(p) = self.clips_ui.selected.clone() {
+                    let title = text.trim().to_owned();
+                    if let Err(e) = self.clipper.library.update(&p, |m| {
+                        m.title = (!title.is_empty()).then_some(title);
+                    }) {
+                        self.toast(format!("Couldn't rename the clip: {e}"), true);
+                    }
+                }
+            }
+            _ => {}
+        }
+        self.refresh_clips();
+    }
+
+    /// A trim finished: list the new clip (or update the replaced one) with events shifted.
+    fn trim_finished(&mut self, done: crate::clips::TrimDone) {
+        use estream_clips::library::ClipMeta;
+        let kept = match done.result {
+            Ok(k) => k,
+            Err(e) => {
+                if !e.contains("cancelled") {
+                    self.toast(format!("Couldn't trim the clip: {e}"), true);
+                }
+                return;
+            }
+        };
+        let Some(original) = self
+            .clipper
+            .library
+            .get(&done.source)
+            .map(|c| c.meta.clone())
+        else {
+            return;
+        };
+        let events = original
+            .events
+            .iter()
+            .filter(|m| m.at >= kept.start && m.at <= kept.end + 0.05)
+            .map(|m| estream_clips::ClipMark {
+                kind: m.kind.clone(),
+                at: m.at - kept.start,
+            })
+            .collect();
+        let duration = (kept.end - kept.start).max(0.0);
+        let thumb_at = duration / 2.0;
+        if done.replaced {
+            let result = self.clipper.library.update(&done.output, |m| {
+                m.events = events;
+                m.duration = duration;
+            });
+            self.clipper.library.reload(&done.output);
+            if let Err(e) = result {
+                self.toast(
+                    format!("Trimmed, but couldn't update its details: {e}"),
+                    true,
+                );
+            }
+        } else {
+            let meta = ClipMeta {
+                events,
+                duration,
+                created: chrono::Utc::now(),
+                trigger: estream_clips::Trigger::Manual,
+                title: Some(format!("{} (trimmed)", original.display_title())),
+                ..original
+            };
+            if let Err(e) = self.clipper.library.add(&done.output, meta) {
+                self.toast(format!("Couldn't add the trimmed clip: {e}"), true);
+                return;
+            }
+        }
+        // A new thumbnail, made in the background like a fresh clip's.
+        let clip = done.output.clone();
+        let _ = std::thread::Builder::new()
+            .name("estream-thumbnail".into())
+            .spawn(move || {
+                let jpg = estream_clips::library::thumbnail_path(&clip);
+                let _ = estream_media::thumbnail::thumbnail(&clip, thumb_at, 320, &jpg);
+            });
+        let d = duration;
+        self.clips_ui.select(Some((&done.output, d)));
+        self.toast(
+            if done.replaced {
+                "Clip trimmed".into()
+            } else {
+                "Trimmed clip saved".into()
+            },
+            false,
+        );
     }
 
     /// Opens the file manager at the last saved recording (or the recording folder).
@@ -2289,14 +2777,20 @@ impl App {
         w.set_recording(self.recording.is_some());
         w.set_replay_active(self.replay.is_some());
         let Some(rec) = &self.recording else {
-            w.set_status_message(
-                if self.replay.is_some() {
-                    "Replay buffer active"
-                } else {
-                    ""
-                }
-                .into(),
-            );
+            let clips = match self.clipper.session_clips {
+                0 => String::new(),
+                1 => " · 1 clip".into(),
+                n => format!(" · {n} clips"),
+            };
+            let status = if self.clipper.buffering() {
+                let game = self.clipper.current_game().unwrap_or("waiting");
+                format!("Clip mode · {game}{clips}")
+            } else if self.replay.is_some() {
+                format!("Replay buffer active{clips}")
+            } else {
+                String::new()
+            };
+            w.set_status_message(status.into());
             return;
         };
         if let Some(engine) = &self.engine {
@@ -2555,8 +3049,230 @@ impl App {
             vcam_canvas: index_of(self.vcam_canvas()),
             vcam_status: self.vcam_status().1.into(),
             vcam_installed: self.vcam_status().0,
-            ..stream_form(&self.settings.destinations, self.dest_selected)
+            ..self.clip_settings_form(stream_form(&self.settings.destinations, self.dest_selected))
         });
+    }
+
+    /// The integrations shown in Settings → Clips, in order.
+    const CLIP_INTEGRATIONS: [(estream_clips::Integration, &'static str); 3] = [
+        (estream_clips::Integration::Cs2Gsi, "Counter-Strike 2"),
+        (estream_clips::Integration::Dota2Gsi, "Dota 2"),
+        (
+            estream_clips::Integration::LeagueLiveClient,
+            "League of Legends",
+        ),
+    ];
+
+    /// Settings → Clips fields, on top of `form`.
+    fn clip_settings_form(&self, form: SettingsForm) -> SettingsForm {
+        use crate::ui::{ClipIntegrationRow, ClipRuleRow};
+        use estream_clips::Integration;
+        let c = &self.settings.clips;
+        let integrations: Vec<ClipIntegrationRow> = Self::CLIP_INTEGRATIONS
+            .iter()
+            .map(|(integration, name)| {
+                let connected = c.connected.contains(integration);
+                let status = match (connected, integration) {
+                    (false, _) => "Not connected".to_owned(),
+                    (true, Integration::LeagueLiveClient) => {
+                        "Connected · events arrive while a match is on".to_owned()
+                    }
+                    (true, _) => match self.clipper.last_seen(*integration) {
+                        Some(t) if t.elapsed() < Duration::from_secs(30) => {
+                            "Receiving events".to_owned()
+                        }
+                        Some(_) => "Connected · no events lately (is the game open?)".to_owned(),
+                        None => "Connected · waiting for the game".to_owned(),
+                    },
+                };
+                ClipIntegrationRow {
+                    name: (*name).into(),
+                    status: status.into(),
+                    connected,
+                }
+            })
+            .collect();
+        let rule_games: Vec<SharedString> = Self::CLIP_INTEGRATIONS
+            .iter()
+            .map(|(_, n)| SharedString::from(*n))
+            .collect();
+        let (integration, game) = Self::CLIP_INTEGRATIONS
+            .get(self.clip_rule_game)
+            .copied()
+            .unwrap_or(Self::CLIP_INTEGRATIONS[0]);
+        let rules: Vec<ClipRuleRow> = crate::settings::integration_events(integration)
+            .iter()
+            .filter_map(|e| c.rules.iter().find(|r| r.game == game && r.event == *e))
+            .map(|r| ClipRuleRow {
+                event: r.event.label().into(),
+                enabled: r.enabled,
+                pre: r.pre as f32,
+                post: r.post as f32,
+            })
+            .collect();
+        SettingsForm {
+            clip_mode: c.mode,
+            clip_buffer: c.buffer_seconds as f32,
+            clip_hotkey: c.hotkey.clone().into(),
+            clip_seconds: c.hotkey_seconds as f32,
+            clip_max: c.max_seconds as f32,
+            clip_sound: c.sound,
+            clip_cap: c.storage_cap_gb,
+            clip_folder: c
+                .folder(&self.settings.recording)
+                .display()
+                .to_string()
+                .into(),
+            clip_integrations: ModelRc::new(VecModel::from(integrations)),
+            clip_rule_games: ModelRc::new(VecModel::from(rule_games)),
+            clip_rule_game: self.clip_rule_game as i32,
+            clip_rules: ModelRc::new(VecModel::from(rules)),
+            hype_game: c.hype_game,
+            hype_mic: c.hype_mic,
+            hype_sensitivity: match c.hype_sensitivity {
+                estream_clips::Sensitivity::Low => 0,
+                estream_clips::Sensitivity::Medium => 1,
+                estream_clips::Sensitivity::High => 2,
+            },
+            clip_ask: self
+                .clip_ask
+                .as_ref()
+                .map(|(exe, _)| exe.clone())
+                .unwrap_or_default()
+                .into(),
+            ..form
+        }
+    }
+
+    /// Settings → Clips: one numeric field or button. Returns false if `field` isn't a clips one.
+    fn clip_setting(&mut self, field: &str, value: f32) -> bool {
+        use estream_clips::Integration;
+        use estream_clips::integrations::gsi;
+        let i = value.round().max(0.0) as usize;
+        let (_, rule_game) = Self::CLIP_INTEGRATIONS
+            .get(self.clip_rule_game)
+            .copied()
+            .unwrap_or(Self::CLIP_INTEGRATIONS[0]);
+        let rule_event = |s: &Self, n: usize| {
+            Self::CLIP_INTEGRATIONS
+                .get(s.clip_rule_game)
+                .and_then(|(integration, _)| {
+                    crate::settings::integration_events(*integration)
+                        .get(n)
+                        .copied()
+                })
+        };
+        // "clip-rule-pre:<n>" and "clip-rule-post:<n>" carry the rule index in the key.
+        if let Some((key, n)) = field.split_once(':')
+            && let Ok(n) = n.parse::<usize>()
+        {
+            let Some(event) = rule_event(self, n) else {
+                return true;
+            };
+            let c = &mut self.settings.clips;
+            if let Some(r) = c
+                .rules
+                .iter_mut()
+                .find(|r| r.game == rule_game && r.event == event)
+            {
+                match key {
+                    "clip-rule-pre" => r.pre = value.clamp(1.0, 120.0) as u32,
+                    "clip-rule-post" => r.post = value.clamp(0.0, 60.0) as u32,
+                    _ => return false,
+                }
+            }
+            return true;
+        }
+        let c = &mut self.settings.clips;
+        match field {
+            "clip-mode" => c.mode = value > 0.5,
+            "clip-buffer" => c.buffer_seconds = value.clamp(30.0, 600.0) as u32,
+            "clip-seconds" => c.hotkey_seconds = value.clamp(5.0, 600.0) as u32,
+            "clip-max" => c.max_seconds = value.clamp(15.0, 300.0) as u32,
+            "clip-sound" => c.sound = value > 0.5,
+            "clip-cap" => c.storage_cap_gb = value.clamp(1.0, 2000.0),
+            "hype-game" => c.hype_game = value > 0.5,
+            "hype-mic" => c.hype_mic = value > 0.5,
+            "hype-sensitivity" => {
+                c.hype_sensitivity = match i {
+                    0 => estream_clips::Sensitivity::Low,
+                    2 => estream_clips::Sensitivity::High,
+                    _ => estream_clips::Sensitivity::Medium,
+                }
+            }
+            "clip-rule-game" => self.clip_rule_game = i.min(Self::CLIP_INTEGRATIONS.len() - 1),
+            "clip-rule-enable" => {
+                if let Some(event) = rule_event(self, i)
+                    && let Some(r) = self
+                        .settings
+                        .clips
+                        .rules
+                        .iter_mut()
+                        .find(|r| r.game == rule_game && r.event == event)
+                {
+                    r.enabled = !r.enabled;
+                }
+            }
+            "clip-ask-yes" | "clip-ask-no" => {
+                if let Some((exe, title)) = self.clip_ask.take() {
+                    if field == "clip-ask-yes" {
+                        let name = if title.trim().is_empty() {
+                            exe.trim_end_matches(".exe").to_owned()
+                        } else {
+                            title
+                        };
+                        c.user_games.push(estream_clips::UserGame { exe, name });
+                    } else {
+                        c.not_games.push(exe.to_lowercase());
+                    }
+                }
+            }
+            "clip-disconnect" => {
+                if let Some((integration, _)) = Self::CLIP_INTEGRATIONS.get(i) {
+                    c.connected.retain(|x| x != integration);
+                }
+            }
+            "clip-connect" => {
+                let Some((integration, name)) = Self::CLIP_INTEGRATIONS.get(i).copied() else {
+                    return true;
+                };
+                let token = match integration {
+                    Integration::Cs2Gsi => &mut c.cs2_token,
+                    Integration::Dota2Gsi => &mut c.dota2_token,
+                    Integration::LeagueLiveClient => {
+                        if !c.connected.contains(&integration) {
+                            c.connected.push(integration);
+                        }
+                        self.toast(
+                            format!("{name} connected: clips start in your next match"),
+                            false,
+                        );
+                        return true;
+                    }
+                };
+                if token.is_empty() {
+                    *token = gsi::new_token();
+                }
+                let token = token.clone();
+                let port = self.clipper.gsi_port().unwrap_or(c.gsi_port);
+                match gsi::install(integration, None, port, &token) {
+                    Ok(path) => {
+                        let c = &mut self.settings.clips;
+                        if !c.connected.contains(&integration) {
+                            c.connected.push(integration);
+                        }
+                        tracing::info!(path = %path.display(), "game state integration installed");
+                        self.toast(
+                            format!("{name} connected. If the game is open, restart it to start auto-clip."),
+                            false,
+                        );
+                    }
+                    Err(e) => self.toast(format!("Couldn't connect {name}: {e}"), true),
+                }
+            }
+            _ => return false,
+        }
+        true
     }
 
     /// The current collection's canvases (ids and names), for output canvas pickers.
@@ -2579,6 +3295,13 @@ impl App {
 
     pub fn settings_set(&mut self, field: &str, value: f32) {
         use estream_media::{AudioCodec, Container, Preset, RateControl, VideoCodec, encode};
+        if (field.starts_with("clip") || field.starts_with("hype"))
+            && self.clip_setting(field, value)
+        {
+            self.settings.save(&self.paths.settings());
+            self.refresh_settings_form();
+            return;
+        }
         let i = value.round().max(0.0) as usize;
         let (canvas_ids, _) = self.canvas_choices();
         if field == "dest-canvas"
@@ -2774,6 +3497,28 @@ impl App {
             }
             ("filename", _) if !value.is_empty() => {
                 self.settings.recording.filename = value.to_owned()
+            }
+            ("clip-hotkey", _) => {
+                if value.is_empty() {
+                    self.settings.clips.hotkey.clear();
+                } else {
+                    match estream_project::Chord::parse(value) {
+                        Some(chord) => self.settings.clips.hotkey = chord.to_string(),
+                        None => {
+                            self.toast(
+                                format!(
+                                    "“{value}” isn't a key combination; try F8 or Ctrl+Shift+C"
+                                ),
+                                true,
+                            );
+                            self.refresh_settings_form();
+                            return;
+                        }
+                    }
+                }
+            }
+            ("clip-folder", _) if !value.is_empty() => {
+                self.settings.clips.folder = Some(PathBuf::from(value));
             }
             ("remote-password" | "remote-password-draft", _) if !value.is_empty() => {
                 self.settings.remote.set_password(value);
@@ -3406,6 +4151,7 @@ impl App {
             self.auto_selected = auto.macros.first().map(|m| m.id);
         }
         let pickers = Self::automation_pickers(&snapshot);
+        let games = self.clip_game_names();
         let runner = self.runner.as_ref();
         let rows: Vec<MacroRow> = auto
             .macros
@@ -3472,6 +4218,16 @@ impl App {
                                 row.index = output_pos(*output);
                                 row.flag = *started;
                             }
+                            Trigger::GameEvent { game, event } => {
+                                row.kind = "game".into();
+                                row.index = estream_project::GameEventKind::ALL
+                                    .iter()
+                                    .position(|k| k == event)
+                                    .map_or(0, |i| i as i32);
+                                row.game = game.as_ref().map_or(0, |g| {
+                                    games.iter().position(|n| n == g).map_or(0, |i| i as i32)
+                                });
+                            }
                         }
                         row
                     })
@@ -3506,6 +4262,11 @@ impl App {
                                 row.mode = mode(*m);
                             }
                             Step::SaveReplay => row.kind = "replay".into(),
+                            Step::SaveClip { before, after } => {
+                                row.kind = "clip".into();
+                                row.number = *before as f32;
+                                row.after = *after as f32;
+                            }
                             Step::StudioTransition => row.kind = "studio".into(),
                             Step::Action { id } => {
                                 row.kind = "action".into();
@@ -3548,6 +4309,13 @@ impl App {
                     .collect(),
             ),
             action_names: strings(pickers.actions.iter().map(|(_, n)| n.clone()).collect()),
+            event_names: strings(
+                estream_project::GameEventKind::ALL
+                    .iter()
+                    .map(|k| k.label().to_owned())
+                    .collect(),
+            ),
+            game_names: strings(games.clone()),
             recording: self.auto_recording.map_or(-1, |i| i as i32),
             error: selected
                 .and_then(|m| runner.and_then(|r| r.last_error(m.id)))
@@ -3645,6 +4413,10 @@ impl App {
                         3 => Trigger::SceneActivated {
                             scene: p.scenes.first().map_or_else(SceneId::new, |s| s.0),
                         },
+                        5 => Trigger::GameEvent {
+                            game: None,
+                            event: estream_project::GameEventKind::Kill,
+                        },
                         _ => Trigger::Output {
                             output: OutputKind::Stream,
                             started: true,
@@ -3691,6 +4463,25 @@ impl App {
                     *started = value > 0.5;
                 }
             }),
+            "trigger-event" => self.change_macro(|m, _| {
+                if let (Some(Trigger::GameEvent { event, .. }), Some(kind)) = (
+                    m.triggers.get_mut(i),
+                    estream_project::GameEventKind::ALL.get(n),
+                ) {
+                    *event = *kind;
+                }
+            }),
+            "trigger-game" => {
+                // 0 is "Any game".
+                let name = (n > 0)
+                    .then(|| self.clip_game_names().get(n).cloned())
+                    .flatten();
+                self.change_macro(|m, _| {
+                    if let Some(Trigger::GameEvent { game, .. }) = m.triggers.get_mut(i) {
+                        *game = name;
+                    }
+                })
+            }
             "step-add" => self.change_macro(|m, p| {
                 let scene = p.scenes.first().map_or_else(SceneId::new, |s| s.0);
                 let source = p.sources.first().map_or_else(SourceId::new, |s| s.0);
@@ -3712,6 +4503,10 @@ impl App {
                     5 => Step::StudioTransition,
                     6 => Step::Action {
                         id: p.actions.first().map(|a| a.0.clone()).unwrap_or_default(),
+                    },
+                    8 => Step::SaveClip {
+                        before: 20,
+                        after: 5,
                     },
                     _ => Step::Wait { ms: 1000 },
                 });
@@ -3780,6 +4575,16 @@ impl App {
                     *ms = value.round().max(0.0) as u32;
                 }
             }),
+            "step-clip-before" => self.change_macro(|m, _| {
+                if let Some(Step::SaveClip { before, .. }) = m.steps.get_mut(i) {
+                    *before = (value.round() as u32).clamp(1, 600);
+                }
+            }),
+            "step-clip-after" => self.change_macro(|m, _| {
+                if let Some(Step::SaveClip { after, .. }) = m.steps.get_mut(i) {
+                    *after = (value.round() as u32).min(60);
+                }
+            }),
             _ => {}
         }
     }
@@ -3838,6 +4643,28 @@ impl App {
                 *c = chord;
             }
         });
+    }
+
+    /// "Any game", then the integrated games, games with clips and games the user added.
+    fn clip_game_names(&self) -> Vec<String> {
+        let mut names = vec![
+            "Counter-Strike 2".to_owned(),
+            "Dota 2".to_owned(),
+            "League of Legends".to_owned(),
+        ];
+        names.extend(self.clipper.library.games());
+        names.extend(
+            self.settings
+                .clips
+                .user_games
+                .iter()
+                .map(|g| g.name.clone()),
+        );
+        let mut seen = std::collections::HashSet::new();
+        names.retain(|n| seen.insert(n.to_lowercase()));
+        std::iter::once("Any game".to_owned())
+            .chain(names)
+            .collect()
     }
 
     fn selected_macro(&self) -> Option<estream_project::Macro> {
@@ -5002,6 +5829,20 @@ impl App {
             Action::RevealOutput => self.reveal_output(),
             Action::OpenAutomation => self.open_automation(),
             Action::OpenStats => self.open_stats(),
+            Action::OpenClips => self.open_clips(),
+            Action::ToggleClipMode => {
+                self.settings.clips.mode = !self.settings.clips.mode;
+                self.settings.save(&self.paths.settings());
+                self.toast(
+                    if self.settings.clips.mode {
+                        "Clip mode on: the replay buffer runs while you play".into()
+                    } else {
+                        "Clip mode off".into()
+                    },
+                    false,
+                );
+                self.refresh_settings_form();
+            }
             Action::GoLiveSetup => self.open_golive(),
             Action::OpenSettings => {
                 self.refresh_settings_form();
@@ -5295,6 +6136,10 @@ impl estream_automation::Host for App {
         self.run_id(id);
         true
     }
+
+    fn save_clip(&mut self, before: Duration, after: Duration) -> Result<(), String> {
+        self.request_clip(before, after)
+    }
 }
 
 /// This machine's LAN address (what remote controllers on other devices connect to).
@@ -5401,7 +6246,8 @@ impl estream_api::Studio for App {
                 None => OutputStatus::default(),
             },
             Output::ReplayBuffer => OutputStatus {
-                active: self.replay.is_some(),
+                // Clip mode's buffer counts too, so tools can save clips from it.
+                active: self.replay.is_some() || self.clipper.buffering(),
                 ..Default::default()
             },
             Output::VirtualCam => OutputStatus {
@@ -5454,13 +6300,9 @@ impl estream_api::Studio for App {
             .flatten())
     }
 
-    fn save_replay(&mut self) -> Result<PathBuf, String> {
-        let before = self.last_replay.clone();
-        App::save_replay(self);
-        match &self.last_replay {
-            Some(path) if self.last_replay != before => Ok(path.clone()),
-            _ => Err("couldn't save the replay".into()),
-        }
+    fn save_replay(&mut self) -> Result<(), String> {
+        let secs = self.settings.clips.hotkey_seconds.clamp(5, 600) as u64;
+        self.request_clip(Duration::from_secs(secs), Duration::ZERO)
     }
 
     fn last_replay(&self) -> Option<PathBuf> {
@@ -5813,6 +6655,8 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
         .automation_text(&f, i, &s));
     on!(on_automation_key, |a, t, c, al, s, m| a
         .automation_key(&t, c, al, s, m));
+    on!(on_clips_action, |a, f, i, v| a.clips_action(&f, i, v));
+    on!(on_clips_text, |a, f, s| a.clips_text(&f, &s));
     on!(on_settings_text, |a, k, v| a.settings_text(&k, &v));
     on!(on_live_toggle, |a, i| a.live_toggle(i.max(0) as usize));
     on!(on_transition_set, |a, k, v| a.transition_set(&k, v));

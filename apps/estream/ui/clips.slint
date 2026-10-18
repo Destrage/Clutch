@@ -1,0 +1,295 @@
+// Clips: the clip library (grid with filters) and the selected clip (details, trim).
+
+import { Theme } from "theme.slint";
+import { Icons } from "icons.slint";
+import { ClipsForm, ClipRow } from "types.slint";
+import { Button, IconButton, TextField, NumberField, Select, Slider, SectionTitle, EmptyState, Badge } from "widgets.slint";
+import { Modal } from "overlays.slint";
+
+component ClipTile inherits Rectangle {
+    in property <ClipRow> entry;
+    in property <bool> selected;
+    callback clicked();
+    callback open();
+
+    border-radius: Theme.radius-m;
+    background: selected ? Theme.accent.with-alpha(0.14) : ta.has-hover ? Theme.hover : transparent;
+    border-width: selected ? 1px : 0px;
+    border-color: Theme.accent.with-alpha(0.6);
+    accessible-role: list-item;
+    accessible-label: entry.title + ", " + entry.game + ", " + entry.length;
+    ta := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        clicked => { root.clicked(); }
+        double-clicked => { root.open(); }
+    }
+    VerticalLayout {
+        padding: 6px;
+        spacing: 6px;
+        Rectangle {
+            height: (root.width - 12px) * 9 / 16;
+            border-radius: Theme.radius-s;
+            background: Theme.surface-3;
+            clip: true;
+            if entry.has-thumb: Image {
+                width: parent.width;
+                height: parent.height;
+                source: entry.thumb;
+                image-fit: cover;
+            }
+            if !entry.has-thumb: Image {
+                width: 28px;
+                height: 28px;
+                source: Icons.film;
+                colorize: Theme.text-faint;
+            }
+            Rectangle {
+                x: parent.width - self.width - 6px;
+                y: parent.height - self.height - 6px;
+                width: len.preferred-width + 10px;
+                height: 18px;
+                border-radius: 4px;
+                background: #000000b0;
+                len := Text { text: entry.length; color: #ffffff; font-size: Theme.font-xs; horizontal-alignment: center; vertical-alignment: center; }
+            }
+            if entry.favorite: Image {
+                x: 6px;
+                y: 6px;
+                width: 16px;
+                height: 16px;
+                source: Icons.star;
+                colorize: #ffd54a;
+            }
+        }
+        Text { text: entry.title; color: Theme.text; font-size: Theme.font-s; font-weight: 600; overflow: elide; }
+        Text { text: entry.game == "" ? entry.when : entry.game + " · " + entry.when; color: Theme.text-faint; font-size: Theme.font-xs; overflow: elide; }
+    }
+}
+
+export component ClipsDialog inherits Modal {
+    in property <ClipsForm> form;
+    callback action(string, int, float);
+    callback text(string, string);
+
+    card-width: 1040px;
+    card-top: 30px;
+
+    property <int> columns: 3;
+    property <length> grid-width: 600px;
+    property <length> gap: 8px;
+    property <length> tile-width: (grid-width - gap * (columns - 1)) / columns;
+    property <length> tile-height: (tile-width - 12px) * 9 / 16 + 60px;
+
+    FocusScope {
+        height: 0px;
+        init => { self.focus(); }
+        key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                root.dismiss();
+                return EventResult.accept;
+            }
+            if (e.text == Key.Delete && root.form.selected >= 0) {
+                root.action("delete", root.form.selected, 0);
+                return EventResult.accept;
+            }
+            return EventResult.reject;
+        }
+    }
+    HorizontalLayout {
+        padding: 18px;
+        padding-bottom: 4px;
+        spacing: 10px;
+        Text { text: "Clips"; color: Theme.text; font-size: Theme.font-xl; font-weight: 700; vertical-alignment: center; }
+        Text { text: root.form.summary; color: Theme.text-faint; font-size: Theme.font-s; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+        Button { text: "Open folder"; has-icon: true; icon: Icons.folder-open; kind: "ghost"; clicked => { root.action("open-folder", 0, 0); } }
+        Button { text: "Done"; kind: "primary"; clicked => { root.dismiss(); } }
+    }
+    HorizontalLayout {
+        padding: 18px;
+        padding-top: 8px;
+        spacing: 18px;
+        height: 600px;
+
+        // Library
+        VerticalLayout {
+            width: root.grid-width;
+            spacing: 8px;
+            HorizontalLayout {
+                spacing: 8px;
+                TextField {
+                    label: "Search clips";
+                    placeholder: "Search titles";
+                    text: root.form.search;
+                    edited(t) => { root.text("search", t); }
+                }
+                Select {
+                    width: 170px;
+                    label: "Game";
+                    options: root.form.games;
+                    current-index: root.form.game-filter;
+                    selected(i) => { root.action("filter-game", i, 0); }
+                }
+                Select {
+                    width: 130px;
+                    label: "Show";
+                    options: ["All clips", "Automatic", "Manual", "Favorites"];
+                    current-index: root.form.kind-filter;
+                    selected(i) => { root.action("filter-kind", i, 0); }
+                }
+            }
+            if root.form.items.length == 0: VerticalLayout {
+                vertical-stretch: 1;
+                alignment: center;
+                EmptyState {
+                    icon: Icons.film;
+                    title: "No clips yet";
+                    body: "Press your clip hotkey after something great happens, or turn on clip mode and auto-clip in Settings → Clips.";
+                }
+            }
+            if root.form.items.length > 0: Flickable {
+                vertical-stretch: 1;
+                content-height: ceil(root.form.items.length / root.columns) * (root.tile-height + root.gap);
+                for c[i] in root.form.items: ClipTile {
+                    x: mod(i, root.columns) * (root.tile-width + root.gap);
+                    y: floor(i / root.columns) * (root.tile-height + root.gap);
+                    width: root.tile-width;
+                    height: root.tile-height;
+                    entry: c;
+                    selected: i == root.form.selected;
+                    clicked => { root.action("select", i, 0); }
+                    open => { root.action("play", i, 0); }
+                }
+            }
+        }
+
+        Rectangle { width: 1px; background: Theme.border; }
+
+        // Selected clip
+        if root.form.selected < 0: VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            EmptyState {
+                icon: Icons.scissors;
+                title: "Pick a clip";
+                body: "Select a clip to rename it, mark it as a favorite or trim it. Double-click to play.";
+            }
+        }
+        if root.form.selected >= 0: VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 10px;
+            Rectangle {
+                height: self.width * 9 / 16;
+                border-radius: Theme.radius-m;
+                background: #000000;
+                clip: true;
+                if root.form.has-preview: Image {
+                    width: parent.width;
+                    height: parent.height;
+                    source: root.form.preview;
+                    image-fit: contain;
+                }
+                if !root.form.has-preview: Text { text: "Loading frame…"; color: Theme.text-faint; font-size: Theme.font-s; }
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                TextField {
+                    label: "Clip title";
+                    text: root.form.title;
+                    accepted(t) => { root.text("title", t); }
+                }
+                IconButton {
+                    icon: Icons.star;
+                    toggled: root.form.favorite;
+                    tooltip: root.form.favorite ? "Remove from favorites" : "Add to favorites (never deleted automatically)";
+                    clicked => { root.action("favorite", root.form.selected, 0); }
+                }
+            }
+            Text { text: root.form.subtitle; color: Theme.text-muted; font-size: Theme.font-s; overflow: elide; }
+            if root.form.events != "": Text { text: root.form.events; color: Theme.text-faint; font-size: Theme.font-xs; wrap: word-wrap; }
+            HorizontalLayout {
+                spacing: 6px;
+                alignment: start;
+                Button { text: "Play"; has-icon: true; icon: Icons.play; clicked => { root.action("play", root.form.selected, 0); } }
+                Button { text: "Show in folder"; has-icon: true; icon: Icons.folder; kind: "ghost"; clicked => { root.action("reveal", root.form.selected, 0); } }
+                Button { text: "Copy"; has-icon: true; icon: Icons.copy; kind: "ghost"; tooltip: "Copy the file, to paste into Discord or a folder"; clicked => { root.action("copy", root.form.selected, 0); } }
+                Button { text: "Delete"; has-icon: true; icon: Icons.trash; kind: "danger"; clicked => { root.action("delete", root.form.selected, 0); } }
+            }
+
+            SectionTitle { text: "TRIM"; }
+            HorizontalLayout {
+                spacing: 8px;
+                Text { text: "In"; width: 28px; color: Theme.text-muted; font-size: Theme.font-s; vertical-alignment: center; }
+                Slider {
+                    label: "Trim start";
+                    value: root.form.trim-in;
+                    minimum: 0;
+                    maximum: max(root.form.duration, 0.1);
+                    changed(v) => { root.action("trim-in", root.form.selected, v); }
+                }
+                NumberField {
+                    width: 90px;
+                    label: "";
+                    value: root.form.trim-in;
+                    minimum: 0;
+                    maximum: root.form.duration;
+                    step: 0.1;
+                    decimals: 1;
+                    suffix: "s";
+                    changed(v) => { root.action("trim-in", root.form.selected, v); }
+                }
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                Text { text: "Out"; width: 28px; color: Theme.text-muted; font-size: Theme.font-s; vertical-alignment: center; }
+                Slider {
+                    label: "Trim end";
+                    value: root.form.trim-out;
+                    minimum: 0;
+                    maximum: max(root.form.duration, 0.1);
+                    changed(v) => { root.action("trim-out", root.form.selected, v); }
+                }
+                NumberField {
+                    width: 90px;
+                    label: "";
+                    value: root.form.trim-out;
+                    minimum: 0;
+                    maximum: root.form.duration;
+                    step: 0.1;
+                    decimals: 1;
+                    suffix: "s";
+                    changed(v) => { root.action("trim-out", root.form.selected, v); }
+                }
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                Select {
+                    width: 210px;
+                    label: "Trim mode";
+                    options: ["Fast (cuts at keyframes)", "Exact (re-encodes)"];
+                    current-index: root.form.trim-mode;
+                    selected(i) => { root.action("trim-mode", i, 0); }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                if root.form.progress < 0: Button {
+                    text: "Save as new clip";
+                    has-icon: true;
+                    icon: Icons.scissors;
+                    enabled: root.form.trim-out > root.form.trim-in;
+                    clicked => { root.action("trim-new", root.form.selected, 0); }
+                }
+                if root.form.progress < 0: Button {
+                    text: "Replace";
+                    kind: "ghost";
+                    enabled: root.form.trim-out > root.form.trim-in;
+                    tooltip: "Trim this clip in place";
+                    clicked => { root.action("trim-replace", root.form.selected, 0); }
+                }
+                if root.form.progress >= 0: HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: "Trimming… " + round(root.form.progress * 100) + "%"; color: Theme.text-muted; font-size: Theme.font-s; vertical-alignment: center; }
+                    Button { text: "Cancel"; kind: "ghost"; clicked => { root.action("trim-cancel", 0, 0); } }
+                }
+            }
+        }
+    }
+}

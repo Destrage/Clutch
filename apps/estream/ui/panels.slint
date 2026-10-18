@@ -21,6 +21,7 @@ export component TopBar inherits Rectangle {
     in property <string> vcam-tooltip;
     callback toggle-vcam();
     callback open-automation();
+    callback open-clips();
     in property <string> stream-time;
     callback open-palette();
     callback toggle-stream();
@@ -174,6 +175,14 @@ export component TopBar inherits Rectangle {
                 icon: Icons.zap;
                 tooltip: "Automation: hotkeys, macros and triggers";
                 clicked => { root.open-automation(); }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            IconButton {
+                icon: Icons.film;
+                tooltip: "Clips: your saved highlights";
+                clicked => { root.open-clips(); }
             }
         }
         VerticalLayout {

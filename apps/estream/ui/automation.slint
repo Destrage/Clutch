@@ -30,6 +30,7 @@ component TriggerEditor inherits HorizontalLayout {
             : entry.kind == "focus" ? "Window focused"
             : entry.kind == "interval" ? "Every"
             : entry.kind == "scene" ? "Scene goes live"
+            : entry.kind == "game" ? "Game event"
             : "Output";
     }
     if entry.kind == "hotkey": HorizontalLayout {
@@ -91,6 +92,23 @@ component TriggerEditor inherits HorizontalLayout {
             selected(i) => { root.edit("trigger-started", root.index, i == 0 ? 1 : 0); }
         }
     }
+    if entry.kind == "game": HorizontalLayout {
+        spacing: 8px;
+        horizontal-stretch: 1;
+        Select {
+            width: 140px;
+            label: "Event";
+            options: form.event-names;
+            current-index: entry.index;
+            selected(i) => { root.edit("trigger-event", root.index, i); }
+        }
+        Select {
+            label: "Game";
+            options: form.game-names;
+            current-index: entry.game;
+            selected(i) => { root.edit("trigger-game", root.index, i); }
+        }
+    }
     IconButton {
         icon: Icons.x;
         tooltip: "Remove trigger";
@@ -121,6 +139,7 @@ component StepEditor inherits HorizontalLayout {
             : entry.kind == "mute" ? "Mute"
             : entry.kind == "output" ? "Output"
             : entry.kind == "replay" ? "Save replay"
+            : entry.kind == "clip" ? "Save clip"
             : entry.kind == "studio" ? "Studio: go"
             : entry.kind == "action" ? "Action"
             : "Wait";
@@ -183,6 +202,29 @@ component StepEditor inherits HorizontalLayout {
         color: Theme.text-faint;
         font-size: Theme.font-s;
         vertical-alignment: center;
+    }
+    if entry.kind == "clip": HorizontalLayout {
+        spacing: 8px;
+        horizontal-stretch: 1;
+        NumberField {
+            width: 120px;
+            label: "Before";
+            value: entry.number;
+            minimum: 1;
+            maximum: 600;
+            suffix: "s before";
+            changed(v) => { root.edit("step-clip-before", root.index, v); }
+        }
+        NumberField {
+            width: 120px;
+            label: "After";
+            value: entry.after;
+            minimum: 0;
+            maximum: 60;
+            suffix: "s after";
+            changed(v) => { root.edit("step-clip-after", root.index, v); }
+        }
+        Rectangle { horizontal-stretch: 1; }
     }
     if entry.kind == "action": Select {
         label: "Action";
@@ -264,7 +306,7 @@ export component AutomationDialog inherits Modal {
             width: 250px;
             spacing: 4px;
             Text {
-                text: "Macros run their steps when a trigger fires: a hotkey (works in games), a window coming to the front, a timer, a scene or an output.";
+                text: "Macros run their steps when a trigger fires: a hotkey (works in games), a window coming to the front, a timer, a scene, an output or a game event.";
                 color: Theme.text-faint;
                 font-size: Theme.font-xs;
                 wrap: word-wrap;
@@ -379,6 +421,7 @@ export component AutomationDialog inherits Modal {
                         Button { text: "Timer"; kind: "ghost"; clicked => { root.edit("trigger-add", 2, 0); } }
                         Button { text: "Scene live"; kind: "ghost"; clicked => { root.edit("trigger-add", 3, 0); } }
                         Button { text: "Output"; kind: "ghost"; clicked => { root.edit("trigger-add", 4, 0); } }
+                        Button { text: "Game event"; kind: "ghost"; clicked => { root.edit("trigger-add", 5, 0); } }
                     }
 
                     Rectangle { height: 6px; }
@@ -409,6 +452,7 @@ export component AutomationDialog inherits Modal {
                         alignment: start;
                         Rectangle { width: 62px; }
                         Button { text: "Save replay"; kind: "ghost"; clicked => { root.edit("step-add", 4, 0); } }
+                        Button { text: "Save clip"; kind: "ghost"; clicked => { root.edit("step-add", 8, 0); } }
                         Button { text: "Studio go"; kind: "ghost"; clicked => { root.edit("step-add", 5, 0); } }
                         Button { text: "Action"; kind: "ghost"; clicked => { root.edit("step-add", 6, 0); } }
                         Button { text: "Wait"; kind: "ghost"; clicked => { root.edit("step-add", 7, 0); } }

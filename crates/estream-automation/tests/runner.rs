@@ -7,8 +7,8 @@ use estream_automation::{Host, Runner};
 use estream_core::{Rational, SceneId, SourceId};
 use estream_engine::{Command, Engine, EngineConfig};
 use estream_project::{
-    Automation, Chord, Macro, OutputKind, Project, Scene, SceneItem, SourceDef, Step, Toggle,
-    Trigger,
+    Automation, Chord, GameEventKind, Macro, OutputKind, Project, Scene, SceneItem, SourceDef,
+    Step, Toggle, Trigger,
 };
 use serde_json::json;
 use std::cell::RefCell;
@@ -20,6 +20,7 @@ struct FakeHost {
     engine: Engine,
     active: [bool; 4],
     actions: Vec<String>,
+    clips: Vec<(Duration, Duration)>,
 }
 
 fn index(o: Output) -> usize {
@@ -68,7 +69,7 @@ impl Studio for FakeHost {
         self.active[index(output)] = active;
         Ok(None)
     }
-    fn save_replay(&mut self) -> Result<PathBuf, String> {
+    fn save_replay(&mut self) -> Result<(), String> {
         Err("off".into())
     }
     fn last_replay(&self) -> Option<PathBuf> {
@@ -95,6 +96,10 @@ impl Host for FakeHost {
     fn run_action(&mut self, id: &str) -> bool {
         self.actions.push(id.to_owned());
         id != "nope"
+    }
+    fn save_clip(&mut self, before: Duration, after: Duration) -> Result<(), String> {
+        self.clips.push((before, after));
+        Ok(())
     }
 }
 
@@ -136,6 +141,7 @@ fn setup() -> Setup {
             engine,
             active: [false; 4],
             actions: Vec::new(),
+            clips: Vec::new(),
         },
         runner: Runner::new(false),
         a,
@@ -431,4 +437,71 @@ fn no_reentry_no_loops_and_disabled_macros() {
             .run_by_name(&mut s.host, "Missing", s.t0 + Duration::from_secs(5))
             .is_err()
     );
+}
+
+#[test]
+fn game_events_fire_matching_macros() {
+    let mut s = setup();
+    s.set(vec![
+        mac(
+            "Any kill",
+            vec![Trigger::GameEvent {
+                game: None,
+                event: GameEventKind::Kill,
+            }],
+            vec![Step::Action { id: "kill".into() }],
+        ),
+        mac(
+            "CS2 multi-kill",
+            vec![Trigger::GameEvent {
+                game: Some("Counter-Strike 2".into()),
+                event: GameEventKind::MultiKill,
+            }],
+            vec![Step::Action { id: "multi".into() }],
+        ),
+    ]);
+    s.tick(0);
+    s.runner.game_event("Dota 2", GameEventKind::Kill, s.t0);
+    s.tick(1);
+    assert_eq!(s.host.actions, ["kill"]);
+    // Another game's multi-kill doesn't match the CS2-only macro.
+    s.runner
+        .game_event("Dota 2", GameEventKind::MultiKill, s.t0);
+    s.tick(2);
+    assert_eq!(s.host.actions, ["kill"]);
+    // An ace counts as a multi-kill; game names match case-insensitively.
+    s.runner.game_event(
+        "counter-strike 2",
+        GameEventKind::Ace,
+        s.t0 + Duration::from_secs(2),
+    );
+    s.tick(2001);
+    assert_eq!(s.host.actions, ["kill", "multi"]);
+}
+
+#[test]
+fn save_clip_step_asks_the_host_for_a_clip() {
+    let mut s = setup();
+    s.set(vec![mac(
+        "Clip it",
+        vec![],
+        vec![Step::SaveClip {
+            before: 20,
+            after: 5,
+        }],
+    )]);
+    s.tick(0);
+    let id = s.host.engine.snapshot().automation.macros[0].id;
+    s.runner.run(&mut s.host, id, s.t0);
+    assert_eq!(
+        s.host.clips,
+        [(Duration::from_secs(20), Duration::from_secs(5))]
+    );
+    let mut with_trigger = s.host.engine.snapshot().automation.macros[0].clone();
+    with_trigger.triggers.push(Trigger::GameEvent {
+        game: Some("Valorant".into()),
+        event: GameEventKind::Hype,
+    });
+    let summary = estream_automation::trigger_summary(&with_trigger, &s.host.engine.snapshot());
+    assert_eq!(summary, "On hype in Valorant");
 }

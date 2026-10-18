@@ -212,6 +212,21 @@ export struct LiveRow {
     health: int,
 }
 
+/// A game integration in Settings → Clips.
+export struct ClipIntegrationRow {
+    name: string,
+    status: string,
+    connected: bool,
+}
+
+/// One auto-clip rule (event) of the game being edited.
+export struct ClipRuleRow {
+    event: string,
+    enabled: bool,
+    pre: float,
+    post: float,
+}
+
 export struct SettingsForm {
     folder: string,
     filename: string,
@@ -266,6 +281,26 @@ export struct SettingsForm {
     vcam-canvas: int,
     vcam-status: string,
     vcam-installed: bool,
+    // Clips
+    clip-mode: bool,
+    clip-buffer: float,
+    clip-hotkey: string,
+    clip-seconds: float,
+    clip-max: float,
+    clip-sound: bool,
+    clip-cap: float,
+    clip-folder: string,
+    clip-integrations: [ClipIntegrationRow],
+    /// Games with auto-clip rules, and the one being edited.
+    clip-rule-games: [string],
+    clip-rule-game: int,
+    clip-rules: [ClipRuleRow],
+    hype-game: bool,
+    hype-mic: bool,
+    /// 0 low, 1 medium, 2 high.
+    hype-sensitivity: int,
+    /// A fullscreen program to ask about ("" = none).
+    clip-ask: string,
 }
 
 /// One macro in the automation list.
@@ -280,23 +315,25 @@ export struct MacroRow {
 
 /// One trigger of the selected macro.
 export struct TriggerRow {
-    /// "hotkey" | "focus" | "interval" | "scene" | "output"
+    /// "hotkey" | "focus" | "interval" | "scene" | "output" | "game"
     kind: string,
     /// Hotkey chord or window pattern.
     text: string,
     /// Interval seconds.
     number: float,
-    /// Scene or output index.
+    /// Scene, output or game event index.
     index: int,
     /// Output: true = starts, false = stops.
     flag: bool,
     /// Hotkey taken by another program.
     conflict: bool,
+    /// Game event: index into `game-names` (0 = any game).
+    game: int,
 }
 
 /// One step of the selected macro.
 export struct StepRow {
-    /// "scene" | "visible" | "mute" | "output" | "replay" | "studio" | "action" | "wait"
+    /// "scene" | "visible" | "mute" | "output" | "replay" | "clip" | "studio" | "action" | "wait"
     kind: string,
     /// Scene, source, output or action index.
     index: int,
@@ -304,8 +341,10 @@ export struct StepRow {
     mode: int,
     /// Scene: cut instead of the transition.
     flag: bool,
-    /// Wait milliseconds.
+    /// Wait milliseconds, or clip seconds before.
     number: float,
+    /// Clip seconds after.
+    after: float,
 }
 
 export struct AutomationForm {
@@ -319,10 +358,59 @@ export struct AutomationForm {
     source-names: [string],
     output-names: [string],
     action-names: [string],
+    /// Game event kinds, and game names ("Any game" first).
+    event-names: [string],
+    game-names: [string],
     /// Trigger whose hotkey is being recorded (-1 = none).
     recording: int,
     error: string,
     running: bool,
+}
+
+/// One clip in the Clips view grid.
+export struct ClipRow {
+    title: string,
+    game: string,
+    /// e.g. "Today 20:14" or "12 Oct 20:14".
+    when: string,
+    /// e.g. "0:17".
+    length: string,
+    thumb: image,
+    has-thumb: bool,
+    favorite: bool,
+    auto: bool,
+}
+
+/// The Clips view.
+export struct ClipsForm {
+    items: [ClipRow],
+    /// "All games" first.
+    games: [string],
+    game-filter: int,
+    /// 0 all, 1 automatic, 2 manual, 3 favorites.
+    kind-filter: int,
+    search: string,
+    /// Index into `items`, -1 = none.
+    selected: int,
+    /// The selected clip.
+    title: string,
+    subtitle: string,
+    /// Events inside the clip, e.g. "Kill 0:10 · Double kill 0:14".
+    events: string,
+    favorite: bool,
+    /// Seconds.
+    duration: float,
+    trim-in: float,
+    trim-out: float,
+    /// 0 lossless, 1 precise.
+    trim-mode: int,
+    /// The frame at the trim point being edited.
+    preview: image,
+    has-preview: bool,
+    /// Trimming in progress (0..1), or -1.
+    progress: float,
+    /// "123 clips · 4.2 GB (auto 3.1 GB of 20 GB)"
+    summary: string,
 }
 
 /// One metric tile in Stats: value, caption and a sparkline.

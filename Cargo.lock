@@ -1599,10 +1599,13 @@ name = "estream"
 version = "0.1.3"
 dependencies = [
  "anyhow",
+ "chrono",
+ "crossbeam-channel",
  "dirs",
  "estream-api",
  "estream-automation",
  "estream-capture",
+ "estream-clips",
  "estream-core",
  "estream-engine",
  "estream-gpu",

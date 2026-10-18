@@ -6,7 +6,7 @@ pub mod model;
 pub mod persist;
 pub mod transition;
 
-pub use automation::{Automation, Chord, Macro, OutputKind, Step, Toggle, Trigger};
+pub use automation::{Automation, Chord, GameEventKind, Macro, OutputKind, Step, Toggle, Trigger};
 pub use model::{
     AudioConfig, AudioFilterDef, Canvas, FilterDef, ItemContent, Monitoring, Project, ProjectAudio,
     Scene, SceneItem, SourceDef,

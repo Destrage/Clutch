@@ -95,6 +95,8 @@ pub struct Settings {
     pub remote: RemoteSettings,
     /// Canvas shown by the virtual camera (`None` = the first canvas).
     pub vcam_canvas: Option<estream_core::CanvasId>,
+    /// Clip mode, the clip hotkey, auto-clip and the clip library.
+    pub clips: ClipSettings,
     /// Single-stream settings from before multistream; read once, migrated, never written.
     #[serde(rename = "stream", skip_serializing)]
     legacy_stream: Option<estream_media::StreamSettings>,
@@ -136,6 +138,167 @@ impl DestinationConfig {
             name: self.name.clone(),
             settings: self.stream.clone(),
         }
+    }
+}
+
+/// When to clip a game event automatically, and how much around it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AutoRule {
+    /// The game's name (as in the games table).
+    pub game: String,
+    pub event: estream_project::GameEventKind,
+    pub enabled: bool,
+    /// Seconds before and after the event.
+    pub pre: u32,
+    pub post: u32,
+}
+
+impl Default for AutoRule {
+    fn default() -> Self {
+        Self {
+            game: String::new(),
+            event: estream_project::GameEventKind::Kill,
+            enabled: true,
+            pre: 10,
+            post: 3,
+        }
+    }
+}
+
+/// The default window around an event kind (from the add-clips design).
+pub fn default_window(event: estream_project::GameEventKind) -> (u32, u32) {
+    use estream_project::GameEventKind as K;
+    match event {
+        K::Kill | K::Death => (10, 3),
+        K::MultiKill | K::Ace => (15, 4),
+        K::RoundWin | K::MatchWin => (15, 5),
+        K::Objective => (12, 3),
+        K::Hype => (12, 4),
+    }
+}
+
+/// The event kinds each integrated game reports.
+pub fn integration_events(
+    integration: estream_clips::Integration,
+) -> &'static [estream_project::GameEventKind] {
+    use estream_clips::Integration as I;
+    use estream_project::GameEventKind as K;
+    match integration {
+        I::Cs2Gsi => &[
+            K::Kill,
+            K::MultiKill,
+            K::Ace,
+            K::RoundWin,
+            K::MatchWin,
+            K::Death,
+        ],
+        I::Dota2Gsi => &[K::Kill, K::MultiKill, K::MatchWin, K::Death],
+        I::LeagueLiveClient => &[K::Kill, K::MultiKill, K::Ace, K::Objective, K::MatchWin],
+    }
+}
+
+/// Clips: clip mode, the clip hotkey, auto-clip and the library.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ClipSettings {
+    /// Start the replay buffer by itself while a game runs.
+    pub mode: bool,
+    /// Replay buffer length in clip mode (seconds).
+    pub buffer_seconds: u32,
+    /// The clip hotkey, e.g. "F8" (empty = none).
+    pub hotkey: String,
+    /// Seconds the clip hotkey saves.
+    pub hotkey_seconds: u32,
+    /// The longest clip merged events may make.
+    pub max_seconds: u32,
+    /// The clips folder (`None` = `Clips` in the recording folder).
+    pub folder: Option<PathBuf>,
+    /// Play a sound when a clip is saved.
+    pub sound: bool,
+    /// Automatic clips beyond this many GB are deleted, oldest first.
+    pub storage_cap_gb: f32,
+    /// Integrations the user connected (the listener runs only for these).
+    pub connected: Vec<estream_clips::Integration>,
+    pub rules: Vec<AutoRule>,
+    pub hype_game: bool,
+    pub hype_mic: bool,
+    pub hype_sensitivity: estream_clips::Sensitivity,
+    /// Port the game state integrations post to.
+    pub gsi_port: u16,
+    pub cs2_token: String,
+    pub dota2_token: String,
+    pub user_games: Vec<estream_clips::games::UserGame>,
+    pub not_games: Vec<String>,
+}
+
+impl Default for ClipSettings {
+    fn default() -> Self {
+        let mut s = Self {
+            mode: false,
+            buffer_seconds: 120,
+            hotkey: "F8".into(),
+            hotkey_seconds: 30,
+            max_seconds: 90,
+            folder: None,
+            sound: true,
+            storage_cap_gb: 20.0,
+            connected: Vec::new(),
+            rules: Vec::new(),
+            hype_game: false,
+            hype_mic: false,
+            hype_sensitivity: estream_clips::Sensitivity::Medium,
+            gsi_port: estream_clips::integrations::gsi::DEFAULT_PORT,
+            cs2_token: String::new(),
+            dota2_token: String::new(),
+            user_games: Vec::new(),
+            not_games: Vec::new(),
+        };
+        s.fill_rules();
+        s
+    }
+}
+
+impl ClipSettings {
+    /// Adds a rule (with the default window) for every event an integrated game reports
+    /// and that has none yet. Deaths start off.
+    pub fn fill_rules(&mut self) {
+        use estream_clips::Integration as I;
+        for (integration, game) in [
+            (I::Cs2Gsi, "Counter-Strike 2"),
+            (I::Dota2Gsi, "Dota 2"),
+            (I::LeagueLiveClient, "League of Legends"),
+        ] {
+            for &event in integration_events(integration) {
+                if !self
+                    .rules
+                    .iter()
+                    .any(|r| r.game == game && r.event == event)
+                {
+                    let (pre, post) = default_window(event);
+                    self.rules.push(AutoRule {
+                        game: game.into(),
+                        event,
+                        enabled: event != estream_project::GameEventKind::Death,
+                        pre,
+                        post,
+                    });
+                }
+            }
+        }
+    }
+
+    /// The rule for `event` in `game`, if it is enabled.
+    pub fn rule(&self, game: &str, event: estream_project::GameEventKind) -> Option<&AutoRule> {
+        self.rules
+            .iter()
+            .find(|r| r.enabled && r.event == event && r.game.eq_ignore_ascii_case(game))
+    }
+
+    pub fn folder(&self, recording: &estream_media::RecordingSettings) -> PathBuf {
+        self.folder
+            .clone()
+            .unwrap_or_else(|| recording.folder.join("Clips"))
     }
 }
 
@@ -199,6 +362,7 @@ impl Default for Settings {
             destinations: Vec::new(),
             remote: RemoteSettings::default(),
             vcam_canvas: None,
+            clips: ClipSettings::default(),
             legacy_stream: None,
             legacy_key: None,
         }

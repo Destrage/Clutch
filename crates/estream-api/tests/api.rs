@@ -79,10 +79,9 @@ impl Studio for FakeStudio {
         self.active[index(output)] = active;
         Ok((!active && output == Output::Record).then(|| PathBuf::from("C:/rec/out.mkv")))
     }
-    fn save_replay(&mut self) -> Result<PathBuf, String> {
-        let path = PathBuf::from("C:/rec/replay.mkv");
-        self.last_replay = Some(path.clone());
-        Ok(path)
+    fn save_replay(&mut self) -> Result<(), String> {
+        self.last_replay = Some(PathBuf::from("C:/rec/replay.mkv"));
+        Ok(())
     }
     fn last_replay(&self) -> Option<PathBuf> {
         self.last_replay.clone()

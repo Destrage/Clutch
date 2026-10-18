@@ -808,6 +808,144 @@ export component SettingsDialog inherits Modal {
                 NumberField { label: ""; value: root.form.replay-seconds; minimum: 5; maximum: 300; step: 5; suffix: "s"; changed(v) => { root.set("replay-seconds", v); } }
             }
 
+            SectionTitle { text: "CLIPS"; }
+            Text {
+                text: "Save your best moments without streaming or recording: eStream keeps the last minutes in memory while you play, and the clip hotkey saves them.";
+                color: Theme.text-faint;
+                font-size: Theme.font-s;
+                wrap: word-wrap;
+            }
+            if root.form.clip-ask != "": Rectangle {
+                height: ask.preferred-height + 16px;
+                border-radius: Theme.radius-s;
+                background: Theme.accent.with-alpha(0.12);
+                ask := HorizontalLayout {
+                    padding: 8px;
+                    spacing: 8px;
+                    Text { text: "Is " + root.form.clip-ask + " a game? Clip mode will follow it."; color: Theme.text; font-size: Theme.font-s; vertical-alignment: center; horizontal-stretch: 1; wrap: word-wrap; }
+                    Button { text: "It's a game"; kind: "primary"; clicked => { root.set("clip-ask-yes", 0); } }
+                    Button { text: "Not a game"; kind: "ghost"; clicked => { root.set("clip-ask-no", 0); } }
+                }
+            }
+            SettingRow {
+                label: "Clip mode";
+                hint: "Runs the replay buffer by itself while a game is open";
+                HorizontalLayout {
+                    alignment: start;
+                    VerticalLayout {
+                        alignment: center;
+                        Toggle { checked: root.form.clip-mode; toggled(v) => { root.set("clip-mode", v ? 1 : 0); } }
+                    }
+                }
+            }
+            SettingRow {
+                label: "Keep in memory";
+                hint: "How much the buffer holds in clip mode";
+                NumberField { label: ""; value: root.form.clip-buffer; minimum: 30; maximum: 600; step: 30; suffix: "s"; changed(v) => { root.set("clip-buffer", v); } }
+            }
+            SettingRow {
+                label: "Clip hotkey";
+                hint: "Works in games, e.g. F8 or Ctrl+Shift+C";
+                TextField { text: root.form.clip-hotkey; label: "Clip hotkey"; accepted(t) => { root.set-text("clip-hotkey", t); } }
+                NumberField { width: 110px; label: ""; value: root.form.clip-seconds; minimum: 5; maximum: 600; step: 5; suffix: "s"; changed(v) => { root.set("clip-seconds", v); } }
+            }
+            SettingRow {
+                label: "Longest clip";
+                hint: "Events close together merge into one clip up to this length";
+                NumberField { label: ""; value: root.form.clip-max; minimum: 15; maximum: 300; step: 15; suffix: "s"; changed(v) => { root.set("clip-max", v); } }
+            }
+            SettingRow {
+                label: "Sound when saved";
+                HorizontalLayout {
+                    alignment: start;
+                    VerticalLayout {
+                        alignment: center;
+                        Toggle { checked: root.form.clip-sound; toggled(v) => { root.set("clip-sound", v ? 1 : 0); } }
+                    }
+                }
+            }
+            SettingRow {
+                label: "Clips folder";
+                TextField { text: root.form.clip-folder; label: "Clips folder"; accepted(t) => { root.set-text("clip-folder", t); } }
+            }
+            SettingRow {
+                label: "Storage limit";
+                hint: "Oldest automatic clips are deleted past this; favorites and your own clips never are";
+                NumberField { label: ""; value: root.form.clip-cap; minimum: 1; maximum: 2000; step: 5; suffix: "GB"; changed(v) => { root.set("clip-cap", v); } }
+            }
+
+            Text { text: "AUTO-CLIP"; color: Theme.text-muted; font-size: Theme.font-xs; font-weight: 600; }
+            Text {
+                text: "Connect a game to clip kills, wins and objectives automatically. eStream uses each game's official local event API, so nothing touches the game itself.";
+                color: Theme.text-faint;
+                font-size: Theme.font-s;
+                wrap: word-wrap;
+            }
+            for g[i] in root.form.clip-integrations: HorizontalLayout {
+                spacing: 10px;
+                height: 32px;
+                Text { text: g.name; color: Theme.text; font-size: Theme.font-m; vertical-alignment: center; width: 170px; }
+                Text { text: g.status; color: g.connected ? Theme.text-muted : Theme.text-faint; font-size: Theme.font-s; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                Button {
+                    text: g.connected ? "Disconnect" : "Connect";
+                    kind: g.connected ? "ghost" : "default";
+                    tooltip: g.connected ? "Stop listening to this game" : "Set up auto-clip for this game";
+                    clicked => { root.set(g.connected ? "clip-disconnect" : "clip-connect", i); }
+                }
+            }
+            SettingRow {
+                label: "Rules for";
+                Select {
+                    label: "Game";
+                    options: root.form.clip-rule-games;
+                    current-index: root.form.clip-rule-game;
+                    selected(i) => { root.set("clip-rule-game", i); }
+                }
+            }
+            for r[i] in root.form.clip-rules: HorizontalLayout {
+                spacing: 10px;
+                height: 30px;
+                VerticalLayout {
+                    alignment: center;
+                    Toggle { checked: r.enabled; toggled(v) => { root.set("clip-rule-enable", i); } }
+                }
+                Text { text: r.event; color: r.enabled ? Theme.text : Theme.text-faint; font-size: Theme.font-m; vertical-alignment: center; width: 140px; }
+                NumberField { width: 110px; label: ""; enabled: r.enabled; value: r.pre; minimum: 1; maximum: 120; suffix: "s before"; changed(v) => { root.set("clip-rule-pre:" + i, v); } }
+                NumberField { width: 110px; label: ""; enabled: r.enabled; value: r.post; minimum: 0; maximum: 60; suffix: "s after"; changed(v) => { root.set("clip-rule-post:" + i, v); } }
+                Rectangle { horizontal-stretch: 1; }
+            }
+            SettingRow {
+                label: "Hype: game audio";
+                hint: "Any game: clip when it suddenly gets loud";
+                HorizontalLayout {
+                    alignment: start;
+                    VerticalLayout {
+                        alignment: center;
+                        Toggle { checked: root.form.hype-game; toggled(v) => { root.set("hype-game", v ? 1 : 0); } }
+                    }
+                }
+            }
+            SettingRow {
+                label: "Hype: microphone";
+                hint: "Clip when you shout or cheer";
+                HorizontalLayout {
+                    alignment: start;
+                    VerticalLayout {
+                        alignment: center;
+                        Toggle { checked: root.form.hype-mic; toggled(v) => { root.set("hype-mic", v ? 1 : 0); } }
+                    }
+                }
+            }
+            if root.form.hype-game || root.form.hype-mic: SettingRow {
+                label: "Hype sensitivity";
+                Select {
+                    label: "Hype sensitivity";
+                    options: ["Low (only big moments)", "Medium", "High (more clips)"];
+                    current-index: root.form.hype-sensitivity;
+                    selected(i) => { root.set("hype-sensitivity", i); }
+                }
+            }
+
             SectionTitle { text: "VIRTUAL CAMERA"; }
             Text {
                 text: "Shows a canvas as “eStream Virtual Camera” in Zoom, Teams, Discord, Meet and other apps (Windows 11).";

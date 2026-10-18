@@ -10,7 +10,9 @@ pub mod hotkeys;
 use estream_api::{Output, Studio};
 use estream_core::{CanvasId, MacroId, SceneId};
 use estream_engine::Command;
-use estream_project::{Automation, Chord, Macro, OutputKind, Project, Step, Transition, Trigger};
+use estream_project::{
+    Automation, Chord, GameEventKind, Macro, OutputKind, Project, Step, Transition, Trigger,
+};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -19,6 +21,9 @@ use std::time::{Duration, Instant};
 pub trait Host: Studio {
     /// Runs a command palette action by id; false if there's no such action.
     fn run_action(&mut self, id: &str) -> bool;
+    /// Asks for a clip of `before` seconds before now and `after` seconds after (saved once
+    /// the after part is buffered), like the clip hotkey.
+    fn save_clip(&mut self, before: Duration, after: Duration) -> Result<(), String>;
 }
 
 /// How often the foreground window is checked.
@@ -143,6 +148,30 @@ impl Runner {
                 m.triggers
                     .iter()
                     .any(|t| matches!(t, Trigger::Hotkey { chord: c } if c == chord))
+            })
+            .map(|m| m.id)
+            .collect();
+        for id in ids {
+            self.start(id, now, false);
+        }
+    }
+
+    /// Fires the macros waiting for this game event (`game` is the game's name).
+    pub fn game_event(&mut self, game: &str, event: GameEventKind, now: Instant) {
+        let ids: Vec<MacroId> = self
+            .automation
+            .macros
+            .iter()
+            .filter(|m| {
+                m.triggers.iter().any(|t| match t {
+                    Trigger::GameEvent { game: g, event: e } => {
+                        // An ace is also a multi-kill.
+                        let kind_matches = *e == event
+                            || (*e == GameEventKind::MultiKill && event == GameEventKind::Ace);
+                        kind_matches && g.as_ref().is_none_or(|g| g.eq_ignore_ascii_case(game))
+                    }
+                    _ => false,
+                })
             })
             .map(|m| m.id)
             .collect();
@@ -476,7 +505,11 @@ pub fn execute(host: &mut dyn Host, step: &Step) -> Result<(), String> {
             }
             Ok(())
         }
-        Step::SaveReplay => host.save_replay().map(|_| ()),
+        Step::SaveReplay => host.save_replay(),
+        Step::SaveClip { before, after } => host.save_clip(
+            Duration::from_secs(*before as u64),
+            Duration::from_secs(*after as u64),
+        ),
         Step::StudioTransition => {
             if !host.studio_mode() {
                 return Err("studio mode is off".into());
@@ -516,6 +549,10 @@ pub fn trigger_summary(m: &Macro, project: &Project) -> String {
                 output.label().to_lowercase(),
                 if *started { "starts" } else { "stops" }
             ),
+            Trigger::GameEvent { game, event } => match game {
+                Some(g) => format!("On {} in {g}", event.label().to_lowercase()),
+                None => format!("On {}", event.label().to_lowercase()),
+            },
         })
         .collect();
     if parts.is_empty() {

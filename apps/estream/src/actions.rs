@@ -49,6 +49,8 @@ pub enum Action {
     OpenSettings,
     OpenAutomation,
     OpenStats,
+    OpenClips,
+    ToggleClipMode,
 }
 
 /// Keyboard shortcut. `key` is the lowercase character, or a named key.
@@ -182,11 +184,13 @@ actions! {
     TransitionGo, "transition.go", "Transition Preview to Program", "Scenes", None, true;
     TransitionCut, "transition.cut", "Cut Preview to Program", "Scenes", None, true;
     TransitionShader, "transition.shader", "Edit custom transition shader…", "Scenes", None, true;
-    SaveReplay, "replay.save", "Save replay", "Output", Some(Shortcut::ctrl_shift('r')), true;
+    SaveReplay, "replay.save", "Save clip (from the replay buffer)", "Output", Some(Shortcut::ctrl_shift('r')), true;
     RevealOutput, "output.reveal", "Show last recording in folder", "Output", None, true;
     OpenSettings, "settings", "Settings…", "General", Some(Shortcut::ctrl(',')), true;
     OpenAutomation, "automation", "Automation: hotkeys and macros…", "General", None, true;
     OpenStats, "stats", "Stats and health…", "General", None, true;
+    OpenClips, "clips.open", "Clips…", "General", None, true;
+    ToggleClipMode, "clips.mode", "Clip mode on / off", "Output", None, true;
     Deselect, "selection.clear", "Clear selection", "Edit", Some(Shortcut::key(Key::Escape)), false;
 }
 

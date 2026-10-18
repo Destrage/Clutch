@@ -63,8 +63,11 @@ library of tagged clips that the montage editor (`add-montage-editor`) builds on
   - `SaveReplayBuffer` saves a clip with the default length.
 
 ## Out of scope
-- In-game overlay notifications. They need injection into the game process. A sound cue and a
-  Windows notification are used instead.
+- In-game overlay notifications. They need injection into the game process. A sound cue is
+  used instead. (Windows notifications were considered and dropped: Windows holds them back
+  while a fullscreen game runs, which is exactly when clips are saved.)
+- An in-app clip player. Play opens the system's video player; the Clips view shows the exact
+  frame at each trim point.
 - Detecting kills on screen with an AI model (for games without an API, like Valorant and
   Fortnite). These games get audio hype only for now. The detector interface leaves room for it.
 - Uploading or sharing to a cloud or a social feed. eStream is local-first. "Copy file" and

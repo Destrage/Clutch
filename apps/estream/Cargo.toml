@@ -12,6 +12,9 @@ workspace = true
 [dependencies]
 estream-api.workspace = true
 estream-automation.workspace = true
+estream-clips.workspace = true
+chrono.workspace = true
+crossbeam-channel.workspace = true
 estream-health.workspace = true
 estream-capture = { path = "../../crates/estream-capture" }
 estream-core.workspace = true
@@ -33,7 +36,16 @@ tracing.workspace = true
 uuid.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_UI_Shell"] }
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
+    "Win32_System_DataExchange",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [build-dependencies]
 slint-build.workspace = true

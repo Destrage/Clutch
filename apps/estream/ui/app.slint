@@ -2,13 +2,14 @@
 
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
-import { CanvasTab, SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SourceType, PropRow, MixerStrip, AudioInspect, SettingsForm, LiveRow, DestinationRow, VideoFilterRow, MediaInspect, AutomationForm, MacroRow, TriggerRow, StepRow, StatsForm, StatTile, StatRow, AlertRow } from "types.slint";
+import { CanvasTab, SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SourceType, PropRow, MixerStrip, AudioInspect, SettingsForm, LiveRow, DestinationRow, VideoFilterRow, MediaInspect, AutomationForm, MacroRow, TriggerRow, StepRow, ClipsForm, ClipRow, StatsForm, StatTile, StatRow, AlertRow } from "types.slint";
 import { VSplitter, HSplitter, TooltipLayer, Hint } from "widgets.slint";
 import { Preview } from "preview.slint";
 import { TopBar, ScenesPanel, SourcesPanel, InspectorPanel, MixerPanel, StatusBar, TransitionColumn, ProgramView, CanvasTabs } from "panels.slint";
 import { CommandPalette, AddSourceDialog, SetupWizard, RecoveryPrompt, Toast, SettingsDialog, LivePanel, ShaderDialog } from "overlays.slint";
 import { AutomationDialog } from "automation.slint";
 import { StatsDialog } from "stats.slint";
+import { ClipsDialog } from "clips.slint";
 import { GoLiveDialog } from "golive.slint";
 
 export { Theme }
@@ -130,6 +131,10 @@ export component AppWindow inherits Window {
     in-out property <bool> settings-open;
     in-out property <bool> automation-open;
     in-out property <bool> stats-open;
+    in-out property <bool> clips-open;
+    in property <ClipsForm> clips-form;
+    callback clips-action(string, int, float);
+    callback clips-text(string, string);
     in-out property <bool> golive-open;
     in property <[string]> golive-platforms;
     in property <int> golive-platform: -1;
@@ -251,6 +256,7 @@ export component AppWindow inherits Window {
                 vcam-tooltip: root.vcam-tooltip;
                 toggle-vcam => { root.action("vcam.toggle"); }
                 open-automation => { root.action("automation"); }
+                open-clips => { root.action("clips.open"); }
                 stream-state: root.stream-state;
                 stream-time: root.stream-time;
                 toggle-stream => { root.action("stream.toggle"); }
@@ -522,6 +528,17 @@ export component AppWindow inherits Window {
         more-options => { root.golive-more(); }
         dismiss => {
             root.golive-open = false;
+            main-keys.focus();
+        }
+    }
+
+    if root.clips-open: ClipsDialog {
+        form: root.clips-form;
+        action(f, i, v) => { root.clips-action(f, i, v); }
+        text(f, s) => { root.clips-text(f, s); }
+        dismiss => {
+            root.clips-action("close", 0, 0);
+            root.clips-open = false;
             main-keys.focus();
         }
     }

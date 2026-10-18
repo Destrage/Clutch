@@ -33,11 +33,16 @@ on the video or audio threads.
   - an exe counts as a game if it is in the table, or if it covers the whole monitor and the
     user approved it the first time it was seen;
   - "game running" ends 10 s after the process exits.
-- **Clip mode starts and stops the replay buffer on these edges.** If the program scenes have no
-  game, window or display capture showing that window, it uses a hidden **clip canvas**:
-  - the canvas follows the game's resolution, capped at the settings value (default 1080p60);
-  - it holds a game capture of the window plus desktop audio and the default mic;
-  - with nothing to composite, the cost is one capture and one encode.
+- **Clip mode starts and stops the replay buffer on these edges.** Where it buffers:
+  - the user's own replay buffer, if they started it by hand;
+  - otherwise the studio canvas, if a program scene shows a game, window or display capture;
+  - otherwise a small **clip engine** of its own (a second `Engine` with no collection file, so
+    nothing about it is saved and the user's scenes are untouched): one 1080p60 canvas with a
+    game capture of the fullscreen app, desktop audio and the default mic. With nothing else
+    to composite, the cost is one capture and one encode.
+  - After the game exits, the buffer stops once pending clips are saved (at most 15 s).
+  - Each engine has its own clock: pending windows are kept on the clipper's clock and
+    converted through `Instant`s to the buffer's engine clock when saved.
 
 ## Game integrations (`estream_clips::integrations`)
 All integrations turn game data into `GameEvent { game, kind, at, detail }`, where `kind` is one
@@ -129,26 +134,43 @@ Default auto-clip windows (each one editable per event):
 
 ## Commands and settings
 - **Settings:** clip mode, hotkeys, lengths, auto-clip rules and the storage cap are app
-  settings (TOML), like the recording settings. They are not saved in the scene collection.
-- **Palette actions:** `clips.save`, `clips.open`, `clips.toggle_mode`.
+  settings (the JSON settings file), like the recording settings. They are not saved in the
+  scene collection.
+- **Palette actions:** `clips.open` (Clips…) and `clips.mode` (clip mode on/off). Saving keeps
+  the existing `replay.save` id (Ctrl+Shift+R), now titled "Save clip", so macros that use it
+  keep working.
+- **Saving is asynchronous everywhere:** the clip hotkey, Ctrl+Shift+R, the palette, macros
+  and the remote API all ask the clipper for a window; `Studio::save_replay` now returns
+  `Result<(), String>` and the file is reported through `last_replay` (which raises
+  `ReplayBufferSaved`) once written.
 - **Automation:**
-  - `Trigger::GameEvent { game: Option<String>, kind }`;
-  - `Step::SaveClip { pre: u32, post: u32 }`.
-  - Clip saves go through the same app surface (`Studio`) as `save_replay`.
+  - `Trigger::GameEvent { game: Option<String>, event: GameEventKind }` (an ace also matches
+    multi-kill);
+  - `Step::SaveClip { before: u32, after: u32 }` through `Host::save_clip`.
 
 ## UI
-- **Clips view:** a toolbar toggle beside the scene editor. It has:
-  - a thumbnail grid with lazy loading, grouped by day;
-  - a filter bar (game, auto/manual, favorites, search by title);
-  - a player panel built on the existing media `player`, with trim handles and keyboard
-    shortcuts (I/O for in/out, Space to play, Del to delete).
+- **Clips view:** a dialog opened from the toolbar (film icon) or the palette. It has:
+  - a thumbnail grid (newest first) with the length and a favorite star on each tile;
+  - a filter bar (game, all/automatic/manual/favorites, search by title);
+  - the selected clip: title (rename), favorite, events with their times, Play, Show in folder,
+    Copy (the file, for pasting into Discord or a folder) and Delete (also the Del key);
+  - trim: in/out sliders and fields, Fast (keyframe) or Exact mode, "Save as new clip" or
+    "Replace", with progress and cancel;
+  - a frame preview of the trim point being moved (decoded with the thumbnail code in the
+    background, always heading for the latest point).
+  - **Play opens the system's video player.** An in-app player was deferred: the media
+    `player` publishes NV12 frames and an audio ring meant for the engine's audio thread, so
+    playing in a dialog needs a CPU color path and its own audio output. The frame preview
+    covers what trimming needs.
 - **Settings → Clips:**
-  - clip mode on/off, buffer length, quality preset;
-  - hotkeys;
-  - the auto-clip rules table (game × event, each with on/off and pre/post), with a Connect
-    button for each integration;
-  - hype sensitivity and sources;
-  - the storage cap.
+  - clip mode on/off, how much to keep in memory, the clip hotkey and its length, the longest
+    merged clip, the saved sound, the clips folder and the storage limit;
+  - one row per integration with its status ("Receiving events", "Connected · waiting for
+    the game", …) and Connect/Disconnect;
+  - the auto-clip rules of one game at a time (picked from a list): each event with on/off and
+    seconds before/after;
+  - hype for game audio and for the mic, and the sensitivity;
+  - the "is this a game?" question for an unknown fullscreen program.
 - **Status bar:** a clip-mode badge showing the detected game, plus a counter of clips saved
   this session.
 
