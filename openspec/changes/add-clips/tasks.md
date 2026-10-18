@@ -1,7 +1,7 @@
 # Tasks: add-clips
 
 ## 1. Media
-- [ ] 1.1 `PacketRing::save_range` + `Control::SaveRange`; raise the ring clamp to 600 s
+- [x] 1.1 `PacketRing::save_range` + `Control::SaveRange`; raise the ring clamp to 600 s
 - [ ] 1.2 Trim: lossless (keyframe stream copy) and precise (smart cut with fallback), temp file + rename
 - [ ] 1.3 Thumbnail extraction (one frame → 320 px JPEG)
 

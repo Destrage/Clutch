@@ -66,8 +66,26 @@ pub(crate) enum Kind {
     Network(Vec<NetSpec>),
 }
 
+/// A clip written from the replay buffer.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SavedClip {
+    pub path: PathBuf,
+    /// Engine-clock time of the clip's first frame (a keyframe at or before the request).
+    pub start: Timestamp,
+    /// Engine-clock time of the clip's last frame.
+    pub end: Timestamp,
+}
+
 enum Control {
     SaveReplay(Sender<Result<PathBuf, MediaError>>),
+    /// Save the engine-clock window `from..=to` to `path`.
+    SaveRange {
+        from: Timestamp,
+        to: Timestamp,
+        path: PathBuf,
+        container: Container,
+        reply: Sender<Result<SavedClip, MediaError>>,
+    },
     /// A stream destination joining a running stream session.
     AddDestination(NetSpec),
 }
@@ -263,7 +281,7 @@ fn run(r: Run) -> Result<(), MediaError> {
     let target = match r.kind {
         Kind::Replay => Target::Replay(PacketRing::new(
             specs,
-            r.settings.replay_seconds.clamp(5, 300) as f64,
+            r.settings.replay_seconds.clamp(5, MAX_REPLAY_SECONDS) as f64,
         )),
         Kind::File(path) => Target::File(Muxer::create(&path, r.settings.container, &specs)?),
         Kind::Network(destinations) => Target::Network(
@@ -298,6 +316,19 @@ fn run(r: Run) -> Result<(), MediaError> {
                             let container = replay_container(&r.settings);
                             let path = r.settings.next_path(" Replay", container);
                             ring.save(&path, container).map(|_| path)
+                        }
+                        _ => Err(MediaError::Io("not a replay buffer".into())),
+                    };
+                    let _ = reply.send(result);
+                }
+                Ok(Control::SaveRange { from, to, path, container, reply }) => {
+                    let result = match &state.target {
+                        Target::Replay(ring) => {
+                            // The ring's clock is seconds since this output's first frame.
+                            let secs = |t: Timestamp| (t.0 as f64 - t0.0 as f64) / 1e9;
+                            let at = |s: f64| Timestamp((t0.0 as f64 + s * 1e9).max(0.0) as u64);
+                            ring.save_range(secs(from), secs(to), &path, container)
+                                .map(|(start, end)| SavedClip { path, start: at(start), end: at(end) })
                         }
                         _ => Err(MediaError::Io("not a replay buffer".into())),
                     };
@@ -439,6 +470,10 @@ impl State {
         Ok(())
     }
 }
+
+/// The longest replay buffer, in seconds (clip mode needs room for post-roll).
+pub const MAX_REPLAY_SECONDS: u32 = 600;
+
 /// Replays are saved as MP4 for easy sharing, unless MOV was chosen.
 fn replay_container(settings: &RecordingSettings) -> Container {
     match settings.container {
@@ -590,6 +625,30 @@ impl ReplayBuffer {
             .map_err(|_| MediaError::Engine("replay buffer stopped".into()))?;
         rx.recv_timeout(Duration::from_secs(20))
             .map_err(|_| MediaError::Engine("saving the replay timed out".into()))?
+    }
+
+    /// Asks the buffer to save the engine-clock window `from..=to` to `path`. The clip starts
+    /// at the last keyframe at or before `from`. The result arrives on the returned channel
+    /// once the file is written, so the caller never waits on the disk.
+    pub fn save_range(
+        &self,
+        from: Timestamp,
+        to: Timestamp,
+        path: PathBuf,
+        container: Container,
+    ) -> Receiver<Result<SavedClip, MediaError>> {
+        let (reply, rx) = bounded(1);
+        let request = Control::SaveRange {
+            from,
+            to,
+            path,
+            container,
+            reply: reply.clone(),
+        };
+        if self.session.control.send(request).is_err() {
+            let _ = reply.send(Err(MediaError::Engine("replay buffer stopped".into())));
+        }
+        rx
     }
 
     pub fn stop(self, engine: &Engine) -> Result<(), MediaError> {

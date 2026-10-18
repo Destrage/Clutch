@@ -136,18 +136,54 @@ impl PacketRing {
         }
     }
 
-    /// Writes the buffered packets (from the first video keyframe) to a new file.
+    /// Writes all buffered packets (from the first video keyframe) to a new file.
     pub fn save(&self, path: &Path, container: Container) -> Result<(), MediaError> {
-        let start = self
-            .packets
+        self.save_range(f64::NEG_INFINITY, f64::INFINITY, path, container)
+            .map(|_| ())
+    }
+
+    /// Writes the packets between `from` and `to` (seconds on the ring's clock) to a new file,
+    /// starting at the last video keyframe at or before `from` (or the first one buffered).
+    /// Returns the span actually written, on the ring's clock.
+    pub fn save_range(
+        &self,
+        from: f64,
+        to: f64,
+        path: &Path,
+        container: Container,
+    ) -> Result<(f64, f64), MediaError> {
+        let keys: Vec<usize> = (0..self.packets.len())
+            .filter(|&i| {
+                let (s, p, _) = &self.packets[i];
+                self.specs[*s].is_video && p.is_key()
+            })
+            .collect();
+        let start = keys
             .iter()
-            .position(|(s, p, _)| self.specs[*s].is_video && p.is_key())
+            .take_while(|&&i| self.packets[i].2 <= from)
+            .last()
+            .or(keys.first())
+            .copied()
             .ok_or_else(|| MediaError::Io("the replay buffer has no video yet".into()))?;
         let t0 = self.packets[start].2;
+        if to < t0 {
+            return Err(MediaError::Io("that moment is no longer buffered".into()));
+        }
         let mut muxer = Muxer::create(path, container, &self.specs)?;
+        let mut end = t0;
+        let mut video_done = false;
         for (stream, packet, t) in self.packets.iter().skip(start) {
-            if *t < t0 {
-                continue; // audio from before the first keyframe
+            let video = self.specs[*stream].is_video;
+            if video && *t > to {
+                // Packets are in decode order: stop video at the first one past the end, so
+                // no later frame refers to one that was left out.
+                video_done = true;
+            }
+            if *t < t0 || *t > to || (video && video_done) {
+                continue; // audio from before the keyframe, or past the end
+            }
+            if video {
+                end = end.max(*t);
             }
             let tb = self.specs[*stream].time_base;
             let offset = (t0 * tb.1 as f64 / tb.0.max(1) as f64).round() as i64;
@@ -156,7 +192,8 @@ impl PacketRing {
             p.set_dts(p.dts().map(|v| v - offset));
             muxer.write(*stream, p)?;
         }
-        muxer.finish()
+        muxer.finish()?;
+        Ok((t0, end))
     }
 }
 

@@ -14,7 +14,7 @@ pub mod stream;
 pub mod vcam;
 
 pub use multistream::{Destination, LiveDestination, MultiStream};
-pub use output::{OutputStats, Recording, ReplayBuffer};
+pub use output::{MAX_REPLAY_SECONDS, OutputStats, Recording, ReplayBuffer, SavedClip};
 pub use settings::{
     AudioCodec, Container, Preset, Protocol, RateControl, RecordingSettings, Service,
     StreamSettings, VideoCodec, redact,

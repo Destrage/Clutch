@@ -3,6 +3,7 @@
 mod common;
 
 use common::{engine, probe, temp_dir};
+use estream_core::Timestamp;
 use estream_media::{Container, Recording, RecordingSettings, ReplayBuffer, VideoCodec, encode};
 use std::path::Path;
 use std::time::Duration;
@@ -122,4 +123,66 @@ fn replay_buffer_saves_the_last_seconds() {
         p.duration
     );
     assert!(p.video.is_some() && p.audio_streams() == 2);
+}
+
+#[test]
+fn replay_buffer_saves_a_time_window() {
+    let engine = engine();
+    let dir = temp_dir("replay-range");
+    std::thread::sleep(Duration::from_millis(300));
+    let replay = ReplayBuffer::start(
+        &engine,
+        &RecordingSettings {
+            replay_seconds: 10,
+            ..settings(&dir, Container::Mkv)
+        },
+    )
+    .unwrap();
+    std::thread::sleep(Duration::from_secs(8));
+    let now = engine.clock().now();
+    let secs = |s: f64| Timestamp(now.0.saturating_sub((s * 1e9) as u64));
+    // 4 s ago to 1 s ago: starts at the keyframe at or before `from` (keyframes every 2 s).
+    let (from, to) = (secs(4.0), secs(1.0));
+    let path = dir.join("window.mp4");
+    let clip = replay
+        .save_range(from, to, path.clone(), Container::Mp4)
+        .recv_timeout(Duration::from_secs(20))
+        .unwrap()
+        .unwrap();
+    assert_eq!(clip.path, path);
+    assert!(clip.start <= from, "starts at or before the request");
+    assert!(
+        from.0 - clip.start.0 <= 2_100_000_000,
+        "at most one GOP early"
+    );
+    assert!(
+        clip.end <= to && to.0 - clip.end.0 < 100_000_000,
+        "ends at the request"
+    );
+
+    // A window that is no longer buffered is refused.
+    let old = replay
+        .save_range(secs(60.0), secs(50.0), dir.join("old.mp4"), Container::Mp4)
+        .recv_timeout(Duration::from_secs(20))
+        .unwrap();
+    assert!(old.is_err());
+    replay.stop(&engine).unwrap();
+
+    let p = probe(&path);
+    let span = (clip.end.0 - clip.start.0) as f64 / 1e9;
+    eprintln!("window clip {:.2}s (span {span:.2}s)", p.duration);
+    assert!(
+        p.duration >= 2.9 && p.duration <= 5.2,
+        "clip {}",
+        p.duration
+    );
+    assert!(
+        (p.duration - span).abs() < 0.2,
+        "file {} vs span {span}",
+        p.duration
+    );
+    let v = p.stream_durations[0];
+    for a in &p.stream_durations[1..] {
+        assert!((v - a).abs() < 0.15, "A/V mismatch: video {v} audio {a}");
+    }
 }
