@@ -120,6 +120,7 @@ export component ClipsDialog inherits Modal {
         spacing: 10px;
         Text { text: "Clips"; color: Theme.text; font-size: Theme.font-xl; font-weight: 700; vertical-alignment: center; }
         Text { text: root.form.summary; color: Theme.text-faint; font-size: Theme.font-s; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+        Button { text: "Make a montage"; has-icon: true; icon: Icons.sparkles; kind: "ghost"; tooltip: "Cut your clips into a highlight video to music"; clicked => { root.action("make-montage", 0, 0); } }
         Button { text: "Open folder"; has-icon: true; icon: Icons.folder-open; kind: "ghost"; clicked => { root.action("open-folder", 0, 0); } }
         Button { text: "Done"; kind: "primary"; clicked => { root.dismiss(); } }
     }

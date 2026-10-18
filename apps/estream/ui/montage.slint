@@ -1,0 +1,639 @@
+// Montages: the saved montages, the New montage wizard and the editor (preview, timeline,
+// inspector). Positions on the timeline come from Rust in pixels.
+
+import { Theme } from "theme.slint";
+import { Icons } from "icons.slint";
+import { MontageForm, MontageRow, PickRow, RecordingRow, BlockRow, ChipRow, TitleRow } from "types.slint";
+import { Button, IconButton, TextField, NumberField, Select, Slider, Toggle, SectionTitle, EmptyState, Badge } from "widgets.slint";
+import { Modal } from "overlays.slint";
+
+component Field inherits HorizontalLayout {
+    in property <string> label;
+    spacing: 8px;
+    Text { text: root.label; width: 96px; color: Theme.text-muted; font-size: Theme.font-s; vertical-alignment: center; }
+    @children
+}
+
+component PickTile inherits Rectangle {
+    in property <PickRow> entry;
+    callback toggled();
+    border-radius: Theme.radius-m;
+    background: entry.picked ? Theme.accent.with-alpha(0.16) : ta.has-hover ? Theme.hover : transparent;
+    border-width: entry.picked ? 1px : 0px;
+    border-color: Theme.accent;
+    accessible-role: checkbox;
+    accessible-checked: entry.picked;
+    accessible-label: entry.title;
+    ta := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        clicked => { root.toggled(); }
+    }
+    HorizontalLayout {
+        padding: 6px;
+        spacing: 8px;
+        Rectangle {
+            width: 96px;
+            border-radius: Theme.radius-s;
+            background: Theme.surface-3;
+            clip: true;
+            if entry.has-thumb: Image { width: parent.width; height: parent.height; source: entry.thumb; image-fit: cover; }
+            if entry.picked: Rectangle {
+                x: 4px;
+                y: 4px;
+                width: 18px;
+                height: 18px;
+                border-radius: 9px;
+                background: Theme.accent;
+                Image { width: 12px; height: 12px; source: Icons.check; colorize: Theme.on-accent; }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            Text { text: entry.title; color: Theme.text; font-size: Theme.font-s; font-weight: 600; overflow: elide; }
+            Text { text: entry.detail; color: Theme.text-faint; font-size: Theme.font-xs; overflow: elide; }
+        }
+    }
+}
+
+component HomePage inherits VerticalLayout {
+    in property <MontageForm> form;
+    callback action(string, int, float);
+    spacing: 10px;
+    HorizontalLayout {
+        spacing: 8px;
+        alignment: start;
+        Button { text: "New montage"; kind: "primary"; has-icon: true; icon: Icons.sparkles; clicked => { root.action("new", 0, 0); } }
+        Button { text: "Open folder"; kind: "ghost"; has-icon: true; icon: Icons.folder-open; clicked => { root.action("open-folder", 0, 0); } }
+    }
+    if root.form.montages.length == 0: VerticalLayout {
+        vertical-stretch: 1;
+        alignment: center;
+        EmptyState {
+            icon: Icons.film;
+            title: "No montages yet";
+            body: "Pick your best clips, or scan a long recording for its highlights, choose a song, and eStream cuts a montage to the beat. Then fine-tune it on the timeline.";
+        }
+    }
+    if root.form.montages.length > 0: Flickable {
+        vertical-stretch: 1;
+        VerticalLayout {
+            alignment: start;
+            spacing: 2px;
+            for m[i] in root.form.montages: Rectangle {
+                height: 48px;
+                border-radius: Theme.radius-s;
+                background: row-ta.has-hover ? Theme.hover : transparent;
+                accessible-role: list-item;
+                accessible-label: m.name;
+                row-ta := TouchArea {
+                    mouse-cursor: MouseCursor.pointer;
+                    clicked => { root.action("open", i, 0); }
+                }
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 6px;
+                    spacing: 10px;
+                    Image { width: 18px; source: Icons.film; colorize: Theme.text-muted; }
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 1;
+                        Text { text: m.name; color: Theme.text; font-size: Theme.font-m; overflow: elide; }
+                        Text { text: m.detail; color: Theme.text-faint; font-size: Theme.font-xs; overflow: elide; }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        IconButton { icon: Icons.trash; tooltip: "Delete montage (the clips stay)"; clicked => { root.action("delete", i, 0); } }
+                    }
+                }
+            }
+        }
+    }
+}
+
+component WizardPage inherits VerticalLayout {
+    in property <MontageForm> form;
+    callback action(string, int, float);
+    callback text(string, string);
+    spacing: 10px;
+
+    HorizontalLayout {
+        spacing: 8px;
+        Text {
+            text: root.form.step == 0 ? "1. Pick what goes in" : "2. Music and style";
+            color: Theme.text;
+            font-size: Theme.font-l;
+            font-weight: 600;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+        Text { text: root.form.picked-count + " picked"; color: Theme.text-muted; font-size: Theme.font-s; vertical-alignment: center; }
+    }
+
+    if root.form.step == 0: VerticalLayout {
+        vertical-stretch: 1;
+        spacing: 8px;
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: start;
+            Button { text: "Clips"; kind: root.form.source-tab == 0 ? "primary" : "ghost"; clicked => { root.action("tab", 0, 0); } }
+            Button { text: "Highlights from recordings"; kind: root.form.source-tab == 1 ? "primary" : "ghost"; clicked => { root.action("tab", 1, 0); } }
+        }
+        if root.form.source-tab == 0: Flickable {
+            vertical-stretch: 1;
+            VerticalLayout {
+                alignment: start;
+                spacing: 4px;
+                if root.form.clips.length == 0: Text { text: "No clips yet: save some with your clip hotkey first."; color: Theme.text-faint; font-size: Theme.font-s; }
+                for c[i] in root.form.clips: PickTile {
+                    height: 64px;
+                    entry: c;
+                    toggled => { root.action("pick-clip", i, 0); }
+                }
+            }
+        }
+        if root.form.source-tab == 1: HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: 12px;
+            Flickable {
+                width: 340px;
+                VerticalLayout {
+                    alignment: start;
+                    spacing: 4px;
+                    if root.form.recordings.length == 0: Text { text: "No recordings in your recording folder yet."; color: Theme.text-faint; font-size: Theme.font-s; wrap: word-wrap; }
+                    for r[i] in root.form.recordings: Rectangle {
+                        height: 52px;
+                        border-radius: Theme.radius-s;
+                        background: Theme.surface-2;
+                        HorizontalLayout {
+                            padding: 8px;
+                            spacing: 8px;
+                            VerticalLayout {
+                                alignment: center;
+                                horizontal-stretch: 1;
+                                Text { text: r.name; color: Theme.text; font-size: Theme.font-s; overflow: elide; }
+                                Text { text: r.progress >= 0 ? "Scanning… " + round(r.progress * 100) + "%" : r.detail; color: Theme.text-faint; font-size: Theme.font-xs; overflow: elide; }
+                            }
+                            if r.progress < 0: Button {
+                                text: r.scanned ? "Scan again" : "Scan";
+                                kind: "ghost";
+                                clicked => { root.action("scan", i, 0); }
+                            }
+                        }
+                    }
+                }
+            }
+            Flickable {
+                horizontal-stretch: 1;
+                VerticalLayout {
+                    alignment: start;
+                    spacing: 4px;
+                    if root.form.highlights.length == 0: Text { text: "Scan a recording to find its highlights: game events saved while recording, and loud moments in its sound."; color: Theme.text-faint; font-size: Theme.font-s; wrap: word-wrap; }
+                    for h[i] in root.form.highlights: PickTile {
+                        height: 56px;
+                        entry: h;
+                        toggled => { root.action("pick-highlight", i, 0); }
+                    }
+                }
+            }
+        }
+    }
+
+    if root.form.step == 1: VerticalLayout {
+        vertical-stretch: 1;
+        spacing: 12px;
+        alignment: start;
+        Field {
+            label: "Music";
+            Text { text: root.form.music-name == "" ? "No music" : root.form.music-name; color: Theme.text; font-size: Theme.font-s; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+            Text { text: root.form.music-detail; color: Theme.text-faint; font-size: Theme.font-xs; vertical-alignment: center; }
+            Button { text: "Choose…"; kind: "ghost"; clicked => { root.action("pick-music", 0, 0); } }
+            if root.form.music-name != "": IconButton { icon: Icons.x; tooltip: "No music"; clicked => { root.action("clear-music", 0, 0); } }
+        }
+        Field {
+            label: "Length";
+            NumberField { width: 140px; label: ""; value: root.form.target; minimum: 10; maximum: 600; step: 5; suffix: "s"; changed(v) => { root.action("target", 0, v); } }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        Field {
+            label: "Format";
+            Select { label: "Format"; options: ["16:9 (YouTube)", "9:16 (Shorts, TikTok)", "1:1 (square)"]; current-index: root.form.format; selected(i) => { root.action("format", i, 0); } }
+        }
+        Field {
+            label: "Order";
+            Select { label: "Order"; options: ["As they happened", "Best first"]; current-index: root.form.order; selected(i) => { root.action("order", i, 0); } }
+        }
+        Field {
+            label: "Slow motion";
+            VerticalLayout { alignment: center; Toggle { checked: root.form.slow-motion; toggled(v) => { root.action("slow-motion", 0, v ? 1 : 0); } } }
+            Text { text: "On aces and big multi-kills"; color: Theme.text-faint; font-size: Theme.font-xs; vertical-alignment: center; horizontal-stretch: 1; }
+        }
+        Field {
+            label: "Title";
+            TextField { label: "Opening title"; placeholder: "Optional, e.g. CS2 highlights"; text: root.form.title-text; edited(t) => { root.text("title-text", t); } }
+        }
+    }
+
+    HorizontalLayout {
+        spacing: 8px;
+        Button { text: root.form.step == 0 ? "Cancel" : "Back"; kind: "ghost"; clicked => { root.action(root.form.step == 0 ? "home" : "step", 0, 0); } }
+        if root.form.busy != "": Text { text: root.form.busy; color: Theme.text-muted; font-size: Theme.font-s; vertical-alignment: center; }
+        Rectangle { horizontal-stretch: 1; }
+        if root.form.step == 0: Button { text: "Next"; kind: "primary"; enabled: root.form.picked-count > 0; clicked => { root.action("step", 1, 0); } }
+        if root.form.step == 1: Button { text: "Create montage"; kind: "primary"; has-icon: true; icon: Icons.sparkles; enabled: root.form.busy == ""; clicked => { root.action("create", 0, 0); } }
+    }
+}
+
+component Timeline inherits Rectangle {
+    in property <MontageForm> form;
+    callback action(string, int, float);
+    property <length> ruler: 22px;
+    property <length> video-h: 64px;
+    property <length> title-h: 26px;
+    property <length> music-h: 40px;
+    property <int> dragging: -1;
+    property <length> drag-dx: 0px;
+    property <int> trimming: -1;
+    property <bool> trim-out: false;
+
+    height: ruler + video-h + title-h + music-h + 16px;
+    background: Theme.surface-2;
+    border-radius: Theme.radius-m;
+    clip: true;
+
+    scroller := Flickable {
+        content-width: max(root.form.timeline-width + 40px, root.width);
+        // Ruler: click or drag to move the playhead.
+        Rectangle {
+            x: 0;
+            y: 0;
+            width: scroller.content-width;
+            height: root.ruler;
+            background: Theme.surface-3;
+            TouchArea {
+                mouse-cursor: MouseCursor.ew-resize;
+                pointer-event(e) => {
+                    if (e.kind == PointerEventKind.down) { root.action("seek-px", 0, (self.mouse-x - 8px) / 1px); }
+                }
+                moved => { if (self.pressed) { root.action("seek-px", 0, (self.mouse-x - 8px) / 1px); } }
+            }
+        }
+        // Video blocks.
+        for b[i] in root.form.blocks: Rectangle {
+            x: 8px + b.x + (root.dragging == i ? root.drag-dx : 0px);
+            y: root.ruler + 4px;
+            width: max(b.w - 2px, 4px);
+            height: root.video-h - 8px;
+            border-radius: Theme.radius-s;
+            background: b.missing ? Theme.live.with-alpha(0.3) : Theme.surface-3;
+            border-width: b.selected ? 2px : 1px;
+            border-color: b.selected ? Theme.accent : Theme.border;
+            clip: true;
+            opacity: root.dragging == i ? 0.75 : 1;
+            accessible-role: list-item;
+            accessible-label: b.label;
+            if b.has-thumb: Image { width: parent.width; height: parent.height; source: b.thumb; image-fit: cover; opacity: 0.85; }
+            Text { x: 6px; y: 4px; text: b.label; color: #ffffff; font-size: Theme.font-xs; font-weight: 600; }
+            if b.slow: Text { x: parent.width - self.width - 6px; y: 4px; text: "½×"; color: #ffd54a; font-size: Theme.font-xs; font-weight: 700; }
+            for e in b.events: Rectangle { x: e; y: parent.height - 10px; width: 2px; height: 8px; background: #ffd54a; }
+            // Move by dragging the body.
+            TouchArea {
+                mouse-cursor: MouseCursor.grab;
+                pointer-event(e) => {
+                    if (e.kind == PointerEventKind.down) {
+                        root.dragging = i;
+                        root.drag-dx = 0px;
+                        root.action("select-block", i, 0);
+                    } else if (e.kind == PointerEventKind.up && root.dragging == i) {
+                        root.action("drop-block", i, (b.x + root.drag-dx + b.w / 2) / 1px);
+                        root.dragging = -1;
+                        root.drag-dx = 0px;
+                    }
+                }
+                moved => { if (self.pressed) { root.drag-dx = self.mouse-x - self.pressed-x; } }
+            }
+            // Trim handles at both edges.
+            Rectangle {
+                x: 0;
+                width: 8px;
+                background: b.selected ? Theme.accent.with-alpha(0.6) : transparent;
+                TouchArea {
+                    mouse-cursor: MouseCursor.col-resize;
+                    pointer-event(e) => {
+                        if (e.kind == PointerEventKind.up) { root.action("seal", 0, 0); }
+                    }
+                    moved => { if (self.pressed) { root.action("trim-in", i, (self.mouse-x - self.pressed-x) / 1px); } }
+                }
+            }
+            Rectangle {
+                x: parent.width - 8px;
+                width: 8px;
+                background: b.selected ? Theme.accent.with-alpha(0.6) : transparent;
+                TouchArea {
+                    mouse-cursor: MouseCursor.col-resize;
+                    pointer-event(e) => {
+                        if (e.kind == PointerEventKind.up) { root.action("seal", 0, 0); }
+                    }
+                    moved => { if (self.pressed) { root.action("trim-out", i, (self.mouse-x - self.pressed-x) / 1px); } }
+                }
+            }
+        }
+        // Transition chips on the cuts.
+        for c[i] in root.form.chips: Rectangle {
+            x: 8px + c.x - 12px;
+            y: root.ruler + root.video-h / 2 - 12px;
+            width: 24px;
+            height: 24px;
+            border-radius: 12px;
+            background: c.selected ? Theme.accent : Theme.surface;
+            border-width: 1px;
+            border-color: Theme.border-strong;
+            accessible-role: button;
+            accessible-label: "Transition: " + c.label;
+            Text { text: c.label == "Cut" ? "|" : c.label == "Crossfade" ? "×" : c.label == "Whip" ? "»" : "◐"; color: c.selected ? Theme.on-accent : Theme.text; font-size: Theme.font-s; horizontal-alignment: center; vertical-alignment: center; }
+            TouchArea {
+                mouse-cursor: MouseCursor.pointer;
+                clicked => { root.action("select-transition", i, 0); }
+            }
+        }
+        // Titles.
+        for t[i] in root.form.titles: Rectangle {
+            x: 8px + t.x;
+            y: root.ruler + root.video-h + 2px;
+            width: max(t.w, 12px);
+            height: root.title-h - 4px;
+            border-radius: Theme.radius-s;
+            background: t.selected ? Theme.accent : Theme.accent.with-alpha(0.35);
+            clip: true;
+            Text { x: 6px; text: t.text; color: #ffffff; font-size: Theme.font-xs; vertical-alignment: center; overflow: elide; }
+            TouchArea {
+                mouse-cursor: MouseCursor.pointer;
+                clicked => { root.action("select-title", i, 0); }
+            }
+        }
+        // Music: waveform and beats.
+        if root.form.has-music: Rectangle {
+            x: 8px + root.form.music-x;
+            y: root.ruler + root.video-h + root.title-h + 2px;
+            width: root.form.music-w;
+            height: root.music-h - 4px;
+            border-radius: Theme.radius-s;
+            background: Theme.surface-3;
+            clip: true;
+            for h[i] in root.form.waveform: Rectangle {
+                x: i * 4px;
+                y: (parent.height - parent.height * h) / 2;
+                width: 3px;
+                height: parent.height * h;
+                background: Theme.accent.with-alpha(0.6);
+            }
+            for b in root.form.beats: Rectangle { x: b; y: 0; width: 1px; height: parent.height; background: Theme.text-faint.with-alpha(0.5); }
+            TouchArea {
+                mouse-cursor: MouseCursor.pointer;
+                clicked => { root.action("select-music", 0, 0); }
+            }
+        }
+        // Playhead.
+        Rectangle {
+            x: 8px + root.form.playhead-x;
+            y: 0;
+            width: 2px;
+            height: root.height;
+            background: Theme.live;
+        }
+    }
+}
+
+component Inspector inherits VerticalLayout {
+    in property <MontageForm> form;
+    callback action(string, int, float);
+    callback text(string, string);
+    spacing: 10px;
+    alignment: start;
+
+    if root.form.selection == "" || root.form.selection == "montage": VerticalLayout {
+        spacing: 10px;
+        SectionTitle { text: "MONTAGE"; }
+        TextField { label: "Montage name"; text: root.form.name; accepted(t) => { root.text("name", t); } }
+        Field {
+            label: "Format";
+            Select { label: "Format"; options: ["16:9", "9:16", "1:1"]; current-index: root.form.format; selected(i) => { root.action("set-format", i, 0); } }
+        }
+        Field {
+            label: "End fade";
+            NumberField { label: ""; value: root.form.fade-out; minimum: 0; maximum: 5; step: 0.1; decimals: 1; suffix: "s"; changed(v) => { root.action("fade-out", 0, v); } }
+        }
+        Field {
+            label: "Music";
+            Button { text: root.form.has-music ? "Replace…" : "Add music…"; kind: "ghost"; clicked => { root.action("pick-music", 0, 0); } }
+        }
+        Button { text: "Add title at playhead"; kind: "ghost"; has-icon: true; icon: Icons.type; clicked => { root.action("add-title", 0, 0); } }
+    }
+    if root.form.selection == "segment": VerticalLayout {
+        spacing: 10px;
+        SectionTitle { text: "CLIP"; }
+        Text { text: root.form.seg-source; color: Theme.text-muted; font-size: Theme.font-xs; overflow: elide; }
+        Text { text: root.form.seg-length; color: Theme.text-faint; font-size: Theme.font-xs; }
+        Field {
+            label: "Speed";
+            Slider { label: "Speed"; value: root.form.seg-speed; minimum: 0.25; maximum: 2; changed(v) => { root.action("speed", 0, v); } committed => { root.action("seal", 0, 0); } }
+            Text { text: round(root.form.seg-speed * 100) / 100 + "×"; width: 40px; color: Theme.text; font-size: Theme.font-s; vertical-alignment: center; }
+        }
+        Field {
+            label: "Volume";
+            Slider { label: "Clip volume"; value: root.form.seg-gain; minimum: -30; maximum: 12; changed(v) => { root.action("gain", 0, v); } committed => { root.action("seal", 0, 0); } }
+            Text { text: round(root.form.seg-gain) + " dB"; width: 40px; color: Theme.text; font-size: Theme.font-s; vertical-alignment: center; }
+        }
+        Field {
+            label: "Framing";
+            Slider { label: "Pan left or right"; value: root.form.seg-pan; minimum: -1; maximum: 1; changed(v) => { root.action("pan", 0, v); } committed => { root.action("seal", 0, 0); } }
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: start;
+            Button { text: "Split (S)"; kind: "ghost"; has-icon: true; icon: Icons.scissors; clicked => { root.action("split", 0, 0); } }
+            Button { text: "Delete"; kind: "danger"; has-icon: true; icon: Icons.trash; clicked => { root.action("delete-selected", 0, 0); } }
+        }
+    }
+    if root.form.selection == "transition": VerticalLayout {
+        spacing: 10px;
+        SectionTitle { text: "TRANSITION"; }
+        Field {
+            label: "Kind";
+            Select { label: "Transition"; options: ["Cut", "Crossfade", "Dip to black", "Whip"]; current-index: root.form.trans-kind; selected(i) => { root.action("trans-kind", i, 0); } }
+        }
+        if root.form.trans-kind != 0: Field {
+            label: "Length";
+            NumberField { label: ""; value: root.form.trans-secs; minimum: 0.1; maximum: 3; step: 0.1; decimals: 1; suffix: "s"; changed(v) => { root.action("trans-secs", 0, v); } }
+        }
+    }
+    if root.form.selection == "title": VerticalLayout {
+        spacing: 10px;
+        SectionTitle { text: "TITLE"; }
+        TextField { label: "Title text"; text: root.form.title-edit; accepted(t) => { root.text("title-edit", t); } }
+        Field {
+            label: "Style";
+            Select { label: "Title style"; options: ["Bold", "Clean"]; current-index: root.form.title-style; selected(i) => { root.action("title-style", i, 0); } }
+        }
+        Field {
+            label: "Position";
+            Select { label: "Title position"; options: ["Top", "Middle", "Bottom"]; current-index: root.form.title-anchor; selected(i) => { root.action("title-anchor", i, 0); } }
+        }
+        Field {
+            label: "Starts at";
+            NumberField { label: ""; value: root.form.title-start; minimum: 0; maximum: 3600; step: 0.1; decimals: 1; suffix: "s"; changed(v) => { root.action("title-start", 0, v); } }
+        }
+        Field {
+            label: "Lasts";
+            NumberField { label: ""; value: root.form.title-dur; minimum: 0.3; maximum: 60; step: 0.1; decimals: 1; suffix: "s"; changed(v) => { root.action("title-dur", 0, v); } }
+        }
+        Button { text: "Delete title"; kind: "danger"; has-icon: true; icon: Icons.trash; clicked => { root.action("delete-selected", 0, 0); } }
+    }
+    if root.form.selection == "music": VerticalLayout {
+        spacing: 10px;
+        SectionTitle { text: "MUSIC"; }
+        Text { text: root.form.music-name; color: Theme.text-muted; font-size: Theme.font-xs; overflow: elide; }
+        Field {
+            label: "Volume";
+            Slider { label: "Music volume"; value: root.form.music-gain; minimum: -30; maximum: 6; changed(v) => { root.action("music-gain", 0, v); } committed => { root.action("seal", 0, 0); } }
+            Text { text: round(root.form.music-gain) + " dB"; width: 40px; color: Theme.text; font-size: Theme.font-s; vertical-alignment: center; }
+        }
+        Field {
+            label: "Fade in";
+            NumberField { label: ""; value: root.form.music-fade-in; minimum: 0; maximum: 10; step: 0.5; decimals: 1; suffix: "s"; changed(v) => { root.action("music-fade-in", 0, v); } }
+        }
+        Field {
+            label: "Fade out";
+            NumberField { label: ""; value: root.form.music-fade-out; minimum: 0; maximum: 10; step: 0.5; decimals: 1; suffix: "s"; changed(v) => { root.action("music-fade-out", 0, v); } }
+        }
+        Field {
+            label: "Lower under clips";
+            NumberField { label: ""; value: root.form.duck; minimum: 0; maximum: 30; step: 1; suffix: "dB"; changed(v) => { root.action("duck", 0, v); } }
+        }
+        Button { text: "Remove music"; kind: "danger"; clicked => { root.action("clear-music", 0, 0); } }
+    }
+}
+
+component EditorPage inherits VerticalLayout {
+    in property <MontageForm> form;
+    callback action(string, int, float);
+    callback text(string, string);
+    spacing: 10px;
+
+    HorizontalLayout {
+        spacing: 12px;
+        vertical-stretch: 1;
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 8px;
+            Rectangle {
+                vertical-stretch: 1;
+                border-radius: Theme.radius-m;
+                background: #000000;
+                clip: true;
+                if root.form.has-preview: Image { width: parent.width; height: parent.height; source: root.form.preview; image-fit: contain; }
+                if root.form.error != "": Text { text: root.form.error; color: Theme.live; font-size: Theme.font-s; wrap: word-wrap; horizontal-alignment: center; }
+            }
+            HorizontalLayout {
+                spacing: 6px;
+                alignment: center;
+                IconButton { icon: Icons.skip-back; tooltip: "To the start (Home)"; clicked => { root.action("seek", 0, 0); } }
+                IconButton { icon: root.form.playing ? Icons.pause : Icons.play; tooltip: root.form.playing ? "Pause (Space)" : "Play (Space)"; size: 36px; icon-size: 20px; clicked => { root.action("play", 0, 0); } }
+                Text { text: root.form.time-text; color: Theme.text-muted; font-size: Theme.font-s; vertical-alignment: center; width: 110px; horizontal-alignment: center; }
+                IconButton { icon: Icons.undo; tooltip: "Undo (Ctrl+Z)"; enabled: root.form.can-undo; clicked => { root.action("undo", 0, 0); } }
+                IconButton { icon: Icons.redo; tooltip: "Redo (Ctrl+Y)"; enabled: root.form.can-redo; clicked => { root.action("redo", 0, 0); } }
+                IconButton { icon: Icons.zoom-out; tooltip: "Zoom out (-)"; clicked => { root.action("zoom", 0, -1); } }
+                IconButton { icon: Icons.zoom-in; tooltip: "Zoom in (=)"; clicked => { root.action("zoom", 0, 1); } }
+            }
+        }
+        Rectangle {
+            width: 280px;
+            Flickable {
+                Inspector {
+                    width: parent.width;
+                    form: root.form;
+                    action(f, i, v) => { root.action(f, i, v); }
+                    text(f, s) => { root.text(f, s); }
+                }
+            }
+        }
+    }
+    Timeline {
+        form: root.form;
+        action(f, i, v) => { root.action(f, i, v); }
+    }
+    HorizontalLayout {
+        spacing: 8px;
+        Text { text: "Space play · J K L shuttle · S split · Del delete · ← → step a frame · Ctrl+Z undo"; color: Theme.text-faint; font-size: Theme.font-xs; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+        if root.form.export-progress >= 0: Text { text: "Exporting… " + round(root.form.export-progress * 100) + "%"; color: Theme.text-muted; font-size: Theme.font-s; vertical-alignment: center; }
+        if root.form.export-progress >= 0: Button { text: "Cancel"; kind: "ghost"; clicked => { root.action("export-cancel", 0, 0); } }
+        if root.form.export-progress < 0: Select { width: 230px; label: "Export preset"; options: ["YouTube (1080p60)", "Shorts / TikTok (1080×1920)", "Same as the montage"]; current-index: root.form.export-preset; selected(i) => { root.action("export-preset", i, 0); } }
+        if root.form.export-progress < 0: HorizontalLayout {
+            spacing: 6px;
+            VerticalLayout { alignment: center; Toggle { checked: root.form.add-to-clips; toggled(v) => { root.action("add-to-clips", 0, v ? 1 : 0); } } }
+            Text { text: "Add to clips"; color: Theme.text-muted; font-size: Theme.font-s; vertical-alignment: center; }
+        }
+        if root.form.export-progress < 0: Button { text: "Export"; kind: "primary"; has-icon: true; icon: Icons.save; clicked => { root.action("export", 0, 0); } }
+    }
+}
+
+export component MontageDialog inherits Modal {
+    in property <MontageForm> form;
+    callback action(string, int, float);
+    callback text(string, string);
+    callback key(string, bool, bool);
+
+    card-width: 1240px;
+    card-top: 20px;
+    dismissable: root.form.page != "editor";
+
+    keys := FocusScope {
+        height: 0px;
+        init => { self.focus(); }
+        key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                root.dismiss();
+                return EventResult.accept;
+            }
+            if (root.form.page == "editor") {
+                root.key(e.text, e.modifiers.control, e.modifiers.shift);
+                return EventResult.accept;
+            }
+            return EventResult.reject;
+        }
+    }
+    HorizontalLayout {
+        padding: 18px;
+        padding-bottom: 4px;
+        spacing: 10px;
+        if root.form.page == "editor": IconButton { icon: Icons.chevron-up; tooltip: "All montages"; clicked => { root.action("home", 0, 0); } }
+        Text {
+            text: root.form.page == "editor" ? root.form.name : root.form.page == "wizard" ? "New montage" : "Montages";
+            color: Theme.text;
+            font-size: Theme.font-xl;
+            font-weight: 700;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        Button { text: "Done"; kind: "primary"; clicked => { root.dismiss(); } }
+    }
+    VerticalLayout {
+        padding: 18px;
+        padding-top: 8px;
+        height: 720px;
+        if root.form.page == "home": HomePage {
+            form: root.form;
+            action(f, i, v) => { root.action(f, i, v); }
+        }
+        if root.form.page == "wizard": WizardPage {
+            form: root.form;
+            action(f, i, v) => { root.action(f, i, v); }
+            text(f, s) => { root.text(f, s); }
+        }
+        if root.form.page == "editor": EditorPage {
+            form: root.form;
+            action(f, i, v) => { keys.focus(); root.action(f, i, v); }
+            text(f, s) => { root.text(f, s); }
+        }
+    }
+}

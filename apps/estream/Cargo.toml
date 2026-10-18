@@ -13,6 +13,7 @@ workspace = true
 estream-api.workspace = true
 estream-automation.workspace = true
 estream-clips.workspace = true
+estream-montage.workspace = true
 chrono.workspace = true
 crossbeam-channel.workspace = true
 estream-health.workspace = true

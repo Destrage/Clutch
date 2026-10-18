@@ -51,6 +51,7 @@ pub enum Action {
     OpenStats,
     OpenClips,
     ToggleClipMode,
+    OpenMontages,
 }
 
 /// Keyboard shortcut. `key` is the lowercase character, or a named key.
@@ -191,6 +192,7 @@ actions! {
     OpenStats, "stats", "Stats and health…", "General", None, true;
     OpenClips, "clips.open", "Clips…", "General", None, true;
     ToggleClipMode, "clips.mode", "Clip mode on / off", "Output", None, true;
+    OpenMontages, "montage.open", "Montages: make a highlight video…", "General", None, true;
     Deselect, "selection.clear", "Clear selection", "Edit", Some(Shortcut::key(Key::Escape)), false;
 }
 

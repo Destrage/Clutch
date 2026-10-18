@@ -1611,6 +1611,7 @@ dependencies = [
  "estream-gpu",
  "estream-health",
  "estream-media",
+ "estream-montage",
  "estream-project",
  "estream-vcam",
  "fastrand",

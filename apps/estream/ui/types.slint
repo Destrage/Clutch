@@ -367,6 +367,138 @@ export struct AutomationForm {
     running: bool,
 }
 
+/// A saved montage on the Montages home page.
+export struct MontageRow {
+    name: string,
+    /// e.g. "0:58 · 9:16 · Today 21:14"
+    detail: string,
+}
+
+/// Something to pick in the New montage wizard: a clip, or a highlight of a scanned recording.
+export struct PickRow {
+    title: string,
+    detail: string,
+    thumb: image,
+    has-thumb: bool,
+    picked: bool,
+}
+
+/// A recording that can be scanned for highlights.
+export struct RecordingRow {
+    name: string,
+    detail: string,
+    /// 0..1 while scanning, -1 otherwise.
+    progress: float,
+    scanned: bool,
+}
+
+/// A segment on the timeline (positions in pixels).
+export struct BlockRow {
+    x: length,
+    w: length,
+    label: string,
+    thumb: image,
+    has-thumb: bool,
+    selected: bool,
+    missing: bool,
+    slow: bool,
+    /// Event ticks, in pixels from the block's left edge.
+    events: [length],
+}
+
+/// A transition between two segments.
+export struct ChipRow {
+    x: length,
+    label: string,
+    selected: bool,
+}
+
+/// A title on its lane.
+export struct TitleRow {
+    x: length,
+    w: length,
+    text: string,
+    selected: bool,
+}
+
+/// The montage editor and the pages around it.
+export struct MontageForm {
+    /// "home" | "wizard" | "editor"
+    page: string,
+    // Home
+    montages: [MontageRow],
+    // Wizard
+    /// 0 pick, 1 style
+    step: int,
+    /// 0 clips, 1 recordings
+    source-tab: int,
+    clips: [PickRow],
+    recordings: [RecordingRow],
+    highlights: [PickRow],
+    picked-count: int,
+    music-name: string,
+    music-detail: string,
+    target: float,
+    /// 0 16:9, 1 9:16, 2 1:1
+    format: int,
+    /// 0 chronological, 1 best first
+    order: int,
+    slow-motion: bool,
+    title-text: string,
+    busy: string,
+    // Editor
+    name: string,
+    duration: float,
+    position: float,
+    time-text: string,
+    playing: bool,
+    preview: image,
+    has-preview: bool,
+    can-undo: bool,
+    can-redo: bool,
+    timeline-width: length,
+    playhead-x: length,
+    blocks: [BlockRow],
+    chips: [ChipRow],
+    titles: [TitleRow],
+    has-music: bool,
+    music-x: length,
+    music-w: length,
+    /// Waveform bar heights (0..1), one per 4 px.
+    waveform: [float],
+    /// Beat positions in pixels.
+    beats: [length],
+    /// "" | "segment" | "transition" | "title" | "music" | "montage"
+    selection: string,
+    // Inspector: segment
+    seg-speed: float,
+    seg-gain: float,
+    seg-pan: float,
+    seg-length: string,
+    seg-source: string,
+    // Inspector: transition (0 cut, 1 crossfade, 2 dip, 3 whip)
+    trans-kind: int,
+    trans-secs: float,
+    // Inspector: title
+    title-edit: string,
+    title-style: int,
+    title-anchor: int,
+    title-start: float,
+    title-dur: float,
+    // Inspector: music / montage
+    music-gain: float,
+    music-fade-in: float,
+    music-fade-out: float,
+    duck: float,
+    fade-out: float,
+    // Export
+    export-preset: int,
+    /// 0..1 while exporting, -1 otherwise.
+    export-progress: float,
+    add-to-clips: bool,
+    error: string,
+}
+
 /// One clip in the Clips view grid.
 export struct ClipRow {
     title: string,

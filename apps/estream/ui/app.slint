@@ -2,7 +2,7 @@
 
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
-import { CanvasTab, SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SourceType, PropRow, MixerStrip, AudioInspect, SettingsForm, LiveRow, DestinationRow, VideoFilterRow, MediaInspect, AutomationForm, MacroRow, TriggerRow, StepRow, ClipsForm, ClipRow, StatsForm, StatTile, StatRow, AlertRow } from "types.slint";
+import { CanvasTab, SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SourceType, PropRow, MixerStrip, AudioInspect, SettingsForm, LiveRow, DestinationRow, VideoFilterRow, MediaInspect, AutomationForm, MacroRow, TriggerRow, StepRow, ClipsForm, ClipRow, MontageForm, StatsForm, StatTile, StatRow, AlertRow } from "types.slint";
 import { VSplitter, HSplitter, TooltipLayer, Hint } from "widgets.slint";
 import { Preview } from "preview.slint";
 import { TopBar, ScenesPanel, SourcesPanel, InspectorPanel, MixerPanel, StatusBar, TransitionColumn, ProgramView, CanvasTabs } from "panels.slint";
@@ -10,6 +10,7 @@ import { CommandPalette, AddSourceDialog, SetupWizard, RecoveryPrompt, Toast, Se
 import { AutomationDialog } from "automation.slint";
 import { StatsDialog } from "stats.slint";
 import { ClipsDialog } from "clips.slint";
+import { MontageDialog } from "montage.slint";
 import { GoLiveDialog } from "golive.slint";
 
 export { Theme }
@@ -135,6 +136,11 @@ export component AppWindow inherits Window {
     in property <ClipsForm> clips-form;
     callback clips-action(string, int, float);
     callback clips-text(string, string);
+    in-out property <bool> montage-open;
+    in property <MontageForm> montage-form;
+    callback montage-action(string, int, float);
+    callback montage-text(string, string);
+    callback montage-key(string, bool, bool);
     in-out property <bool> golive-open;
     in property <[string]> golive-platforms;
     in property <int> golive-platform: -1;
@@ -528,6 +534,18 @@ export component AppWindow inherits Window {
         more-options => { root.golive-more(); }
         dismiss => {
             root.golive-open = false;
+            main-keys.focus();
+        }
+    }
+
+    if root.montage-open: MontageDialog {
+        form: root.montage-form;
+        action(f, i, v) => { root.montage-action(f, i, v); }
+        text(f, s) => { root.montage-text(f, s); }
+        key(t, c, s) => { root.montage-key(t, c, s); }
+        dismiss => {
+            root.montage-action("close", 0, 0);
+            root.montage-open = false;
             main-keys.focus();
         }
     }

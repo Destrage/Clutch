@@ -6,6 +6,7 @@ mod actions;
 mod app;
 mod clips;
 mod interact;
+mod montage;
 mod presets;
 mod secret;
 mod settings;

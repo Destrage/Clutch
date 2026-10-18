@@ -133,6 +133,8 @@ pub struct App {
     clips_ui: crate::clips::ClipsUi,
     /// Settings → Clips: the game whose auto-clip rules are shown.
     clip_rule_game: usize,
+    /// Montages: the saved ones, the New montage wizard and the editor.
+    montage_ui: crate::montage::MontageUi,
 }
 
 /// What the shader editor dialog applies to.
@@ -472,6 +474,7 @@ impl App {
             clip_ask: None,
             clips_ui: crate::clips::ClipsUi::default(),
             clip_rule_game: 0,
+            montage_ui: crate::montage::MontageUi::default(),
         };
         window.set_scenes(ModelRc::from(app.scenes_model.clone()));
         window.set_layers(ModelRc::from(app.layers_model.clone()));
@@ -879,6 +882,7 @@ impl App {
         self.tick_api();
         self.tick_clips();
         self.tick_clips_view();
+        self.tick_montages();
         self.tick_automation();
         if self.health_at.elapsed() >= Duration::from_secs(1) {
             self.health_at = Instant::now();
@@ -2379,6 +2383,117 @@ impl App {
         }
     }
 
+    // ------------------------------------------------------------ montages
+
+    /// Opens Montages (`wizard`: straight into a new montage).
+    fn open_montages(&mut self, wizard: bool) {
+        let ctx = crate::montage::Ctx {
+            gpu: &self.gpu,
+            montages: self.settings.recording.folder.join("Montages"),
+            recordings: self.settings.recording.folder.clone(),
+            library: &self.clipper.library,
+        };
+        if wizard {
+            self.montage_ui.new_with_clips(&ctx, Vec::new());
+        } else {
+            self.montage_ui.open(&ctx);
+        }
+        self.refresh_montages();
+        if let Some(w) = self.window() {
+            w.set_clips_open(false);
+            w.set_montage_open(true);
+        }
+    }
+
+    fn refresh_montages(&mut self) {
+        let Some(w) = self.window() else { return };
+        let ctx = crate::montage::Ctx {
+            gpu: &self.gpu,
+            montages: self.settings.recording.folder.join("Montages"),
+            recordings: self.settings.recording.folder.clone(),
+            library: &self.clipper.library,
+        };
+        w.set_montage_form(self.montage_ui.form(&ctx));
+    }
+
+    fn tick_montages(&mut self) {
+        let open = self.window().is_some_and(|w| w.get_montage_open());
+        let ctx = crate::montage::Ctx {
+            gpu: &self.gpu,
+            montages: self.settings.recording.folder.join("Montages"),
+            recordings: self.settings.recording.folder.clone(),
+            library: &self.clipper.library,
+        };
+        let (changed, effects) = self.montage_ui.tick(&ctx);
+        self.montage_effects(effects);
+        if open && changed {
+            self.refresh_montages();
+        }
+    }
+
+    fn montage_effects(&mut self, effects: Vec<crate::montage::Effect>) {
+        use crate::montage::Effect;
+        for effect in effects {
+            match effect {
+                Effect::Toast(text, error) => self.toast(text, error),
+                Effect::AddClip {
+                    path,
+                    title,
+                    duration,
+                } => {
+                    let meta = crate::montage::clip_meta(&title, duration);
+                    match self.clipper.library.add(&path, meta) {
+                        Ok(_) => self.clipper.make_thumbnail(path.clone(), duration / 2.0),
+                        Err(e) => {
+                            self.toast(format!("Couldn't add the montage to clips: {e}"), true)
+                        }
+                    }
+                    self.last_output = Some(path);
+                }
+            }
+        }
+    }
+
+    pub fn montage_action(&mut self, field: &str, index: i32, value: f32) {
+        if field == "close" {
+            self.montage_ui.close();
+            return;
+        }
+        let ctx = crate::montage::Ctx {
+            gpu: &self.gpu,
+            montages: self.settings.recording.folder.join("Montages"),
+            recordings: self.settings.recording.folder.clone(),
+            library: &self.clipper.library,
+        };
+        let effects = self.montage_ui.action(&ctx, field, index, value);
+        self.montage_effects(effects);
+        self.refresh_montages();
+    }
+
+    pub fn montage_text(&mut self, field: &str, text: &str) {
+        let ctx = crate::montage::Ctx {
+            gpu: &self.gpu,
+            montages: self.settings.recording.folder.join("Montages"),
+            recordings: self.settings.recording.folder.clone(),
+            library: &self.clipper.library,
+        };
+        let effects = self.montage_ui.text(&ctx, field, text);
+        self.montage_effects(effects);
+        self.refresh_montages();
+    }
+
+    pub fn montage_key(&mut self, text: &str, ctrl: bool, shift: bool) {
+        let ctx = crate::montage::Ctx {
+            gpu: &self.gpu,
+            montages: self.settings.recording.folder.join("Montages"),
+            recordings: self.settings.recording.folder.clone(),
+            library: &self.clipper.library,
+        };
+        let effects = self.montage_ui.key(&ctx, text, ctrl, shift);
+        self.montage_effects(effects);
+        self.refresh_montages();
+    }
+
     fn open_clips(&mut self) {
         self.clipper.library.refresh();
         self.clips_ui.refreshed_at = Instant::now();
@@ -2646,6 +2761,10 @@ impl App {
                 self.clips_ui.start_trim(source, output, replace);
             }
             "trim-cancel" => self.clips_ui.cancel_trim(),
+            "make-montage" => {
+                self.open_montages(true);
+                return;
+            }
             _ => {}
         }
         self.refresh_clips();
@@ -5838,6 +5957,7 @@ impl App {
             Action::OpenAutomation => self.open_automation(),
             Action::OpenStats => self.open_stats(),
             Action::OpenClips => self.open_clips(),
+            Action::OpenMontages => self.open_montages(false),
             Action::ToggleClipMode => {
                 self.settings.clips.mode = !self.settings.clips.mode;
                 self.settings.save(&self.paths.settings());
@@ -6664,6 +6784,9 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     on!(on_automation_key, |a, t, c, al, s, m| a
         .automation_key(&t, c, al, s, m));
     on!(on_clips_action, |a, f, i, v| a.clips_action(&f, i, v));
+    on!(on_montage_action, |a, f, i, v| a.montage_action(&f, i, v));
+    on!(on_montage_text, |a, f, s| a.montage_text(&f, &s));
+    on!(on_montage_key, |a, t, c, s| a.montage_key(&t, c, s));
     on!(on_clips_text, |a, f, s| a.clips_text(&f, &s));
     on!(on_settings_text, |a, k, v| a.settings_text(&k, &v));
     on!(on_live_toggle, |a, i| a.live_toggle(i.max(0) as usize));
