@@ -142,3 +142,20 @@ fn bad_ranges_are_refused() {
     );
     assert!(!output.exists());
 }
+
+#[test]
+fn thumbnail_is_a_small_jpeg_of_the_requested_frame() {
+    let (dir, input) = copy_of("thumb");
+    let jpg = dir.join("clip.jpg");
+    let t = estream_media::thumbnail::thumbnail(&input, 3.0, 320, &jpg).unwrap();
+    assert!((t - 3.0).abs() < 0.034, "frame at {t}");
+    let bytes = std::fs::read(&jpg).unwrap();
+    assert_eq!(&bytes[..3], &[0xFF, 0xD8, 0xFF], "JPEG signature");
+    let p = probe(&jpg);
+    let (_, w, h) = p.video.clone().unwrap();
+    assert_eq!((w, h), (320, 180));
+
+    // Past the end: the last frame is used.
+    let t = estream_media::thumbnail::thumbnail(&input, 60.0, 320, &jpg).unwrap();
+    assert!(t > 5.5 && t < 6.2, "last frame at {t}");
+}
