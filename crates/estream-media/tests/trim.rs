@@ -190,3 +190,40 @@ fn audio_decodes_to_48k_stereo_from_any_point() {
     .unwrap();
     assert_eq!(chunks, 3);
 }
+
+#[test]
+fn frame_reader_gives_the_frame_at_any_time() {
+    use estream_media::frames::FrameReader;
+    let (_dir, input) = copy_of("frames");
+    let mut r = FrameReader::open(&input).unwrap();
+    assert_eq!((r.width, r.height), (640, 360));
+    assert!((r.fps - 30.0).abs() < 0.5, "fps {}", r.fps);
+    let frame = 1.0 / 30.0;
+    let time = |r: &mut FrameReader, t: f64| r.frame_at(t).unwrap().map(|f| f.time).unwrap();
+    // Exact frames, then stepping forward one frame at a time.
+    let t = time(&mut r, 2.4);
+    assert!(t <= 2.4 + frame / 2.0 && t > 2.4 - frame, "at 2.4 got {t}");
+    let mut last = t;
+    for k in 1..=30 {
+        let want = 2.4 + k as f64 * frame;
+        let got = time(&mut r, want);
+        assert!(got > last, "step {k}: {got} after {last}");
+        assert!(
+            (got - want).abs() <= frame / 2.0 + 1e-3,
+            "step {k}: {got} for {want}"
+        );
+        last = got;
+    }
+    // Back in time (seek), far ahead (seek), the same time twice.
+    let back = time(&mut r, 1.0);
+    assert!((back - 1.0).abs() <= frame, "back {back}");
+    let ahead = time(&mut r, 5.5);
+    assert!((ahead - 5.5).abs() <= frame, "ahead {ahead}");
+    assert_eq!(time(&mut r, 5.5), ahead);
+    // Before the start: the first frame; past the end: the last one.
+    assert!(time(&mut r, -1.0) < frame);
+    let end = time(&mut r, 100.0);
+    assert!(end > 5.5 && end < 6.2, "end {end}");
+    let f = r.frame_at(3.0).unwrap().unwrap();
+    assert_eq!(f.data.len(), 640 * 360 * 3 / 2);
+}

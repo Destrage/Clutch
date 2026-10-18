@@ -4,7 +4,7 @@
 - [x] 0.1 Narrow the editing non-goal and add `add-clips` / `add-montage-editor` to the roadmap in `openspec/project.md`
 
 ## 1. Media
-- [ ] 1.1 Frame-accurate seeking decoder (hardware decode to GPU textures, look-ahead)
+- [x] 1.1 Frame-accurate seeking decoder (software decode to NV12, uploaded like media sources; hardware decode later)
 - [x] 1.2 Offline audio decode to 48 kHz f32 (mono mix for analysis, stereo for render)
 
 ## 2. Montage core (`crates/estream-montage`)

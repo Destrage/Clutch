@@ -100,11 +100,14 @@ It is deterministic for the same inputs, so it can be tested with snapshots of t
 
 ## Rendering (shared by preview and export)
 - **Decoding:**
-  - one `SegmentDecoder` per active segment (at most 2 during a transition);
-  - hardware decode (D3D11VA) into GPU textures where available, using the media source path
-    from `estream-media::player`;
-  - frame-accurate seek: seek to the keyframe before the target, then decode forward;
-  - each decoder looks ahead 8 frames.
+  - one `estream_media::frames::FrameReader` per source in use (at most 2 during a
+    transition), kept open while its segments play;
+  - software decode (multi-threaded) to NV12 with the media source's converter, uploaded with
+    the GPU's existing `YuvConverter` (the same path media sources use). Hardware decode
+    straight into textures can replace it later without changing the renderer;
+  - frame-accurate: asking for an earlier time, or more than 3 s ahead, seeks to the keyframe
+    before it and decodes forward; asking for the next frames just decodes on (one frame of
+    look-ahead decides whether the next frame is due).
 - **Compositing** on a wgpu render target of the montage format:
   - each segment is drawn with crop → scale (Lanczos at export, bilinear in preview);
   - transitions are shaders (crossfade mix, dip, whip with a directional blur and offset);

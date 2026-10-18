@@ -5,6 +5,7 @@ pub use ffmpeg_next as ffmpeg;
 
 pub mod audio_file;
 pub mod encode;
+pub mod frames;
 pub mod media_source;
 pub mod multistream;
 pub mod mux;
