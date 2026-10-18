@@ -1596,7 +1596,7 @@ checksum = "0b5343afd4a8365a643ac588dab4cf234a190c7f6c88c9f6dd6ffe00837661b7"
 
 [[package]]
 name = "estream"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1630,7 +1630,7 @@ dependencies = [
 
 [[package]]
 name = "estream-api"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "base64",
  "crossbeam-channel",
@@ -1654,7 +1654,7 @@ dependencies = [
 
 [[package]]
 name = "estream-audio"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "cpal",
  "estream-core",
@@ -1669,7 +1669,7 @@ dependencies = [
 
 [[package]]
 name = "estream-automation"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "crossbeam-channel",
  "estream-api",
@@ -1683,7 +1683,7 @@ dependencies = [
 
 [[package]]
 name = "estream-browser"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "cef",
  "estream-shm",
@@ -1693,7 +1693,7 @@ dependencies = [
 
 [[package]]
 name = "estream-capture"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "cosmic-text",
  "crossbeam-channel",
@@ -1715,7 +1715,7 @@ dependencies = [
 
 [[package]]
 name = "estream-clips"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "chrono",
  "estream-core",
@@ -1730,7 +1730,7 @@ dependencies = [
 
 [[package]]
 name = "estream-core"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "glam",
  "serde",
@@ -1740,7 +1740,7 @@ dependencies = [
 
 [[package]]
 name = "estream-engine"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "arc-swap",
  "bytemuck",
@@ -1763,7 +1763,7 @@ dependencies = [
 
 [[package]]
 name = "estream-gpu"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "bytemuck",
  "estream-core",
@@ -1778,14 +1778,14 @@ dependencies = [
 
 [[package]]
 name = "estream-health"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "windows",
 ]
 
 [[package]]
 name = "estream-media"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "chrono",
  "crossbeam-channel",
@@ -1804,7 +1804,7 @@ dependencies = [
 
 [[package]]
 name = "estream-montage"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "cpal",
  "estream-audio",
@@ -1822,7 +1822,7 @@ dependencies = [
 
 [[package]]
 name = "estream-project"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "estream-core",
  "glam",
@@ -1834,14 +1834,14 @@ dependencies = [
 
 [[package]]
 name = "estream-shm"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "windows",
 ]
 
 [[package]]
 name = "estream-vcam"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "estream-shm",
  "png",
@@ -7265,7 +7265,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "image",
  "uuid",
