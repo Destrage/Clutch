@@ -880,6 +880,18 @@ pub(crate) fn convert_audio(
     decoded: &frame::Audio,
     resampler: &mut Option<software::resampling::Context>,
 ) -> Result<Vec<f32>, String> {
+    // WAV (and some other formats) leave the channel order unspecified, but the resampler
+    // compares layouts exactly and rejects such frames ("input changed"). Give them the
+    // default layout for their channel count.
+    let fixed;
+    let decoded = if decoded.channel_layout().is_empty() {
+        let mut f = decoded.clone();
+        f.set_channel_layout(ffmpeg::ChannelLayout::default(decoded.channels() as i32));
+        fixed = f;
+        &fixed
+    } else {
+        decoded
+    };
     if resampler.is_none() {
         let layout = if decoded.channel_layout().channels() > 0 {
             decoded.channel_layout()

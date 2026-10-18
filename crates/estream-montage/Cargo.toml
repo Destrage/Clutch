@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 estream-core.workspace = true
 estream-clips.workspace = true
+estream-media = { path = "../estream-media" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

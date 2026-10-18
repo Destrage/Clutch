@@ -54,6 +54,18 @@ impl EventKind {
         }
     }
 
+    /// Seconds before and after the event a highlight of it covers (the auto-clip defaults).
+    pub fn window(&self) -> (f64, f64) {
+        match self {
+            EventKind::Manual => (30.0, 0.0),
+            EventKind::Kill | EventKind::Death => (10.0, 3.0),
+            EventKind::MultiKill { .. } | EventKind::Ace => (15.0, 4.0),
+            EventKind::RoundWin | EventKind::MatchWin => (15.0, 5.0),
+            EventKind::Objective { .. } => (12.0, 3.0),
+            EventKind::Hype => (12.0, 4.0),
+        }
+    }
+
     /// How highlight-worthy the event is, 0..=1 (used to pick a clip's name and by montages).
     pub fn weight(&self) -> f32 {
         match self {

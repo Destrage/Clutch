@@ -48,6 +48,16 @@ pub fn init() {
     });
 }
 
+/// A media file's duration in seconds.
+pub fn probe_duration(path: &std::path::Path) -> Result<f64, MediaError> {
+    init();
+    let input = ffmpeg::format::input(path)?;
+    match input.duration() {
+        d if d > 0 => Ok(d as f64 / f64::from(ffmpeg::ffi::AV_TIME_BASE)),
+        _ => Err(MediaError::Io("the file's length is unknown".into())),
+    }
+}
+
 /// libavutil version, e.g. `60.8.100`.
 pub fn version() -> String {
     let v = ffmpeg::util::version();

@@ -6,6 +6,7 @@
 pub mod beats;
 pub mod history;
 pub mod model;
+pub mod scan;
 
 pub use history::{History, MontageCommand};
 pub use model::{
