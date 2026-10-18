@@ -11,7 +11,7 @@
 - [x] 2.3 Hype detector (live from meters, offline `scan`)
 - [x] 2.4 CS2 / Dota 2 GSI: Steam library lookup, config writer, token-checked HTTP listener, event diffing
 - [x] 2.5 League of Legends Live Client Data poller
-- [ ] 2.6 Library: sidecars, index scan + watcher, delete, storage cap
+- [x] 2.6 Library: sidecars, index scan + refresh, delete, storage cap
 
 ## 3. Automation
 - [ ] 3.1 `Trigger::GameEvent` and `Step::SaveClip` (project model, runner, macro editor)

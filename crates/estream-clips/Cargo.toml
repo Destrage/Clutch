@@ -10,6 +10,7 @@ description = "Clipping for eStream: game detection, game integrations, hype det
 workspace = true
 
 [dependencies]
+chrono = { workspace = true, features = ["serde"] }
 estream-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true

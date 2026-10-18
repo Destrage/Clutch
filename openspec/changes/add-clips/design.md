@@ -111,7 +111,7 @@ Default auto-clip windows (each one editable per event):
   of the clip.
 - **Index:**
   - built in memory by scanning sidecars at startup, on a background thread;
-  - a folder watcher picks up changes;
+  - `refresh()` rescans the folder (when the Clips view opens and every 30 s while it is open), so clips added or removed outside eStream show up without a watcher dependency;
   - a clip file without a sidecar is still listed, as manual with no game;
   - deleting a clip removes the clip, its sidecar and its thumbnail.
 - **Storage cap:** after each save, if the auto-clip total is over the cap, the oldest auto
