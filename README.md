@@ -1,6 +1,6 @@
 # Clutch
 
-A modern streaming and recording studio written from scratch in Rust. It is an alternative to OBS: a wgpu compositor, a Slint UI and FFmpeg encoding.
+Stream, record and clip your best moments, then cut them into beat-synced montages. Clutch is a modern studio written from scratch in Rust, with a wgpu compositor, a Slint UI and FFmpeg encoding.
 
 **Features so far:**
 - scenes and sources: display, window and camera capture, media files and playlists, browser pages, test patterns;
