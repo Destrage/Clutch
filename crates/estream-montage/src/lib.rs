@@ -4,6 +4,7 @@
 //! Nothing here touches the live studio engine; montage work runs on its own threads.
 
 pub mod assemble;
+pub mod audio;
 pub mod beats;
 pub mod history;
 pub mod model;

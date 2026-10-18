@@ -119,9 +119,13 @@ It is deterministic for the same inputs, so it can be tested with snapshots of t
   - titles reuse the text source renderer (`estream-capture::media::text`) to draw to textures,
     with fade/slide-in presets.
 - **Audio:**
-  - clip audio is resampled for speed changes (`rubato`, already used in `estream-audio`);
-  - pitch is kept for 0.5×–2× by time-stretching (WSOLA, in-house), and plain resampling is
-    used below that;
+  - the whole timeline is mixed into one 48 kHz stereo buffer (montages are short); each
+    segment's source range is decoded once and cached by range, so edits don't decode again;
+  - speed: 0.5×–2× keeps the pitch by time-stretching (WSOLA, in-house: 1024-frame Hann
+    windows every 512 frames, each placed where it best continues the last); below 0.5× it's
+    plain linear resampling, so very slow motion drops in pitch;
+  - transitions: equal-power crossfade for crossfades and whips; dip to black fades out over
+    the first half and in over the second;
   - music is mixed with fades;
   - ducking: the music drops by *d* dB (default 8) when clip audio is above −35 dBFS, with
     150 ms attack and 600 ms release.

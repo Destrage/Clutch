@@ -3,37 +3,9 @@
 use estream_clips::markers::{Marker, Markers};
 use estream_clips::{EventKind, Sensitivity};
 use estream_montage::scan::scan;
-use std::io::Write;
-use std::path::Path;
+mod common;
 
-/// Writes 16-bit stereo PCM at 48 kHz.
-fn write_wav(path: &Path, samples: &[f32]) {
-    let data: Vec<u8> = samples
-        .iter()
-        .flat_map(|s| {
-            let v = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
-            let b = v.to_le_bytes();
-            [b[0], b[1], b[0], b[1]] // same on both channels
-        })
-        .collect();
-    let mut f = std::fs::File::create(path).unwrap();
-    let rate = 48_000u32;
-    let mut header = Vec::new();
-    header.extend(b"RIFF");
-    header.extend((36 + data.len() as u32).to_le_bytes());
-    header.extend(b"WAVEfmt ");
-    header.extend(16u32.to_le_bytes());
-    header.extend(1u16.to_le_bytes()); // PCM
-    header.extend(2u16.to_le_bytes()); // stereo
-    header.extend(rate.to_le_bytes());
-    header.extend((rate * 4).to_le_bytes());
-    header.extend(4u16.to_le_bytes());
-    header.extend(16u16.to_le_bytes());
-    header.extend(b"data");
-    header.extend((data.len() as u32).to_le_bytes());
-    f.write_all(&header).unwrap();
-    f.write_all(&data).unwrap();
-}
+use common::write_wav;
 
 #[test]
 fn scans_a_recording_with_markers_and_a_loud_moment() {
@@ -54,7 +26,8 @@ fn scans_a_recording_with_markers_and_a_loud_moment() {
             (rng as f32 / u32::MAX as f32 - 0.5) * 2.0 * gain
         })
         .collect();
-    write_wav(&recording, &samples);
+    let stereo: Vec<f32> = samples.iter().flat_map(|s| [*s, *s]).collect();
+    write_wav(&recording, &stereo);
 
     let mut markers = Markers::default();
     for (kind, at) in [(EventKind::Kill, 20.0), (EventKind::Ace, 30.0)] {
