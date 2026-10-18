@@ -138,7 +138,7 @@ pub fn summary(purpose: Purpose, d: &Detected) -> Vec<String> {
     if !camera_first {
         lines.push(format!("Screen: {screen}"));
         if purpose == Purpose::Gaming {
-            lines.push("Your game, whenever one is fullscreen".into());
+            lines.push("Your game and its sound, whenever one is fullscreen".into());
         }
         if let Some((_, name)) = &d.camera {
             lines.push(format!("Webcam in the corner: {name}"));

@@ -6,7 +6,7 @@ import { CanvasTab, SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry,
 import { VSplitter, HSplitter, TooltipLayer, Hint } from "widgets.slint";
 import { Preview } from "preview.slint";
 import { TopBar, ScenesPanel, SourcesPanel, InspectorPanel, MixerPanel, StatusBar, TransitionColumn, ProgramView, CanvasTabs } from "panels.slint";
-import { CommandPalette, AddSourceDialog, SetupWizard, RecoveryPrompt, Toast, SettingsDialog, LivePanel, ShaderDialog } from "overlays.slint";
+import { CommandPalette, AddSourceDialog, SetupWizard, SetupDialog, RecoveryPrompt, Toast, SettingsDialog, LivePanel, ShaderDialog } from "overlays.slint";
 import { AutomationDialog } from "automation.slint";
 import { StatsDialog } from "stats.slint";
 import { ClipsDialog } from "clips.slint";
@@ -25,7 +25,7 @@ export component AppWindow inherits Window {
     background: Theme.bg;
     default-font-family: Theme.font-family;
     default-font-size: Theme.font-m;
-    icon: Icons.radio;
+    icon: Icons.logo;
 
     // "loading" | "wizard" | "recovery" | "ready"
     in property <string> startup: "loading";
@@ -92,8 +92,21 @@ export component AppWindow inherits Window {
     in-out property <string> renaming-scene;
 
     // Top bar and status
-    in property <string> collection-name: "Untitled";
+    in property <string> collection-name: "My setup";
     in property <string> canvas-info;
+    in property <string> canvas-tag;
+    // Setups (scene collections): the list, the open one, and the name/delete dialog.
+    in property <[string]> setups;
+    in property <int> setup-index;
+    in-out property <string> setup-dialog;
+    in-out property <string> setup-dialog-name;
+    in property <string> setup-dialog-error;
+    in property <string> wizard-setup-name;
+    callback setup-pick(int);
+    callback setup-action(string);
+    callback setup-confirm(string);
+    callback setup-cancel();
+    callback wizard-cancel();
     in property <string> gpu-info;
     in property <bool> dirty;
     in property <bool> can-undo;
@@ -248,6 +261,11 @@ export component AppWindow inherits Window {
             TopBar {
                 collection-name: root.collection-name;
                 canvas-info: root.canvas-info;
+                canvas-tag: root.canvas-tag;
+                setups: root.setups;
+                setup-index: root.setup-index;
+                setup-pick(i) => { root.setup-pick(i); }
+                setup-action(id) => { root.setup-action(id); }
                 dirty: root.dirty;
                 can-undo: root.can-undo;
                 can-redo: root.can-redo;
@@ -580,8 +598,22 @@ export component AppWindow inherits Window {
         summary: root.wizard-summary;
         custom <=> root.wizard-custom;
         current <=> root.wizard-current;
+        setup-name: root.wizard-setup-name;
         purpose-changed(i) => { root.wizard-purpose-changed(i); }
         create => { root.wizard-create(); }
+        cancel => { root.wizard-cancel(); main-keys.focus(); }
+    }
+
+    if root.setup-dialog != "": SetupDialog {
+        mode: root.setup-dialog;
+        current-name: root.collection-name;
+        name <=> root.setup-dialog-name;
+        error: root.setup-dialog-error;
+        confirm(t) => {
+            root.setup-confirm(t);
+            if (root.setup-dialog == "") { main-keys.focus(); }
+        }
+        cancel => { root.setup-cancel(); main-keys.focus(); }
     }
 
     if root.startup == "recovery": RecoveryPrompt {

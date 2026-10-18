@@ -6,9 +6,181 @@ import {
     PanelHeader, SectionTitle, Badge, EmptyState, Hint,
 } from "widgets.slint";
 
+// The open setup (scenes, sources and audio) as a menu: switch, new, rename, duplicate, delete.
+component SetupMenu inherits Rectangle {
+    in property <string> name;
+    in property <bool> dirty;
+    /// Short canvas tag ("1080p60") and the full description for the tooltip.
+    in property <string> canvas-tag;
+    in property <string> canvas-info;
+    in property <[string]> setups;
+    in property <int> current;
+    callback pick(int);
+    callback act(string);
+
+    property <string> tip: "Your setup: scenes, sources and audio. Click to switch or manage setups. Canvas: " + root.canvas-info;
+    height: 28px;
+    width: row.preferred-width;
+    border-radius: Theme.radius-s;
+    background: ta.has-hover || popup-open ? Theme.hover : Theme.surface-2;
+    accessible-role: combobox;
+    accessible-label: "Setup";
+    accessible-value: root.name;
+    property <bool> popup-open: false;
+
+    row := HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 8px;
+        spacing: 6px;
+        VerticalLayout {
+            alignment: center;
+            Icon { source: Icons.layers; size: 14px; }
+        }
+        Text {
+            text: root.name + (root.dirty ? " •" : "");
+            color: Theme.text;
+            font-size: Theme.font-s;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                height: 18px;
+                width: tag.preferred-width + 10px;
+                border-radius: 4px;
+                background: Theme.surface-3;
+                tag := Text {
+                    text: root.canvas-tag;
+                    color: Theme.text-muted;
+                    font-size: Theme.font-xs;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            Icon { source: Icons.chevron-down; size: 14px; }
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        clicked => {
+            Hint.text = "";
+            popup.show();
+        }
+        changed has-hover => {
+            if (self.has-hover) {
+                Hint.text = root.tip;
+                Hint.x = root.absolute-position.x + root.width / 2;
+                Hint.y = root.absolute-position.y + root.height + 6px;
+            } else if (Hint.text == root.tip) {
+                Hint.text = "";
+            }
+        }
+    }
+    popup := PopupWindow {
+        x: 0;
+        y: root.height + 4px;
+        width: max(root.width, 240px);
+        Rectangle {
+            background: Theme.surface-3;
+            border-radius: Theme.radius-m;
+            border-width: 1px;
+            border-color: Theme.border-strong;
+            drop-shadow-blur: 16px;
+            drop-shadow-color: #00000060;
+            VerticalLayout {
+                padding: 4px;
+                HorizontalLayout {
+                    padding-left: 8px;
+                    Text {
+                        text: "SETUPS";
+                        color: Theme.text-faint;
+                        font-size: Theme.font-xs;
+                        font-weight: 700;
+                        height: 24px;
+                        vertical-alignment: center;
+                    }
+                }
+                for setup[i] in root.setups: Rectangle {
+                    height: 28px;
+                    border-radius: Theme.radius-s;
+                    background: setup-ta.has-hover ? Theme.hover : transparent;
+                    accessible-role: button;
+                    accessible-label: setup;
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        spacing: 8px;
+                        VerticalLayout {
+                            alignment: center;
+                            width: 14px;
+                            if i == root.current: Icon { source: Icons.check; size: 14px; tint: Theme.accent; }
+                        }
+                        Text {
+                            text: setup;
+                            color: Theme.text;
+                            font-size: Theme.font-m;
+                            font-weight: i == root.current ? 600 : 400;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                    }
+                    setup-ta := TouchArea {
+                        clicked => { root.pick(i); }
+                    }
+                }
+                Rectangle { height: 1px; background: Theme.border; }
+                for item in [
+                    { id: "new", label: "New setup…", icon: Icons.plus, danger: false },
+                    { id: "rename", label: "Rename…", icon: Icons.pencil, danger: false },
+                    { id: "duplicate", label: "Duplicate", icon: Icons.copy, danger: false },
+                    { id: "delete", label: "Delete…", icon: Icons.trash, danger: true },
+                ]: Rectangle {
+                    // Deleting the only setup isn't possible.
+                    property <bool> enabled: item.id != "delete" || root.setups.length > 1;
+                    height: 28px;
+                    border-radius: Theme.radius-s;
+                    background: item-ta.has-hover && self.enabled ? Theme.hover : transparent;
+                    opacity: self.enabled ? 1 : 0.4;
+                    accessible-role: button;
+                    accessible-label: item.label;
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        spacing: 8px;
+                        VerticalLayout {
+                            alignment: center;
+                            width: 14px;
+                            Icon { source: item.icon; size: 14px; tint: item.danger ? Theme.live : Theme.text-muted; }
+                        }
+                        Text {
+                            text: item.label;
+                            color: item.danger ? Theme.live : Theme.text;
+                            font-size: Theme.font-m;
+                            vertical-alignment: center;
+                        }
+                    }
+                    item-ta := TouchArea {
+                        enabled: parent.enabled;
+                        clicked => { root.act(item.id); }
+                    }
+                }
+            }
+        }
+    }
+}
+
 export component TopBar inherits Rectangle {
     in property <string> collection-name;
     in property <string> canvas-info;
+    in property <string> canvas-tag;
+    in property <[string]> setups;
+    in property <int> setup-index;
+    callback setup-pick(int);
+    callback setup-action(string);
     in property <bool> dirty;
     in property <bool> can-undo;
     in property <bool> can-redo;
@@ -50,13 +222,7 @@ export component TopBar inherits Rectangle {
             spacing: 8px;
             VerticalLayout {
                 alignment: center;
-                Rectangle {
-                    width: 26px;
-                    height: 26px;
-                    border-radius: 8px;
-                    background: @linear-gradient(135deg, Theme.accent 0%, #b06cff 100%);
-                    Icon { source: Icons.radio; size: 15px; tint: #ffffff; }
-                }
+                Image { source: Icons.logo; width: 26px; height: 26px; }
             }
             Text {
                 text: "Clutch";
@@ -69,32 +235,15 @@ export component TopBar inherits Rectangle {
         Rectangle { width: 10px; }
         VerticalLayout {
             alignment: center;
-            Rectangle {
-                height: 28px;
-                border-radius: Theme.radius-s;
-                background: Theme.surface-2;
-                width: coll.preferred-width + 20px;
-                coll := HorizontalLayout {
-                    padding-left: 10px;
-                    padding-right: 10px;
-                    spacing: 6px;
-                    VerticalLayout {
-                        alignment: center;
-                        Icon { source: Icons.folder; size: 14px; }
-                    }
-                    Text {
-                        text: root.collection-name + (root.dirty ? " •" : "");
-                        color: Theme.text;
-                        font-size: Theme.font-s;
-                        vertical-alignment: center;
-                    }
-                    Text {
-                        text: root.canvas-info;
-                        color: Theme.text-faint;
-                        font-size: Theme.font-s;
-                        vertical-alignment: center;
-                    }
-                }
+            SetupMenu {
+                name: root.collection-name;
+                dirty: root.dirty;
+                canvas-tag: root.canvas-tag;
+                canvas-info: root.canvas-info;
+                setups: root.setups;
+                current: root.setup-index;
+                pick(i) => { root.setup-pick(i); }
+                act(id) => { root.setup-action(id); }
             }
         }
         VerticalLayout {

@@ -241,8 +241,11 @@ export component SetupWizard inherits Modal {
     in-out property <int> current;
     /// Show the resolution list (otherwise the purpose decides).
     in-out property <bool> custom;
+    /// A setup made from the menu (not the first run): another title, and Cancel.
+    in property <string> setup-name;
     callback purpose-changed(int);
     callback create();
+    callback cancel();
 
     card-width: 640px;
     dismissable: false;
@@ -252,17 +255,11 @@ export component SetupWizard inherits Modal {
         spacing: 16px;
         HorizontalLayout {
             spacing: 14px;
-            Rectangle {
-                width: 44px;
-                height: 44px;
-                border-radius: 12px;
-                background: @linear-gradient(135deg, Theme.accent 0%, #b06cff 100%);
-                Icon { source: Icons.radio; size: 22px; tint: #ffffff; }
-            }
+            Image { source: Icons.logo; width: 44px; height: 44px; }
             VerticalLayout {
                 alignment: center;
                 spacing: 2px;
-                Text { text: "Welcome to Clutch"; color: Theme.text; font-size: 22px; font-weight: 700; }
+                Text { text: root.setup-name == "" ? "Welcome to Clutch" : "New setup: " + root.setup-name; color: Theme.text; font-size: 22px; font-weight: 700; }
                 Text { text: "What will you use it for? We'll set everything up for you."; color: Theme.text-muted; font-size: Theme.font-m; }
             }
         }
@@ -379,10 +376,73 @@ export component SetupWizard inherits Modal {
                 clicked => { root.custom = !root.custom; }
             }
             Rectangle { horizontal-stretch: 1; }
+            if root.setup-name != "": Button { text: "Cancel"; kind: "ghost"; clicked => { root.cancel(); } }
             Button {
                 text: "Get started";
                 kind: "primary";
                 clicked => { root.create(); }
+            }
+        }
+    }
+}
+
+// Names a new setup, renames one, or confirms deleting one.
+export component SetupDialog inherits Modal {
+    /// "new" | "rename" | "delete"
+    in property <string> mode;
+    /// The setup being renamed or deleted.
+    in property <string> current-name;
+    in-out property <string> name;
+    in property <string> error;
+    callback confirm(string);
+    callback cancel();
+
+    card-width: 420px;
+    dismiss => { root.cancel(); }
+    // Focus after the setup menu has closed (closing it gives focus back to the window).
+    Timer {
+        interval: 60ms;
+        running: true;
+        triggered => {
+            self.running = false;
+            field.focus();
+        }
+    }
+    VerticalLayout {
+        padding: 22px;
+        spacing: 12px;
+        Text {
+            text: root.mode == "new" ? "New setup" : root.mode == "rename" ? "Rename setup" : "Delete “" + root.current-name + "”?";
+            color: Theme.text;
+            font-size: Theme.font-l;
+            font-weight: 700;
+        }
+        Text {
+            text: root.mode == "new"
+                ? "A setup holds its own scenes, sources and audio. Give it a name, then pick what it's for."
+                : root.mode == "rename" ? "The new name for “" + root.current-name + "”."
+                : "Its scenes and sources go to the Recycle Bin. Your recordings and clips are kept.";
+            color: Theme.text-muted;
+            font-size: Theme.font-m;
+            wrap: word-wrap;
+        }
+        field := TextField {
+            visible: root.mode != "delete";
+            height: self.visible ? 28px : 0px;
+            text <=> root.name;
+            placeholder: "For example: Valorant, Just chatting";
+            label: "Setup name";
+            accepted(t) => { root.confirm(t); }
+        }
+        if root.error != "": Text { text: root.error; color: Theme.live; font-size: Theme.font-s; wrap: word-wrap; }
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+            Button { text: "Cancel"; kind: "ghost"; clicked => { root.cancel(); } }
+            Button {
+                text: root.mode == "new" ? "Next" : root.mode == "rename" ? "Rename" : "Delete";
+                kind: root.mode == "delete" ? "danger" : "primary";
+                clicked => { root.confirm(root.name); }
             }
         }
     }

@@ -60,7 +60,7 @@ impl Paths {
     }
 
     pub fn default_collection(&self) -> PathBuf {
-        self.scenes().join("Untitled.json")
+        self.scenes().join("My setup.json")
     }
 
     pub fn settings(&self) -> PathBuf {

@@ -48,6 +48,8 @@ pub struct App {
     engine: Option<Engine>,
     subscription: Option<Subscription>,
     collection: PathBuf,
+    /// The setup to return to when "New setup" is cancelled.
+    previous_setup: Option<PathBuf>,
 
     scenes_model: Rc<VecModel<SceneRow>>,
     layers_model: Rc<VecModel<LayerRow>>,
@@ -414,6 +416,7 @@ impl App {
         let app = App {
             window: window.as_weak(),
             collection: paths.default_collection(),
+            previous_setup: None,
             paths,
             settings,
             gpu,
@@ -508,7 +511,35 @@ impl App {
             .clone()
             .filter(|p| p.exists())
             .unwrap_or_else(|| self.paths.default_collection());
+        self.rename_untitled();
+        self.open_collection();
+    }
+
+    /// The first setup was called "Untitled" up to 0.3.1: call it "My setup" (once).
+    fn rename_untitled(&mut self) {
+        let untitled = self.paths.scenes().join("Untitled.json");
+        let renamed = self.paths.default_collection();
+        // `self.collection` is the old default when it was the last one open, or the new
+        // default when the settings don't say which was.
+        let default = self.collection == untitled || self.collection == renamed;
+        if !default || !untitled.exists() || renamed.exists() {
+            return;
+        }
+        if std::fs::rename(&untitled, &renamed).is_ok() {
+            let _ = std::fs::rename(
+                persist::recovery_path(&untitled),
+                persist::recovery_path(&renamed),
+            );
+            self.collection = renamed;
+        }
+    }
+
+    /// Opens `self.collection`: the first-run setup when it doesn't exist yet, the recovery
+    /// prompt when it has unsaved changes from a crash, otherwise the setup itself.
+    fn open_collection(&mut self) {
+        let Some(w) = self.window() else { return };
         w.set_collection_name(self.collection_name().into());
+        self.refresh_setups();
 
         if !self.collection.exists() {
             w.set_presets(ModelRc::new(VecModel::from(
@@ -544,7 +575,7 @@ impl App {
                     let _ = std::fs::rename(&self.collection, &broken);
                     self.toast(
                         format!(
-                            "Couldn't open the scene collection ({e}). It was kept as {}.",
+                            "Couldn't open the setup ({e}). It was kept as {}.",
                             broken.display()
                         ),
                         true,
@@ -559,7 +590,261 @@ impl App {
         self.collection
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "Untitled".into())
+            .unwrap_or_else(|| "My setup".into())
+    }
+
+    // ---- Setups (scene collections) ----
+
+    /// Setup names in the scenes folder (and the open one), sorted.
+    fn setup_list(&self) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(self.paths.scenes())
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| {
+                let name = e.file_name().into_string().ok()?;
+                let stem = name.strip_suffix(".json")?;
+                (!stem.ends_with(".recovery") && !stem.ends_with(".broken"))
+                    .then(|| stem.to_owned())
+            })
+            .collect();
+        let current = self.collection_name();
+        if !names.contains(&current) {
+            names.push(current);
+        }
+        names.sort_by_key(|n| n.to_lowercase());
+        names
+    }
+
+    fn refresh_setups(&self) {
+        let Some(w) = self.window() else { return };
+        let list = self.setup_list();
+        let current = self.collection_name();
+        w.set_setup_index(
+            list.iter()
+                .position(|n| *n == current)
+                .map_or(-1, |i| i as i32),
+        );
+        w.set_setups(ModelRc::new(VecModel::from(
+            list.into_iter().map(SharedString::from).collect::<Vec<_>>(),
+        )));
+    }
+
+    fn setup_path(&self, name: &str) -> PathBuf {
+        self.paths.scenes().join(format!("{name}.json"))
+    }
+
+    /// Why setups can't be switched right now, if they can't.
+    fn setup_busy(&self) -> Option<&'static str> {
+        if self.stream.is_some() || self.recording.is_some() {
+            Some("Stop streaming and recording before you switch setups")
+        } else if self.replay.is_some() {
+            Some("Stop the replay buffer before you switch setups")
+        } else {
+            None
+        }
+    }
+
+    /// Saves the open setup (before switching away from it).
+    fn save_setup(&mut self) -> bool {
+        let Some(engine) = &self.engine else {
+            return true;
+        };
+        match engine.save() {
+            Ok(_) => {
+                self.dirty = false;
+                true
+            }
+            Err(e) => {
+                self.toast(
+                    format!("Couldn't save “{}”: {e}", self.collection_name()),
+                    true,
+                );
+                false
+            }
+        }
+    }
+
+    /// Opens another setup, saving the open one first.
+    fn switch_setup(&mut self, path: PathBuf, save: bool) {
+        if path == self.collection {
+            return;
+        }
+        if let Some(why) = self.setup_busy() {
+            self.toast(why.into(), true);
+            return;
+        }
+        if save && !self.save_setup() {
+            return;
+        }
+        self.collection = path;
+        self.open_collection();
+    }
+
+    pub fn setup_pick(&mut self, index: i32) {
+        let Some(name) = self.setup_list().get(index.max(0) as usize).cloned() else {
+            return;
+        };
+        let path = self.setup_path(&name);
+        self.switch_setup(path, true);
+    }
+
+    /// A setup menu item: "new", "rename", "duplicate" or "delete".
+    pub fn setup_action(&mut self, id: &str) {
+        let Some(w) = self.window() else { return };
+        match id {
+            "new" | "delete" if self.setup_busy().is_some() => {
+                self.toast(self.setup_busy().unwrap_or_default().into(), true);
+            }
+            "new" | "rename" | "delete" => {
+                if id == "delete" && self.setup_list().len() < 2 {
+                    return;
+                }
+                w.set_setup_dialog_name(if id == "rename" {
+                    self.collection_name().into()
+                } else {
+                    "".into()
+                });
+                w.set_setup_dialog_error("".into());
+                w.set_setup_dialog(id.into());
+            }
+            "duplicate" => self.duplicate_setup(),
+            _ => {}
+        }
+    }
+
+    pub fn setup_cancel(&mut self) {
+        if let Some(w) = self.window() {
+            w.set_setup_dialog("".into());
+        }
+    }
+
+    /// The setup dialog's button: name a new setup, rename, or delete.
+    pub fn setup_confirm(&mut self, name: &str) {
+        let Some(w) = self.window() else { return };
+        let mode = w.get_setup_dialog().to_string();
+        let result = match mode.as_str() {
+            "new" => self.new_setup(name),
+            "rename" => self.rename_setup(name),
+            "delete" => self.delete_setup(),
+            _ => Ok(()),
+        };
+        match result {
+            Ok(()) => w.set_setup_dialog("".into()),
+            Err(e) => w.set_setup_dialog_error(e.into()),
+        }
+    }
+
+    /// Checks a setup name: not empty, usable as a file name, not taken.
+    fn check_setup_name(&self, name: &str) -> Result<String, String> {
+        check_setup_name(name, &self.setup_list())
+    }
+
+    fn new_setup(&mut self, name: &str) -> Result<(), String> {
+        let name = self.check_setup_name(name)?;
+        if !self.save_setup() {
+            return Err("Couldn't save the open setup".into());
+        }
+        self.previous_setup = Some(self.collection.clone());
+        self.collection = self.setup_path(&name);
+        if let Some(w) = self.window() {
+            w.set_wizard_setup_name(name.into());
+        }
+        // The setup's file doesn't exist yet, so this shows the first-run flow.
+        self.open_collection();
+        Ok(())
+    }
+
+    fn rename_setup(&mut self, name: &str) -> Result<(), String> {
+        let current = self.collection_name();
+        if name.trim() == current {
+            return Ok(());
+        }
+        // Changing only the letter case is a rename of the same setup.
+        let others: Vec<String> = self
+            .setup_list()
+            .into_iter()
+            .filter(|n| *n != current)
+            .collect();
+        let name = check_setup_name(name, &others)?;
+        let old = self.collection.clone();
+        let new = self.setup_path(&name);
+        match &self.engine {
+            Some(engine) => {
+                engine.save_as(new.clone()).map_err(|e| e.to_string())?;
+                if !old.as_os_str().eq_ignore_ascii_case(new.as_os_str()) {
+                    let _ = std::fs::remove_file(&old);
+                }
+            }
+            None => std::fs::rename(&old, &new).map_err(|e| e.to_string())?,
+        }
+        let _ = std::fs::remove_file(persist::recovery_path(&old));
+        self.collection = new;
+        self.settings.last_collection = Some(self.collection.clone());
+        self.dirty = false;
+        if let Some(w) = self.window() {
+            w.set_collection_name(self.collection_name().into());
+            w.set_window_title(format!("Clutch — {}", self.collection_name()).into());
+        }
+        self.refresh_setups();
+        self.refresh();
+        Ok(())
+    }
+
+    fn duplicate_setup(&mut self) {
+        if let Some(why) = self.setup_busy() {
+            self.toast(why.into(), true);
+            return;
+        }
+        if !self.save_setup() {
+            return;
+        }
+        let list = self.setup_list();
+        let base = format!("{} copy", self.collection_name());
+        let name = (1..)
+            .map(|n| {
+                if n == 1 {
+                    base.clone()
+                } else {
+                    format!("{base} {n}")
+                }
+            })
+            .find(|n| !list.iter().any(|l| l.eq_ignore_ascii_case(n)))
+            .unwrap_or(base);
+        let path = self.setup_path(&name);
+        if let Err(e) = std::fs::copy(&self.collection, &path) {
+            self.toast(format!("Couldn't duplicate the setup: {e}"), true);
+            return;
+        }
+        self.switch_setup(path, false);
+        self.toast(format!("Duplicated as “{name}”"), false);
+    }
+
+    fn delete_setup(&mut self) -> Result<(), String> {
+        if let Some(why) = self.setup_busy() {
+            return Err(why.into());
+        }
+        let current = self.collection_name();
+        let Some(next) = self.setup_list().into_iter().find(|n| *n != current) else {
+            return Err("Clutch needs at least one setup".into());
+        };
+        let old = self.collection.clone();
+        let next = self.setup_path(&next);
+        self.switch_setup(next, false);
+        if self.collection == old {
+            return Err("Couldn't open another setup".into());
+        }
+        for path in [old.clone(), persist::recovery_path(&old)] {
+            if path.exists() {
+                to_recycle_bin(&path).map_err(|e| e.to_string())?;
+            }
+        }
+        self.refresh_setups();
+        self.toast(
+            format!("Deleted “{current}” (it's in the Recycle Bin)"),
+            false,
+        );
+        Ok(())
     }
 
     /// What the first run can use: primary screen, first webcam, default mic, encoder.
@@ -643,14 +928,30 @@ impl App {
             .unwrap_or_else(|| self.detect_devices());
         let project = presets::build_project(purpose, preset, &detected);
         if let Err(e) = persist::save(&self.collection, &project) {
-            self.toast(format!("Couldn't create the scene collection: {e}"), true);
+            self.toast(format!("Couldn't create the setup: {e}"), true);
             return;
         }
         self.start(project);
+        self.previous_setup = None;
+        w.set_wizard_setup_name("".into());
         self.toast(
             "You're all set. Click Go Live or Record when you're ready.".into(),
             false,
         );
+    }
+
+    /// Cancels "New setup": back to the setup that was open.
+    pub fn wizard_cancel(&mut self) {
+        let Some(previous) = self.previous_setup.take() else {
+            return;
+        };
+        self.collection = previous;
+        if let Some(w) = self.window() {
+            w.set_wizard_setup_name("".into());
+            w.set_collection_name(self.collection_name().into());
+            w.set_startup("ready".into());
+        }
+        self.refresh_setups();
     }
 
     pub fn recovery(&mut self, restore: bool) {
@@ -1071,6 +1372,7 @@ impl App {
             format!("{fps:.2}")
         };
         w.set_canvas_info(format!("{} × {} · {fps} fps", canvas.width, canvas.height).into());
+        w.set_canvas_tag(canvas_tag(canvas.width, canvas.height, &fps).into());
         w.set_can_undo(engine.can_undo());
         w.set_can_redo(engine.can_redo());
         w.set_dirty(self.dirty);
@@ -6585,6 +6887,72 @@ fn push_layers(
 }
 
 /// Meter position (0..1) for a linear level on a -60..0 dB scale.
+/// A short canvas description for the top bar: "1080p60", "1080p30 vertical" or "1440×1080 · 60".
+fn canvas_tag(width: u32, height: u32, fps: &str) -> String {
+    if width * 9 == height * 16 {
+        format!("{height}p{fps}")
+    } else if height * 9 == width * 16 {
+        format!("{width}p{fps} vertical")
+    } else {
+        format!("{width}×{height} · {fps}")
+    }
+}
+
+/// Checks a setup name against the existing ones (`taken`): not empty, short, usable as a
+/// file name, and not used yet (ignoring letter case). Returns the trimmed name.
+fn check_setup_name(name: &str, taken: &[String]) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Enter a name".into());
+    }
+    if name.chars().count() > 60 {
+        return Err("Use a shorter name".into());
+    }
+    if name.ends_with('.')
+        || name
+            .chars()
+            .any(|c| c.is_control() || r#"<>:"/\|?*"#.contains(c))
+    {
+        return Err(r#"A name can't contain < > : " / \ | ? * or end with a dot"#.into());
+    }
+    let lower = name.to_lowercase();
+    if lower.ends_with(".recovery") || lower.ends_with(".broken") {
+        return Err("Pick another name".into());
+    }
+    if taken.iter().any(|t| t.eq_ignore_ascii_case(name)) {
+        return Err("There's already a setup with that name".into());
+    }
+    Ok(name.to_owned())
+}
+
+/// Moves a file to the Recycle Bin, so a deleted setup can still be restored.
+#[cfg(windows)]
+fn to_recycle_bin(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::UI::Shell::{
+        FO_DELETE, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, SHFILEOPSTRUCTW,
+        SHFileOperationW,
+    };
+    // A double-NUL-terminated list of one path.
+    let from: Vec<u16> = path.as_os_str().encode_wide().chain([0, 0]).collect();
+    let mut op = SHFILEOPSTRUCTW {
+        wFunc: FO_DELETE,
+        pFrom: windows::core::PCWSTR(from.as_ptr()),
+        fFlags: (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT).0 as u16,
+        ..Default::default()
+    };
+    // SAFETY: `from` outlives the call and is double-NUL terminated.
+    match unsafe { SHFileOperationW(&mut op) } {
+        0 => Ok(()),
+        code => Err(std::io::Error::other(format!("Windows error {code}"))),
+    }
+}
+
+#[cfg(not(windows))]
+fn to_recycle_bin(path: &std::path::Path) -> std::io::Result<()> {
+    std::fs::remove_file(path)
+}
+
 fn meter_position(level: f32) -> f32 {
     let db = estream_engine::audio_engine::db::from_gain(level);
     ((db + 60.0) / 60.0).clamp(0.0, 1.0)
@@ -6760,6 +7128,11 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     on!(on_palette_run, |a, id| a.run_id(&id));
     on!(on_add_source_pick, |a, kind| a.add_source(&kind));
     on!(on_wizard_create, |a| a.wizard_create());
+    on!(on_wizard_cancel, |a| a.wizard_cancel());
+    on!(on_setup_pick, |a, i| a.setup_pick(i));
+    on!(on_setup_action, |a, id| a.setup_action(&id));
+    on!(on_setup_confirm, |a, name| a.setup_confirm(&name));
+    on!(on_setup_cancel, |a| a.setup_cancel());
     on!(on_wizard_purpose_changed, |a, i| a
         .wizard_purpose_changed(i));
     on!(on_golive_pick, |a, i| a.golive_pick(i));
@@ -6848,6 +7221,27 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn setup_names_are_checked() {
+        let taken = vec!["My setup".to_owned()];
+        assert_eq!(
+            check_setup_name("  Valorant ", &taken),
+            Ok("Valorant".into())
+        );
+        assert!(check_setup_name("", &taken).is_err());
+        assert!(check_setup_name("my SETUP", &taken).is_err());
+        assert!(check_setup_name("a/b", &taken).is_err());
+        assert!(check_setup_name("dots.", &taken).is_err());
+        assert!(check_setup_name("x.recovery", &taken).is_err());
+    }
+
+    #[test]
+    fn canvas_tags_are_short() {
+        assert_eq!(canvas_tag(1920, 1080, "60"), "1080p60");
+        assert_eq!(canvas_tag(1080, 1920, "30"), "1080p30 vertical");
+        assert_eq!(canvas_tag(1440, 1080, "60"), "1440×1080 · 60");
+    }
 
     #[test]
     fn names_are_made_unique() {

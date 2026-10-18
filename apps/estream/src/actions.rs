@@ -148,7 +148,7 @@ actions! {
     CommandPalette, "palette", "Command palette", "General", Some(Shortcut::ctrl('k')), false;
     Undo, "undo", "Undo", "Edit", Some(Shortcut::ctrl('z')), true;
     Redo, "redo", "Redo", "Edit", Some(Shortcut::ctrl_shift('z')), true;
-    Save, "save", "Save scene collection", "File", Some(Shortcut::ctrl('s')), true;
+    Save, "save", "Save setup", "File", Some(Shortcut::ctrl('s')), true;
     AddScene, "scene.add", "New scene", "Scenes", Some(Shortcut::ctrl_shift('n')), true;
     DuplicateScene, "scene.duplicate", "Duplicate scene", "Scenes", None, true;
     RemoveScene, "scene.remove", "Delete scene", "Scenes", None, true;
