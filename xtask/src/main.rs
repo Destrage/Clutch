@@ -307,7 +307,7 @@ fn wix_source(stage: &Path, assets: &Path) -> Result<String> {
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Product Id="*" Name="eStream" Language="1033" Version="{VERSION}" Manufacturer="eStream" UpgradeCode="{{{UPGRADE_CODE}}}">
     <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" Platform="x64" Description="eStream streaming and recording studio" />
-    <MajorUpgrade DowngradeErrorMessage="A newer version of eStream is already installed." />
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of eStream is already installed." />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
     <Icon Id="estream.ico" SourceFile="{icon}" />

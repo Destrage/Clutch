@@ -186,15 +186,17 @@ pub enum Service {
     Twitch,
     YouTube,
     Facebook,
+    Kick,
     #[default]
     Custom,
 }
 
 impl Service {
-    pub const ALL: [Service; 4] = [
+    pub const ALL: [Service; 5] = [
         Service::Twitch,
         Service::YouTube,
         Service::Facebook,
+        Service::Kick,
         Service::Custom,
     ];
 
@@ -203,6 +205,7 @@ impl Service {
             Service::Twitch => "Twitch",
             Service::YouTube => "YouTube",
             Service::Facebook => "Facebook Live",
+            Service::Kick => "Kick",
             Service::Custom => "Custom (RTMP, SRT, RIST, WHIP)",
         }
     }
@@ -213,6 +216,8 @@ impl Service {
             Service::Twitch => "rtmp://live.twitch.tv/app",
             Service::YouTube => "rtmps://a.rtmps.youtube.com/live2",
             Service::Facebook => "rtmps://live-api-s.facebook.com:443/rtmp/",
+            // Kick's ingest (Amazon IVS), the same for every channel.
+            Service::Kick => "rtmps://fa723fc1b171.global-contribute.live-video.net/app/",
             Service::Custom => "",
         }
     }
@@ -221,8 +226,26 @@ impl Service {
     pub fn max_video_kbps(self) -> Option<u32> {
         match self {
             Service::Twitch => Some(6_000),
+            Service::Kick => Some(8_000),
             _ => None,
         }
+    }
+}
+
+/// The RTMP server without a trailing slash, with Amazon IVS's `/app` added when it's missing.
+///
+/// IVS ingest (Kick and others, `*.live-video.net`) publishes on the `app` application. Some
+/// dashboards show the server without it; FFmpeg would then read the stream key as the
+/// application name and the server rejects the stream.
+fn rtmp_base(server: &str) -> String {
+    let server = server.trim_end_matches('/');
+    let (_, rest) = server.split_once("://").unwrap_or(("", server));
+    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let host = authority.rsplit_once(':').map_or(authority, |(h, _)| h);
+    if host.to_ascii_lowercase().ends_with(".live-video.net") && path.trim_matches('/').is_empty() {
+        format!("{server}/app")
+    } else {
+        server.to_owned()
     }
 }
 
@@ -354,7 +377,7 @@ impl StreamSettings {
         let key = self.key.trim();
         match self.protocol() {
             Some(Protocol::Rtmp) if !key.is_empty() => {
-                format!("{}/{}", server.trim_end_matches('/'), key)
+                format!("{}/{}", rtmp_base(server), key)
             }
             Some(Protocol::Srt) if !key.is_empty() => {
                 let sep = if server.contains('?') { '&' } else { '?' };
@@ -439,6 +462,33 @@ mod tests {
         assert_eq!(Protocol::of("https://x/whip"), Some(Protocol::Whip));
         assert_eq!(Protocol::of("ftp://x"), None);
         assert_eq!(Protocol::of("live.twitch.tv"), None);
+    }
+
+    #[test]
+    fn amazon_ivs_servers_get_their_app_path() {
+        let kick = "rtmps://fa723fc1b171.global-contribute.live-video.net";
+        let want = "rtmps://fa723fc1b171.global-contribute.live-video.net/app/sk_us-west-2_x";
+        // As some dashboards show it (no application), with and without a slash or port.
+        assert_eq!(stream(kick, "sk_us-west-2_x").url(), want);
+        assert_eq!(stream(&format!("{kick}/"), "sk_us-west-2_x").url(), want);
+        assert_eq!(
+            stream(&format!("{kick}:443/"), "sk_us-west-2_x").url(),
+            "rtmps://fa723fc1b171.global-contribute.live-video.net:443/app/sk_us-west-2_x"
+        );
+        // Already complete: unchanged.
+        assert_eq!(
+            stream(&format!("{kick}/app/"), "sk_us-west-2_x").url(),
+            want
+        );
+        assert_eq!(
+            stream(Service::Kick.default_server(), "sk_us-west-2_x").url(),
+            want
+        );
+        // Other hosts without a path are left alone.
+        assert_eq!(
+            stream("rtmp://example.com/", "k").url(),
+            "rtmp://example.com/k"
+        );
     }
 
     #[test]
