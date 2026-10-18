@@ -5,7 +5,10 @@
 //! the [`Scheduler`] hands back.
 
 pub mod event;
+pub mod games;
+pub mod platform;
 pub mod scheduler;
 
 pub use event::{ClipEvent, EventKind};
+pub use games::{Detection, Detector, Game, GameList, Integration};
 pub use scheduler::{ClipRequest, Scheduler, Window};

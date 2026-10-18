@@ -26,7 +26,7 @@ on the video or audio threads.
 - **Known-games table** (embedded JSON):
   - each entry has an exe name, display name, an optional Steam app id, and the integration it
     supports;
-  - it starts with the top ~200 PC games;
+  - it starts with about 90 popular PC games (only exe names known to be right), and grows over time;
   - users can add any exe as a game, or mark one as "not a game".
 - **Detection:**
   - the foreground window is polled at the existing 250 ms focus probe;

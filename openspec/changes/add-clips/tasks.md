@@ -7,7 +7,7 @@
 
 ## 2. Clips core (`crates/estream-clips`)
 - [x] 2.1 Clip window scheduler (merge, post-roll wait, max length)
-- [ ] 2.2 Known-games table, foreground game detection, start/stop edges
+- [x] 2.2 Known-games table, foreground game detection, start/stop edges
 - [ ] 2.3 Hype detector (live from meters, offline `scan`)
 - [ ] 2.4 CS2 / Dota 2 GSI: Steam library lookup, config writer, token-checked HTTP listener, event diffing
 - [ ] 2.5 League of Legends Live Client Data poller
