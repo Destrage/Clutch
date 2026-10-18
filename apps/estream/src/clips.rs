@@ -53,6 +53,8 @@ pub enum Notice {
     },
     /// The clip hotkey is taken by another program.
     HotkeyConflict(String),
+    /// A clip's thumbnail is ready (the library entry has it now).
+    Thumbnail,
 }
 
 /// Where clip mode's replay buffer runs.
@@ -172,6 +174,12 @@ impl Clipper {
     /// The game being played, if any.
     pub fn current_game(&self) -> Option<&str> {
         self.detector.current().map(|g| g.name.as_str())
+    }
+
+    /// Makes `clip`'s thumbnail from the frame at `at` seconds, in the background; the library
+    /// picks it up (and a [`Notice::Thumbnail`] goes out) on a later tick.
+    pub fn make_thumbnail(&self, clip: PathBuf, at: f64) {
+        spawn_thumbnail(clip, at, self.thumbs_tx.clone());
     }
 
     /// Whether clip mode's own buffer is running.
@@ -324,6 +332,7 @@ impl Clipper {
         self.poll_saves(now, &mut out);
         while let Ok(path) = self.thumbs_rx.try_recv() {
             self.library.reload(&path);
+            out.push(Notice::Thumbnail);
         }
 
         // Clip mode's buffer stops once the game has gone and pending clips are saved.
@@ -659,11 +668,12 @@ impl Clipper {
     }
 }
 
-/// The clip's name: its strongest event.
+/// The clip's name: its strongest game event ("Clip" when it's only a manual save).
 fn title_of(window: &Window) -> String {
     window
         .events
         .iter()
+        .filter(|e| e.kind != EventKind::Manual)
         .max_by(|a, b| a.kind.weight().total_cmp(&b.kind.weight()))
         .map_or_else(|| "Clip".to_owned(), |e| e.kind.label())
 }

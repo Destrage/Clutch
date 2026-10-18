@@ -71,14 +71,33 @@ export component ClipsDialog inherits Modal {
     callback action(string, int, float);
     callback text(string, string);
 
-    card-width: 1040px;
+    card-width: 1100px;
     card-top: 30px;
 
     property <int> columns: 3;
-    property <length> grid-width: 600px;
+    property <length> grid-width: 580px;
+    // What's left of the card for the selected clip (paddings, gaps and the divider).
+    property <length> detail-width: root.inner-width - root.grid-width - 36px - 37px;
     property <length> gap: 8px;
     property <length> tile-width: (grid-width - gap * (columns - 1)) / columns;
     property <length> tile-height: (tile-width - 12px) * 9 / 16 + 60px;
+    // Delete asks twice: the first press arms it for a few seconds.
+    property <bool> confirm-delete: false;
+    property <int> armed-for: -1;
+    function delete-pressed() {
+        if (root.confirm-delete && root.armed-for == root.form.selected) {
+            root.confirm-delete = false;
+            root.action("delete", root.form.selected, 0);
+        } else {
+            root.confirm-delete = true;
+            root.armed-for = root.form.selected;
+        }
+    }
+    Timer {
+        interval: 3s;
+        running: root.confirm-delete;
+        triggered => { root.confirm-delete = false; }
+    }
 
     FocusScope {
         height: 0px;
@@ -89,7 +108,7 @@ export component ClipsDialog inherits Modal {
                 return EventResult.accept;
             }
             if (e.text == Key.Delete && root.form.selected >= 0) {
-                root.action("delete", root.form.selected, 0);
+                root.delete-pressed();
                 return EventResult.accept;
             }
             return EventResult.reject;
@@ -175,10 +194,11 @@ export component ClipsDialog inherits Modal {
             }
         }
         if root.form.selected >= 0: VerticalLayout {
-            horizontal-stretch: 1;
+            width: root.detail-width;
             spacing: 10px;
             Rectangle {
-                height: self.width * 9 / 16;
+                width: root.detail-width;
+                height: root.detail-width * 9 / 16;
                 border-radius: Theme.radius-m;
                 background: #000000;
                 clip: true;
@@ -212,7 +232,14 @@ export component ClipsDialog inherits Modal {
                 Button { text: "Play"; has-icon: true; icon: Icons.play; clicked => { root.action("play", root.form.selected, 0); } }
                 Button { text: "Show in folder"; has-icon: true; icon: Icons.folder; kind: "ghost"; clicked => { root.action("reveal", root.form.selected, 0); } }
                 Button { text: "Copy"; has-icon: true; icon: Icons.copy; kind: "ghost"; tooltip: "Copy the file, to paste into Discord or a folder"; clicked => { root.action("copy", root.form.selected, 0); } }
-                Button { text: "Delete"; has-icon: true; icon: Icons.trash; kind: "danger"; clicked => { root.action("delete", root.form.selected, 0); } }
+                Button {
+                    text: root.confirm-delete && root.armed-for == root.form.selected ? "Delete for good?" : "Delete";
+                    has-icon: true;
+                    icon: Icons.trash;
+                    kind: "danger";
+                    tooltip: "Deletes the clip file; press twice";
+                    clicked => { root.delete-pressed(); }
+                }
             }
 
             SectionTitle { text: "TRIM"; }

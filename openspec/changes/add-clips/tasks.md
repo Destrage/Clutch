@@ -36,3 +36,6 @@
 - [x] 5.6 Trim tests (lossless and precise: duration, A/V sync, first frame)
 - [x] 5.7 Library tests: index scan, missing sidecar, storage cap keeps favorites/manual
 - [ ] 5.8 In-app check: CS2 deathmatch with auto-clip on kills; hotkey clip in a non-integrated game
+      (done in the app with simulated CS2 payloads: hotkey clips, clip mode following a test
+      "game", auto-clip on kills, a macro on kills, Clips view, trim, favorite, delete,
+      Settings → Clips; a real CS2 match is pending)

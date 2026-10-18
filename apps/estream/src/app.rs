@@ -2348,6 +2348,11 @@ impl App {
                 );
                 self.clip_ask = Some((exe, title));
             }
+            Notice::Thumbnail => {
+                if self.window().is_some_and(|w| w.get_clips_open()) {
+                    self.refresh_clips();
+                }
+            }
             Notice::HotkeyConflict(key) => self.toast(
                 format!("Another program already uses {key}; pick another clip hotkey in Settings"),
                 true,
@@ -2470,13 +2475,22 @@ impl App {
             .map_or(-1, |i| i as i32);
         let clip = selected.as_ref().and_then(|p| self.clipper.library.get(p));
         let lib = &self.clipper.library;
-        let gb = |b: u64| b as f64 / 1e9;
+        let size = |b: u64| {
+            if b >= 1_000_000_000 {
+                format!("{:.1} GB", b as f64 / 1e9)
+            } else {
+                format!("{:.0} MB", b as f64 / 1e6)
+            }
+        };
         let auto = lib.total_size(|c| c.meta.trigger == Trigger::Auto);
+        let count = match lib.clips().len() {
+            1 => "1 clip".to_owned(),
+            n => format!("{n} clips"),
+        };
         let summary = format!(
-            "{} clips · {:.1} GB (automatic {:.1} of {:.0} GB)",
-            lib.clips().len(),
-            gb(lib.total_size(|_| true)),
-            gb(auto),
+            "{count} · {} (automatic {} of {:.0} GB)",
+            size(lib.total_size(|_| true)),
+            size(auto),
             self.settings.clips.storage_cap_gb
         );
         let events = clip
@@ -2713,13 +2727,7 @@ impl App {
             }
         }
         // A new thumbnail, made in the background like a fresh clip's.
-        let clip = done.output.clone();
-        let _ = std::thread::Builder::new()
-            .name("estream-thumbnail".into())
-            .spawn(move || {
-                let jpg = estream_clips::library::thumbnail_path(&clip);
-                let _ = estream_media::thumbnail::thumbnail(&clip, thumb_at, 320, &jpg);
-            });
+        self.clipper.make_thumbnail(done.output.clone(), thumb_at);
         let d = duration;
         self.clips_ui.select(Some((&done.output, d)));
         self.toast(

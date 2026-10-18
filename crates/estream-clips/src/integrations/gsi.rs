@@ -68,8 +68,13 @@ impl Cs2Tracker {
                 && now.deaths >= before.deaths
             {
                 let round_kills = u64_at(payload, &["player", "state", "round_kills"]).unwrap_or(0);
-                for _ in before.kills..now.kills {
-                    events.push(match round_kills {
+                // New kills all happened this round, so there can't be more than `round_kills`
+                // of them; a bigger jump means payloads were missed (a reconnect, eStream
+                // starting mid-match) and only resets the baseline. Kills that arrive together
+                // count up: a jump from 0 to 2 is a kill, then a double kill.
+                let new = (now.kills - before.kills).min(round_kills);
+                for n in (round_kills - new + 1)..=round_kills {
+                    events.push(match n {
                         n if n >= 5 => EventKind::Ace,
                         n if n >= 2 => EventKind::MultiKill { n: n as u8 },
                         _ => EventKind::Kill,
@@ -125,6 +130,8 @@ pub struct Dota2Tracker {
 }
 
 const DOTA_MULTI_KILL: Duration = Duration::from_secs(18);
+/// More new kills than this in one payload means payloads were missed: re-baseline instead.
+const DOTA_MAX_JUMP: u64 = 5;
 
 impl Dota2Tracker {
     pub fn update(&mut self, payload: &Value, now: Instant) -> Vec<EventKind> {
@@ -141,6 +148,7 @@ impl Dota2Tracker {
             let counters = Counters { kills, deaths };
             if let Some(before) = self.own
                 && counters.kills >= before.kills
+                && counters.kills - before.kills <= DOTA_MAX_JUMP
                 && counters.deaths >= before.deaths
             {
                 for _ in before.kills..counters.kills {
@@ -470,9 +478,10 @@ mod tests {
         );
         assert_eq!(t.update(&cs2(ME, 4, 1, 1)), [EventKind::Kill]);
         assert_eq!(t.update(&cs2(ME, 5, 2, 1)), [EventKind::MultiKill { n: 2 }]);
+        // Two kills in one payload count up: the triple, then the quadra.
         assert_eq!(
             t.update(&cs2(ME, 7, 4, 1)),
-            [EventKind::MultiKill { n: 4 }, EventKind::MultiKill { n: 4 }]
+            [EventKind::MultiKill { n: 3 }, EventKind::MultiKill { n: 4 }]
         );
         assert_eq!(t.update(&cs2(ME, 8, 5, 1)), [EventKind::Ace]);
         assert_eq!(t.update(&cs2(ME, 8, 0, 2)), [EventKind::Death]);
@@ -487,6 +496,19 @@ mod tests {
         assert!(t.update(&cs2(OTHER, 11, 2, 0)).is_empty());
         // Back on our own player with unchanged counters.
         assert!(t.update(&cs2(ME, 3, 0, 1)).is_empty());
+    }
+
+    #[test]
+    fn cs2_missed_payloads_only_rebaseline() {
+        let mut t = Cs2Tracker::default();
+        t.update(&cs2(ME, 5, 0, 1));
+        // Five kills appear at once, none of them this round: payloads were missed.
+        assert!(t.update(&cs2(ME, 10, 0, 1)).is_empty());
+        // From the new baseline, a kill and a double kill arriving together.
+        assert_eq!(
+            t.update(&cs2(ME, 12, 2, 1)),
+            [EventKind::Kill, EventKind::MultiKill { n: 2 }]
+        );
     }
 
     #[test]
@@ -552,6 +574,21 @@ mod tests {
         assert_eq!(
             t.update(&win, t0 + Duration::from_secs(90)),
             [EventKind::MatchWin]
+        );
+    }
+
+    #[test]
+    fn dota_big_jumps_only_rebaseline() {
+        let mut t = Dota2Tracker::default();
+        let t0 = Instant::now();
+        t.update(&dota(2, 0), t0);
+        assert!(
+            t.update(&dota(9, 0), t0 + Duration::from_secs(1))
+                .is_empty()
+        );
+        assert_eq!(
+            t.update(&dota(10, 0), t0 + Duration::from_secs(2)),
+            [EventKind::Kill]
         );
     }
 

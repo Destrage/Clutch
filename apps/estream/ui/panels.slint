@@ -233,9 +233,9 @@ export component TopBar inherits Rectangle {
         if root.replay-active: VerticalLayout {
             alignment: center;
             Button {
-                text: "Save replay";
+                text: "Save clip";
                 kind: "ghost";
-                tooltip: "Save the last seconds (Ctrl+Shift+R)";
+                tooltip: "Save the last seconds to your clips (Ctrl+Shift+R or the clip hotkey)";
                 clicked => { root.save-replay(); }
             }
         }
