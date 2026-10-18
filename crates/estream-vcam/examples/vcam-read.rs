@@ -1,4 +1,4 @@
-//! Reads "eStream Virtual Camera" like a call app would and saves the last frame as a PNG.
+//! Reads "Clutch Virtual Camera" like a call app would and saves the last frame as a PNG.
 //!
 //! `cargo run -p estream-vcam --example vcam-read -- <out.png> [seconds]`
 #![allow(clippy::unwrap_used, clippy::expect_used)]

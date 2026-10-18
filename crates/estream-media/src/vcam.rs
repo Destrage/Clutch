@@ -1,4 +1,4 @@
-//! Virtual camera output: sends a canvas to "eStream Virtual Camera" (Windows 11).
+//! Virtual camera output: sends a canvas to "Clutch Virtual Camera" (Windows 11).
 //!
 //! A feed thread creates the session camera, then watches the shared memory the camera
 //! source opens while an app uses it. Only then does it take canvas frames from the engine,

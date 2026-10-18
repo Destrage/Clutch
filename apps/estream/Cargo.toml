@@ -4,7 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "eStream: a modern live streaming and recording studio"
+description = "Clutch: a modern live streaming, recording and clipping studio"
+
+[[bin]]
+name = "clutch"
+path = "src/main.rs"
 
 [lints]
 workspace = true

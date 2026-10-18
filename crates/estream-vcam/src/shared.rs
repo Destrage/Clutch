@@ -1,5 +1,5 @@
-//! The shared memory between eStream (producer) and the camera source in Windows' Frame Server
-//! (consumer). The consumer creates the mapping and asks for a frame size; eStream writes NV12
+//! The shared memory between Clutch (producer) and the camera source in Windows' Frame Server
+//! (consumer). The consumer creates the mapping and asks for a frame size; Clutch writes NV12
 //! frames of that size under a seqlock. Both sides leave heartbeats (`GetTickCount64`, which
 //! is system-wide) so each knows whether the other is there.
 
@@ -71,7 +71,7 @@ impl Shared {
     pub fn open(name: &str) -> Result<Self, ShmError> {
         let map = Mapping::open(name, MAPPING_LEN)?;
         if map.read_u32(OFF_MAGIC) != MAGIC || map.read_u32(OFF_VERSION) != VERSION {
-            return Err(ShmError::Os("not an eStream virtual camera mapping".into()));
+            return Err(ShmError::Os("not an Clutch virtual camera mapping".into()));
         }
         Ok(Self { map })
     }

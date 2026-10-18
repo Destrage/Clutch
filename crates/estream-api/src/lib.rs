@@ -1,4 +1,4 @@
-//! Remote control for eStream: an obs-websocket v5 compatible server.
+//! Remote control for Clutch: an obs-websocket v5 compatible server.
 //!
 //! The server does network I/O on its own thread. The app calls [`Api::tick`] from its UI
 //! tick: that answers queued requests (through the [`Studio`] trait and the engine's command
@@ -139,7 +139,7 @@ impl Api {
         self.translator.reset();
     }
 
-    /// eStream is exiting: clients get `ExitStarted`, then the sessions close.
+    /// Clutch is exiting: clients get `ExitStarted`, then the sessions close.
     pub fn shutdown(self) {
         self.server.shutdown();
     }

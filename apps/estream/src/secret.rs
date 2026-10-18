@@ -78,7 +78,7 @@ mod dpapi {
         unsafe {
             CryptProtectData(
                 &blob(data),
-                windows::core::w!("eStream stream key"),
+                windows::core::w!("Clutch stream key"),
                 None,
                 None,
                 None,

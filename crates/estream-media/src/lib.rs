@@ -1,4 +1,4 @@
-//! Encoding, muxing, recording and replay buffer for eStream, built on FFmpeg 9
+//! Encoding, muxing, recording and replay buffer for Clutch, built on FFmpeg 9
 //! (LGPL shared build, linked dynamically).
 
 pub use ffmpeg_next as ffmpeg;

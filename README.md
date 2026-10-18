@@ -1,4 +1,4 @@
-# eStream
+# Clutch
 
 A modern streaming and recording studio written from scratch in Rust. It is an alternative to OBS: a wgpu compositor, a Slint UI and FFmpeg encoding.
 
@@ -18,8 +18,8 @@ Windows 10/11 (x64) is the supported platform today.
 
 ## Getting started
 
-1. **First run.** Pick what you'll use eStream for: streaming games, talking to camera, recording videos, or vertical video. eStream finds your screen, webcam, microphone and encoder, then builds a ready scene. Noise suppression is on for the mic. "Choose the resolution myself" shows every canvas preset.
-2. **Go live.** Click **Go Live**, pick Twitch, YouTube, Kick or Facebook Live, and paste your stream key. "Where do I find it?" opens the platform's key page. eStream recognizes the platform from the key, catches a pasted server address, and picks the server, the encoder and the platform's recommended bitrate. Use **More options** for custom servers, SRT/RIST/WHIP, or your own encoder settings. To stream to another platform as well, use **Add platform** in the menu next to Go Live.
+1. **First run.** Pick what you'll use Clutch for: streaming games, talking to camera, recording videos, or vertical video. Clutch finds your screen, webcam, microphone and encoder, then builds a ready scene. Noise suppression is on for the mic. "Choose the resolution myself" shows every canvas preset.
+2. **Go live.** Click **Go Live**, pick Twitch, YouTube, Kick or Facebook Live, and paste your stream key. "Where do I find it?" opens the platform's key page. Clutch recognizes the platform from the key, catches a pasted server address, and picks the server, the encoder and the platform's recommended bitrate. Use **More options** for custom servers, SRT/RIST/WHIP, or your own encoder settings. To stream to another platform as well, use **Add platform** in the menu next to Go Live.
 
 ## Requirements
 
@@ -59,14 +59,14 @@ Use **PowerShell** or a Developer Command Prompt. Git Bash puts its own `link.ex
 cargo build --release -p estream -p estream-browser -p estream-vcam
 
 # Run it
-.\target\release\estream.exe
+.\target\release\clutch.exe
 ```
 
-You can also use `cargo run --release -p estream`. Build the other two at least once first: `cargo run` only builds the studio, and browser sources and the virtual camera need `estream-browser.exe` and `estream_vcam.dll` next to `estream.exe`.
+You can also use `cargo run --release -p estream`. Build the other two at least once first: `cargo run` only builds the studio, and browser sources and the virtual camera need `clutch-browser.exe` and `estream_vcam.dll` next to `clutch.exe`.
 
 The first build takes a while because it compiles CEF's wrapper and many dependencies. Later builds are incremental.
 
-Debug builds (`cargo build -p estream -p estream-browser -p estream-vcam`, then `.\target\debug\estream.exe`) work but run more slowly. Use them for development.
+Debug builds (`cargo build -p estream -p estream-browser -p estream-vcam`, then `.\target\debug\clutch.exe`) work but run more slowly. Use them for development.
 
 ### Windows installer
 
@@ -74,26 +74,26 @@ Debug builds (`cargo build -p estream -p estream-browser -p estream-vcam`, then 
 cargo xtask package
 ```
 
-This produces `target\installer\eStream-<version>-x64.msi`. The command:
+This produces `target\installer\Clutch-<version>-x64.msi`. The command:
 - builds release binaries with the C runtime linked in, so the VC++ redistributable isn't needed;
 - stages them with FFmpeg, the CEF runtime and the license notices;
 - builds the MSI with WiX 3.14, which downloads once into `third_party/wix`.
 
 The installer:
-- installs to `C:\Program Files\eStream` with Start menu and desktop shortcuts;
-- registers the virtual camera for all users, so eStream never has to ask for that permission later;
+- installs to `C:\Program Files\Clutch` with Start menu and desktop shortcuts;
+- registers the virtual camera for all users, so Clutch never has to ask for that permission later;
 - upgrades older versions in place.
 
 Uninstall it from Windows Settings → Apps.
 
-`cargo xtask icon` regenerates the app icon (`apps/estream/assets/estream.ico`).
+`cargo xtask icon` regenerates the app icon (`apps/estream/assets/clutch.ico`).
 
 ### Where your data goes
 
-Settings, scene collections and logs are stored in `%APPDATA%\eStream`. To use a separate folder, for example for testing, set `ESTREAM_HOME`:
+Settings, scene collections and logs are stored in `%APPDATA%\Clutch`. On its first start, Clutch moves an existing `%APPDATA%\eStream` folder there (the app was called eStream up to 0.2). To use a separate folder, for example for testing, set `CLUTCH_HOME` (`ESTREAM_HOME` also works):
 
 ```powershell
-$env:ESTREAM_HOME = "D:\estream-test"; .\target\release\estream.exe
+$env:CLUTCH_HOME = "D:\clutch-test"; .\target\release\clutch.exe
 ```
 
 Stream keys are encrypted with Windows DPAPI and never written to project files.
@@ -129,11 +129,11 @@ Macros are saved with the scene collection, and every change they make can be un
 
 ## Virtual camera
 
-Click the camera button in the top bar, then pick **eStream Virtual Camera** in your call app. Windows lists it as "eStream Virtual Camera (Windows Virtual Camera)". It needs Windows 11.
+Click the camera button in the top bar, then pick **Clutch Virtual Camera** in your call app. Windows lists it as "Clutch Virtual Camera (Windows Virtual Camera)". It needs Windows 11.
 
-- **First start:** Windows asks once for permission to install the camera component, so expect a UAC prompt. eStream copies the component to `%ProgramData%\eStream\VirtualCamera` and registers it there.
+- **First start:** Windows asks once for permission to install the camera component, so expect a UAC prompt. Clutch copies the component to `%ProgramData%\Clutch\VirtualCamera` and registers it there.
 - **Choosing what it shows:** pick the canvas in **Settings → Virtual camera**.
-- **While no app is using it:** eStream does no extra rendering for it.
+- **While no app is using it:** Clutch does no extra rendering for it.
 - **Development:** after changing `crates/estream-vcam`, use **Settings → Virtual camera → Reinstall** so Windows loads the new build.
 - **Problems:** the camera component writes `vcam.log` in the same `%ProgramData%` folder.
 
@@ -175,4 +175,4 @@ openspec/               specs and change proposals (start with openspec/project.
 
 ## Contributing
 
-eStream is spec-driven. Read `openspec/AGENTS.md` and `openspec/project.md` first. A new feature starts as a change proposal in `openspec/changes/`, and its `tasks.md` is ticked off as the work is done.
+Clutch is spec-driven. Read `openspec/AGENTS.md` and `openspec/project.md` first. A new feature starts as a change proposal in `openspec/changes/`, and its `tasks.md` is ticked off as the work is done.

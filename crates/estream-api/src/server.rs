@@ -184,7 +184,7 @@ impl Server {
             .store(frame.as_nanos().max(1) as u64, Ordering::Relaxed);
     }
 
-    /// eStream is exiting: sends `ExitStarted` and closes every session.
+    /// Clutch is exiting: sends `ExitStarted` and closes every session.
     pub fn shutdown(mut self) {
         self.broadcast("ExitStarted", intent::GENERAL, None);
         self.stop(close::GOING_AWAY);
@@ -370,7 +370,7 @@ async fn session(
                             let _ = sink.send(msg).await;
                         }
                     }
-                    close_with = Some((code, "eStream closed the session".into()));
+                    close_with = Some((code, "Clutch closed the session".into()));
                     break;
                 }
             }
@@ -644,14 +644,14 @@ async fn run(
     if requests.send(pending).is_err() {
         return Err(RequestError::new(
             status::NOT_READY,
-            "eStream is shutting down",
+            "Clutch is shutting down",
         ));
     }
     match tokio::time::timeout(Duration::from_secs(30), rx).await {
         Ok(Ok(reply)) => reply,
         _ => Err(RequestError::new(
             status::NOT_READY,
-            "eStream didn't answer in time",
+            "Clutch didn't answer in time",
         )),
     }
 }

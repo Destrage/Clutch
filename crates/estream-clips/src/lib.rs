@@ -1,4 +1,4 @@
-//! Clipping for eStream (see the `add-clips` OpenSpec change).
+//! Clipping for Clutch (see the `add-clips` OpenSpec change).
 //!
 //! Everything here is plain logic or I/O off the real-time threads: the app feeds in game
 //! events, audio levels and hotkey presses, and asks the replay buffer to save the windows

@@ -23,7 +23,9 @@ use std::time::{Duration, Instant};
 /// The port tried first; the next few are tried if it's taken.
 pub const DEFAULT_PORT: u16 = 3091;
 /// The config file name written into the game's `cfg` folder.
-pub const CONFIG_NAME: &str = "gamestate_integration_estream.cfg";
+pub const CONFIG_NAME: &str = "gamestate_integration_clutch.cfg";
+/// The config file name up to 0.2, when the app was called eStream (replaced on install).
+const LEGACY_CONFIG_NAME: &str = "gamestate_integration_estream.cfg";
 
 fn str_at<'a>(v: &'a Value, path: &[&str]) -> Option<&'a str> {
     path.iter().try_fold(v, |v, k| v.get(k))?.as_str()
@@ -69,7 +71,7 @@ impl Cs2Tracker {
             {
                 let round_kills = u64_at(payload, &["player", "state", "round_kills"]).unwrap_or(0);
                 // New kills all happened this round, so there can't be more than `round_kills`
-                // of them; a bigger jump means payloads were missed (a reconnect, eStream
+                // of them; a bigger jump means payloads were missed (a reconnect, Clutch
                 // starting mid-match) and only resets the baseline. Kills that arrive together
                 // count up: a jump from 0 to 2 is a kill, then a double kill.
                 let new = (now.kills - before.kills).min(round_kills);
@@ -214,7 +216,7 @@ pub fn config_text(integration: Integration, port: u16, token: &str) -> String {
         .map(|d| format!("        \"{d}\" \"1\"\n"))
         .collect();
     format!(
-        "\"eStream\"\n{{\n    \"uri\" \"http://127.0.0.1:{port}/{route}\"\n    \"timeout\" \"1.1\"\n    \"buffer\" \"0.1\"\n    \"throttle\" \"0.1\"\n    \"heartbeat\" \"10.0\"\n    \"auth\"\n    {{\n        \"token\" \"{token}\"\n    }}\n    \"data\"\n    {{\n{data}    }}\n}}\n"
+        "\"Clutch\"\n{{\n    \"uri\" \"http://127.0.0.1:{port}/{route}\"\n    \"timeout\" \"1.1\"\n    \"buffer\" \"0.1\"\n    \"throttle\" \"0.1\"\n    \"heartbeat\" \"10.0\"\n    \"auth\"\n    {{\n        \"token\" \"{token}\"\n    }}\n    \"data\"\n    {{\n{data}    }}\n}}\n"
     )
 }
 
@@ -272,6 +274,8 @@ pub fn install(
     let path = dir.join(CONFIG_NAME);
     std::fs::write(&path, config_text(integration, port, token))
         .map_err(|e| InstallError::Io(e.to_string()))?;
+    // Both files would post every event twice.
+    let _ = std::fs::remove_file(dir.join(LEGACY_CONFIG_NAME));
     Ok(path)
 }
 
@@ -663,12 +667,15 @@ mod tests {
             root.join("steamapps/appmanifest_730.acf"),
             "\"AppState\"\n{\n\t\"installdir\"\t\t\"Counter-Strike Global Offensive\"\n}\n",
         );
+        let cfg = root.join("steamapps/common/Counter-Strike Global Offensive/game/csgo/cfg");
+        let _ = std::fs::write(cfg.join("gamestate_integration_estream.cfg"), "old");
         let path = install(Integration::Cs2Gsi, Some(&root), 3091, "tok")
             .unwrap_or_else(|e| panic!("install: {e}"));
         assert!(
-            path.ends_with(r"game\csgo\cfg\gamestate_integration_estream.cfg")
-                || path.ends_with("game/csgo/cfg/gamestate_integration_estream.cfg")
+            path.ends_with(r"game\csgo\cfg\gamestate_integration_clutch.cfg")
+                || path.ends_with("game/csgo/cfg/gamestate_integration_clutch.cfg")
         );
+        assert!(!cfg.join("gamestate_integration_estream.cfg").exists());
         let text = std::fs::read_to_string(&path).unwrap_or_default();
         assert!(text.contains("\"tok\""));
         assert!(matches!(

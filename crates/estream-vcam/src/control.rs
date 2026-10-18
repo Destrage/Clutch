@@ -1,4 +1,4 @@
-//! Used by eStream: installs the camera source (once, elevated) and turns the session camera
+//! Used by Clutch: installs the camera source (once, elevated) and turns the session camera
 //! on and off with `MFCreateVirtualCamera`.
 
 use crate::{CLSID_STRING, FRIENDLY_NAME};
@@ -13,7 +13,7 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
 use windows::core::{HSTRING, PCWSTR};
 
-/// Whether the camera source is installed for this copy of eStream.
+/// Whether the camera source is installed for this copy of Clutch.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Registration {
     Installed,
@@ -139,7 +139,7 @@ type CreateVirtualCamera = unsafe extern "system" fn(
 ) -> windows::core::HRESULT;
 
 /// `MFCreateVirtualCamera`, looked up at run time: it only exists on Windows 11, and a
-/// static import would stop eStream from starting on Windows 10.
+/// static import would stop Clutch from starting on Windows 10.
 fn create_function() -> Option<CreateVirtualCamera> {
     use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
     // SAFETY: loads a system DLL and looks up an export with the signature above.

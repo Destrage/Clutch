@@ -1,4 +1,4 @@
-//! The eStream engine: command bus, undo/redo, render graph, frame clock,
+//! The Clutch engine: command bus, undo/redo, render graph, frame clock,
 //! runtime sources and the real-time video thread.
 //!
 //! All project mutations go through [`Engine::execute`] / [`Engine::submit`]

@@ -7,7 +7,7 @@
 //! ```
 //!
 //! The index is rebuilt by scanning the folder ([`Library::open`], [`Library::refresh`]), so
-//! clips added, removed or renamed outside eStream show up. A clip file without a sidecar is
+//! clips added, removed or renamed outside Clutch show up. A clip file without a sidecar is
 //! listed as a manual clip with no game.
 
 use crate::event::EventKind;

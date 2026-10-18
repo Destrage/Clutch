@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "eStream developer tasks (icon, Windows installer)"
+description = "Clutch developer tasks (icon, Windows installer)"
 publish = false
 
 [lints]

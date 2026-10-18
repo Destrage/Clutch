@@ -1,7 +1,7 @@
 //! The installed virtual camera, end to end through Windows' Frame Server.
 //!
 //! Needs the camera source registered once (`regsvr32 target\debug\estream_vcam.dll` from an
-//! elevated prompt, or Start virtual camera in eStream). Run with
+//! elevated prompt, or Start virtual camera in Clutch). Run with
 //! `cargo test -p estream-vcam --test system -- --ignored`.
 #![cfg(windows)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -69,7 +69,7 @@ fn camera_streams_through_frame_server() {
 
     let camera = VirtualCamera::start().expect("MFCreateVirtualCamera");
 
-    // Play eStream: send magenta-ish frames at whatever size the source asks for.
+    // Play Clutch: send magenta-ish frames at whatever size the source asks for.
     let stop = Arc::new(AtomicBool::new(false));
     let producer = {
         let stop = stop.clone();
@@ -143,7 +143,7 @@ fn camera_streams_through_frame_server() {
     producer.join().unwrap();
     assert!(
         matched,
-        "{frames} frames read, none carried eStream's picture"
+        "{frames} frames read, none carried Clutch's picture"
     );
 
     drop(reader);
@@ -157,6 +157,6 @@ fn camera_streams_through_frame_server() {
             std::thread::sleep(Duration::from_millis(250));
             find_camera().is_none()
         }),
-        "the camera is removed with eStream"
+        "the camera is removed with Clutch"
     );
 }

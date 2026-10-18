@@ -29,7 +29,7 @@ pub enum PersistError {
     #[error("scene collection has no schema version")]
     MissingSchema,
     #[error(
-        "scene collection uses schema v{found}, but this version of eStream only supports up to v{supported}; please update eStream"
+        "scene collection uses schema v{found}, but this version of Clutch only supports up to v{supported}; please update Clutch"
     )]
     NewerSchema { found: u32, supported: u32 },
     #[error("migration from schema v{from} failed: {message}")]

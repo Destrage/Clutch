@@ -21,7 +21,7 @@ pub struct Ctx {
     pub active_fps: f64,
 }
 
-/// Every request type eStream answers (for `GetVersion`).
+/// Every request type Clutch answers (for `GetVersion`).
 pub const REQUESTS: &[&str] = &[
     "GetVersion",
     "GetStats",
@@ -403,7 +403,7 @@ fn scene_ref(s: Option<&Scene>, prefix: &str) -> Value {
     })
 }
 
-/// Light translation of OBS setting names for kinds that have an eStream equivalent.
+/// Light translation of OBS setting names for kinds that have an Clutch equivalent.
 fn import_settings(kind: &str, mut settings: Map<String, Value>) -> Map<String, Value> {
     match kind {
         "browser" => {
@@ -551,7 +551,7 @@ pub fn handle(
             "availableRequests": REQUESTS,
             "supportedImageFormats": [],
             "platform": std::env::consts::OS,
-            "platformDescription": format!("eStream {}", env!("CARGO_PKG_VERSION")),
+            "platformDescription": format!("Clutch {}", env!("CARGO_PKG_VERSION")),
             "estreamVersion": env!("CARGO_PKG_VERSION"),
         })),
         "GetStats" => {
@@ -584,7 +584,7 @@ pub fn handle(
                 "webSocketSessionOutgoingMessages": session.outgoing.load(Relaxed),
             }))
         }
-        // eStream's macros stand in for OBS hotkeys (Stream Deck "hotkey" buttons).
+        // Clutch's macros stand in for OBS hotkeys (Stream Deck "hotkey" buttons).
         "GetHotkeyList" => Ok(json!({ "hotkeys": studio.macro_names() })),
         "TriggerHotkeyByName" => {
             let name = a.str("hotkeyName")?;
@@ -799,7 +799,7 @@ pub fn handle(
             let Some(source_type) = engine.registry().get(&kind) else {
                 return Err(RequestError::new(
                     st::INVALID_INPUT_KIND,
-                    format!("eStream has no “{kind}” inputs"),
+                    format!("Clutch has no “{kind}” inputs"),
                 ));
             };
             let given = match a.get("inputSettings") {
@@ -869,7 +869,7 @@ pub fn handle(
             let Some(t) = engine.registry().get(&kind) else {
                 return Err(RequestError::new(
                     st::INVALID_INPUT_KIND,
-                    format!("eStream has no “{kind}” inputs"),
+                    format!("Clutch has no “{kind}” inputs"),
                 ));
             };
             Ok(json!({
@@ -1099,7 +1099,7 @@ pub fn handle(
             ) {
                 return Err(RequestError::new(
                     st::INVALID_RESOURCE_STATE,
-                    format!("set up the {name} transition in eStream first"),
+                    format!("set up the {name} transition in Clutch first"),
                 ));
             }
             exec(
@@ -1269,7 +1269,7 @@ pub fn handle(
                     if find_scene(&p, &a, "sourceName", "sourceUuid").is_ok() {
                         return Err(RequestError::new(
                             st::INVALID_RESOURCE_TYPE,
-                            "eStream can't put a scene inside a scene yet",
+                            "Clutch can't put a scene inside a scene yet",
                         ));
                     }
                     return Err(e);
@@ -1478,7 +1478,7 @@ pub fn handle(
                 other => {
                     return Err(RequestError::new(
                         st::INVALID_REQUEST_FIELD,
-                        format!("eStream doesn't support blend mode {other}"),
+                        format!("Clutch doesn't support blend mode {other}"),
                     ));
                 }
             };
@@ -1520,7 +1520,7 @@ pub fn handle(
         }
         "PauseRecord" | "ResumeRecord" | "ToggleRecordPause" => Err(RequestError::new(
             st::OUTPUT_DISABLED,
-            "eStream can't pause recordings yet",
+            "Clutch can't pause recordings yet",
         )),
         "StartReplayBuffer" => set_output(studio, Output::ReplayBuffer, true).map(|_| Value::Null),
         "StopReplayBuffer" => set_output(studio, Output::ReplayBuffer, false).map(|_| Value::Null),
@@ -1631,7 +1631,7 @@ pub fn handle(
         )),
         other => Err(RequestError::new(
             st::UNKNOWN_REQUEST_TYPE,
-            format!("eStream doesn't support {other} yet"),
+            format!("Clutch doesn't support {other} yet"),
         )),
     }
 }

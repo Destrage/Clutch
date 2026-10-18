@@ -181,6 +181,7 @@ pub fn foreground_fullscreen() -> Option<WindowInfo> {
     let info = describe(hwnd)?;
     let ignored = [
         "explorer.exe",
+        "clutch.exe",
         "estream.exe",
         "searchhost.exe",
         "shellexperiencehost.exe",

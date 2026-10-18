@@ -1,4 +1,4 @@
-//! Montages for eStream (see the `add-montage-editor` OpenSpec change): the timeline model and
+//! Montages for Clutch (see the `add-montage-editor` OpenSpec change): the timeline model and
 //! its edits, finding highlights, beat detection, assembling a montage, rendering and export.
 //!
 //! Nothing here touches the live studio engine; montage work runs on its own threads.

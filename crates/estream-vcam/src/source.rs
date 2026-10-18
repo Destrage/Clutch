@@ -1,5 +1,5 @@
 //! The Media Foundation camera source that Windows' Frame Server loads for the virtual camera:
-//! an activator, a live media source and one NV12 video stream. Frames come from eStream
+//! an activator, a live media source and one NV12 video stream. Frames come from Clutch
 //! through [`crate::shared`]; without them the camera shows a dark placeholder.
 
 use crate::shared::{Shared, fill_nv12, fit_nv12, nv12_len};
@@ -71,7 +71,7 @@ fn media_type(width: u32, height: u32) -> Result<IMFMediaType> {
         t.SetUINT32(&MF_MT_FIXED_SIZE_SAMPLES, 1)?;
         t.SetUINT32(&MF_MT_DEFAULT_STRIDE, width)?;
         t.SetUINT32(&MF_MT_SAMPLE_SIZE, nv12_len(width, height) as u32)?;
-        // eStream renders BT.709, limited range; say so, or apps guess (BT.601 for small sizes).
+        // Clutch renders BT.709, limited range; say so, or apps guess (BT.601 for small sizes).
         t.SetUINT32(&MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709.0 as u32)?;
         t.SetUINT32(&MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235.0 as u32)?;
         t.SetUINT32(&MF_MT_VIDEO_PRIMARIES, MFVideoPrimaries_BT709.0 as u32)?;
@@ -92,7 +92,7 @@ fn frame_size(t: &IMFMediaType) -> Result<(u32, u32)> {
 }
 
 /// Creates the media source (what the activator hands to Frame Server). `mapping` is where
-/// eStream's frames are shared ([`crate::shared::MAPPING_NAME`] in production).
+/// Clutch's frames are shared ([`crate::shared::MAPPING_NAME`] in production).
 pub fn create_source(mapping: &str) -> Result<IMFMediaSource> {
     let stream_attributes = attributes(4)?;
     let types = FORMATS
@@ -623,7 +623,7 @@ impl IMFMediaStream2_Impl for MediaStream_Impl {
     }
 }
 
-/// Dark placeholder shown while eStream isn't sending frames.
+/// Dark placeholder shown while Clutch isn't sending frames.
 fn placeholder(picture: &mut [u8], w: u32, h: u32) {
     fill_nv12(picture, w, h, 28, 128, 128);
 }

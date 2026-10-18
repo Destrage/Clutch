@@ -1,4 +1,4 @@
-//! eStream desktop app.
+//! Clutch desktop app.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -36,7 +36,7 @@ fn acquire_instance_lock(paths: &Paths) -> anyhow::Result<Option<std::fs::File>>
 
 /// Must match `APP_USER_MODEL_ID` in `xtask` (set on the installer's shortcuts).
 #[cfg(windows)]
-const APP_USER_MODEL_ID: windows::core::PCWSTR = windows::core::w!("eStream.Studio");
+const APP_USER_MODEL_ID: windows::core::PCWSTR = windows::core::w!("Clutch.Studio");
 
 /// Gives the process the same AppUserModelID as its shortcuts, so Start and the taskbar treat
 /// the window and the shortcuts as one app (pinning, grouping). Must run before any window exists.
@@ -52,17 +52,30 @@ fn set_app_user_model_id() {
 
 fn main() -> anyhow::Result<()> {
     let paths = Paths::new();
+    // Clutch was called eStream up to 0.2: take its settings folder over on the first start.
+    let legacy = Paths::legacy_root();
+    let adopted = legacy.as_deref().map(|l| paths.adopt(l));
     std::fs::create_dir_all(paths.scenes())?;
     let _log = estream_engine::diagnostics::init_logging(&paths.logs())?;
     let Some(_lock) = acquire_instance_lock(&paths)? else {
-        tracing::error!("eStream is already running");
-        eprintln!("eStream is already running.");
+        tracing::error!("Clutch is already running");
+        eprintln!("Clutch is already running.");
         return Ok(());
     };
     #[cfg(windows)]
     set_app_user_model_id();
 
-    let settings = Settings::load(&paths.settings());
+    let mut settings = Settings::load(&paths.settings());
+    match (adopted, legacy) {
+        (Some(Ok(true)), Some(legacy)) => {
+            tracing::info!(from = %legacy.display(), "took over the eStream settings folder");
+            if settings.rebase(&legacy, &paths.root) {
+                settings.save(&paths.settings());
+            }
+        }
+        (Some(Err(e)), _) => tracing::warn!(error = %e, "couldn't take over the eStream settings"),
+        _ => {}
+    }
     let gpu = GpuContext::new_headless(&GpuOptions::default())?;
     // Slint keeps the device and queue in a thread-local that is dropped during process
     // exit, after wgpu's own thread-locals are gone (which panics in wgpu's lock tracing).

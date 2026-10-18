@@ -1,4 +1,4 @@
-//! How eStream's model looks through obs-websocket: ids, names, kinds and JSON shapes shared
+//! How Clutch's model looks through obs-websocket: ids, names, kinds and JSON shapes shared
 //! by requests and events.
 
 use estream_core::{Alignment, BoundsMode, ItemId, ItemTransform, Size};
@@ -10,7 +10,7 @@ use glam::Vec2;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
-/// Integer scene item ids (obs-websocket) for eStream's UUID item ids, stable per session.
+/// Integer scene item ids (obs-websocket) for Clutch's UUID item ids, stable per session.
 #[derive(Debug, Default)]
 pub struct ItemIds {
     by_item: HashMap<ItemId, i64>,
@@ -34,7 +34,7 @@ impl ItemIds {
     }
 }
 
-/// eStream source kinds and the OBS input kinds controllers know them by.
+/// Clutch source kinds and the OBS input kinds controllers know them by.
 const KIND_ALIASES: &[(&str, &str)] = &[
     ("browser", "browser_source"),
     ("media", "ffmpeg_source"),
@@ -50,7 +50,7 @@ const KIND_ALIASES: &[(&str, &str)] = &[
     ("app_audio", "wasapi_process_output_capture"),
 ];
 
-/// The OBS input kind for an eStream kind (unchanged if OBS has no equivalent).
+/// The OBS input kind for an Clutch kind (unchanged if OBS has no equivalent).
 pub fn obs_kind(kind: &str) -> &str {
     KIND_ALIASES
         .iter()
@@ -58,7 +58,7 @@ pub fn obs_kind(kind: &str) -> &str {
         .map_or(kind, |(_, o)| o)
 }
 
-/// The eStream kind for an OBS input kind (or an eStream kind, versioned or not).
+/// The Clutch kind for an OBS input kind (or an Clutch kind, versioned or not).
 pub fn estream_kind(kind: &str) -> String {
     let base = unversioned(kind);
     KIND_ALIASES

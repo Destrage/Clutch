@@ -5,9 +5,9 @@ use base64::Engine as _;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-/// The obs-websocket version eStream implements.
+/// The obs-websocket version Clutch implements.
 pub const OBS_WEBSOCKET_VERSION: &str = "5.5.0";
-/// The OBS Studio version eStream behaves like (some clients check it).
+/// The OBS Studio version Clutch behaves like (some clients check it).
 pub const OBS_VERSION: &str = "31.0.0";
 pub const RPC_VERSION: u64 = 1;
 
@@ -37,7 +37,7 @@ pub mod close {
     pub const AUTHENTICATION_FAILED: u16 = 4009;
     pub const UNSUPPORTED_RPC_VERSION: u16 = 4010;
     pub const SESSION_INVALIDATED: u16 = 4011;
-    /// Normal close when eStream shuts down ("going away").
+    /// Normal close when Clutch shuts down ("going away").
     pub const GOING_AWAY: u16 = 1001;
 }
 

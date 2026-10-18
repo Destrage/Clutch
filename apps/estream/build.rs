@@ -4,14 +4,17 @@ fn main() {
         panic!("Slint UI failed to compile: {e:?}");
     }
 
-    // The app icon and version info in estream.exe (Explorer, the taskbar, shortcuts).
-    println!("cargo:rerun-if-changed=assets/estream.ico");
+    // The app icon and version info in clutch.exe (Explorer, the taskbar, shortcuts).
+    println!("cargo:rerun-if-changed=assets/clutch.ico");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let mut res = winresource::WindowsResource::new();
-        res.set_icon("assets/estream.ico")
-            .set("ProductName", "eStream")
-            .set("FileDescription", "eStream streaming and recording studio")
-            .set("CompanyName", "eStream");
+        res.set_icon("assets/clutch.ico")
+            .set("ProductName", "Clutch")
+            .set(
+                "FileDescription",
+                "Clutch streaming, recording and clipping studio",
+            )
+            .set("CompanyName", "Clutch");
         if let Err(e) = res.compile() {
             println!("cargo:warning=app icon not embedded: {e}");
         }

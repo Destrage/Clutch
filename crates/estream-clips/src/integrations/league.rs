@@ -53,7 +53,7 @@ pub struct LeagueTracker {
 }
 
 impl LeagueTracker {
-    /// Events already in the list on the first call (eStream opened mid-game) are not
+    /// Events already in the list on the first call (Clutch opened mid-game) are not
     /// clipped, as they're no longer in the buffer.
     pub fn update(&mut self, me: &str, events: &[LeagueEvent]) -> Vec<EventKind> {
         let newest = events.iter().map(|e| e.event_id).max();

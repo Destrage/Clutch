@@ -1,4 +1,4 @@
-//! Shared-memory channels between eStream and its helper processes (the browser helper):
+//! Shared-memory channels between Clutch and its helper processes (the browser helper):
 //! a seqlocked video frame and a single-writer audio ring, both in named file mappings.
 //!
 //! Layouts are `repr(C)` with fixed field sizes so both processes agree. Only Windows is
@@ -239,7 +239,7 @@ impl FrameWriter {
     }
 }
 
-/// Reads frames (the eStream side).
+/// Reads frames (the Clutch side).
 pub struct FrameReader {
     map: Mapping,
     last: u64,
@@ -323,7 +323,7 @@ impl AudioWriter {
     }
 }
 
-/// Reads audio (the eStream side) from its own position.
+/// Reads audio (the Clutch side) from its own position.
 pub struct AudioReader {
     map: Mapping,
     capacity: u32,

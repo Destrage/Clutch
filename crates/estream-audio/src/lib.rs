@@ -1,4 +1,4 @@
-//! eStream audio engine: 48 kHz stereo `f32` mixing in 10 ms blocks, with
+//! Clutch audio engine: 48 kHz stereo `f32` mixing in 10 ms blocks, with
 //! per-source filters, meters, monitoring and six output tracks.
 //!
 //! Real-time rules: [`AudioCore::process`] never allocates or blocks; device

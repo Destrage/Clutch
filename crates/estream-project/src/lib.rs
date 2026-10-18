@@ -1,4 +1,4 @@
-//! The eStream document: project model (canvases, scenes, items, sources) and
+//! The Clutch document: project model (canvases, scenes, items, sources) and
 //! its persistence (versioned JSON scene collections, migrations, recovery files).
 
 pub mod automation;

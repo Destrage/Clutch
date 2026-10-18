@@ -1,4 +1,4 @@
-// Go Live in two steps: pick the platform, paste the key. eStream picks everything else.
+// Go Live in two steps: pick the platform, paste the key. Clutch picks everything else.
 
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
@@ -12,7 +12,7 @@ export component GoLiveDialog inherits Modal {
     /// Feedback under the key ("Looks like a Twitch key", or a problem).
     in property <string> message;
     in property <bool> message-error;
-    /// What eStream picked: server, encoder, bitrate.
+    /// What Clutch picked: server, encoder, bitrate.
     in property <string> auto-settings;
     property <bool> reveal: false;
     callback pick(int);
@@ -49,7 +49,7 @@ export component GoLiveDialog inherits Modal {
                 alignment: center;
                 spacing: 2px;
                 Text { text: "Go live"; color: Theme.text; font-size: Theme.font-xl; font-weight: 700; }
-                Text { text: "Two steps. eStream picks the best settings for your PC."; color: Theme.text-muted; font-size: Theme.font-s; }
+                Text { text: "Two steps. Clutch picks the best settings for your PC."; color: Theme.text-muted; font-size: Theme.font-s; }
             }
         }
 

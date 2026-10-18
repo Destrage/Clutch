@@ -1,5 +1,5 @@
 //! Browser source. Pages render in the `estream-browser` helper process (CEF), so a crashing
-//! page can't take eStream down; frames and audio come back through shared memory.
+//! page can't take Clutch down; frames and audio come back through shared memory.
 //!
 //! One helper serves every browser source. A supervisor thread starts it, re-creates every
 //! page after a crash (with back-off), and stops it when no pages are left. Sources never
@@ -126,13 +126,13 @@ pub fn host() -> Arc<BrowserHost> {
     HOST.get_or_init(BrowserHost::start).clone()
 }
 
-/// `estream-browser.exe` next to this executable (or one level up, for test runners in
+/// `clutch-browser.exe` next to this executable (or one level up, for test runners in
 /// `target/<profile>/deps`).
 fn helper_path() -> Option<PathBuf> {
     let name = if cfg!(windows) {
-        "estream-browser.exe"
+        "clutch-browser.exe"
     } else {
-        "estream-browser"
+        "clutch-browser"
     };
     let exe = std::env::current_exe().ok()?;
     let dir = exe.parent()?;
@@ -260,7 +260,7 @@ impl BrowserHost {
             }
             let Some(path) = helper_path() else {
                 self.lock().helper = HelperState::Missing(
-                    "The browser helper (estream-browser.exe) is missing next to eStream".into(),
+                    "The browser helper (clutch-browser.exe) is missing next to Clutch".into(),
                 );
                 std::thread::sleep(Duration::from_secs(5));
                 continue;

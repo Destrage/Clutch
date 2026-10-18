@@ -1,4 +1,4 @@
-//! Capture and media sources for eStream.
+//! Capture and media sources for Clutch.
 //!
 //! Register them with [`register_all`]. Platform capture lives in
 //! `platform::*` behind `cfg`; image and text sources are cross-platform.

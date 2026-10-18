@@ -43,7 +43,7 @@ pub struct TextSettings {
 impl Default for TextSettings {
     fn default() -> Self {
         Self {
-            text: "Hello, eStream!".into(),
+            text: "Hello, Clutch!".into(),
             font: default_font().into(),
             size: 72.0,
             color: Rgba8::WHITE,

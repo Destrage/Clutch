@@ -10,11 +10,11 @@ type Result<T> = std::result::Result<T, String>;
 
 const TARGET: &str = "x86_64-pc-windows-msvc";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-/// Never change: Windows uses it to recognise upgrades of eStream.
+/// Never change: Windows uses it to recognise upgrades of eStream and Clutch (Clutch was called eStream up to 0.2).
 const UPGRADE_CODE: &str = "6F1C2E8A-4B7D-4E21-9C3A-58D0E2B4A719";
 /// Must match `APP_USER_MODEL_ID` in `apps/estream/src/main.rs`, so Start and the taskbar
 /// tie the running window to the shortcuts (pinning, grouping).
-const APP_USER_MODEL_ID: &str = "eStream.Studio";
+const APP_USER_MODEL_ID: &str = "Clutch.Studio";
 const WIX_URL: &str =
     "https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip";
 
@@ -55,9 +55,9 @@ fn write(path: &Path, bytes: &[u8]) -> Result<()> {
     std::fs::write(path, bytes).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-/// `apps/estream/assets/estream.ico` (embedded in estream.exe, used by the installer).
+/// `apps/estream/assets/clutch.ico` (embedded in clutch.exe, used by the installer).
 fn write_icon() -> Result<()> {
-    let path = root().join("apps/estream/assets/estream.ico");
+    let path = root().join("apps/estream/assets/clutch.ico");
     write(&path, &icon::ico())?;
     println!("wrote {}", path.display());
     let preview = root().join("target/installer/icon-preview.png");
@@ -81,7 +81,7 @@ fn wanted(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     matches!(
         lower.as_str(),
-        "estream.exe" | "estream-browser.exe" | "estream_vcam.dll" | "vk_swiftshader_icd.json"
+        "clutch.exe" | "clutch-browser.exe" | "estream_vcam.dll" | "vk_swiftshader_icd.json"
     ) || [".dll", ".pak", ".bin", ".dat"]
         .iter()
         .any(|ext| lower.ends_with(ext))
@@ -124,8 +124,8 @@ fn package() -> Result<()> {
         )?;
     }
     for required in [
-        "estream.exe",
-        "estream-browser.exe",
+        "clutch.exe",
+        "clutch-browser.exe",
         "estream_vcam.dll",
         "libcef.dll",
     ] {
@@ -146,7 +146,7 @@ fn package() -> Result<()> {
 
     // 3. Installer artwork and texts.
     let assets = out.join("assets");
-    write(&assets.join("estream.ico"), &icon::ico())?;
+    write(&assets.join("clutch.ico"), &icon::ico())?;
     let (banner, dialog) = icon::installer_art();
     write(&assets.join("banner.bmp"), &banner)?;
     write(&assets.join("dialog.bmp"), &dialog)?;
@@ -154,10 +154,10 @@ fn package() -> Result<()> {
 
     // 4. WiX source and build.
     let wix = wix_tools(&root)?;
-    let wxs = out.join("estream.wxs");
+    let wxs = out.join("clutch.wxs");
     write(&wxs, wix_source(&stage, &assets)?.as_bytes())?;
-    let obj = out.join("estream.wixobj");
-    let msi = out.join(format!("eStream-{VERSION}-x64.msi"));
+    let obj = out.join("clutch.wixobj");
+    let msi = out.join(format!("Clutch-{VERSION}-x64.msi"));
     run(Command::new(wix.join("candle.exe"))
         .args([
             "-nologo",
@@ -302,19 +302,19 @@ fn wix_source(stage: &Path, assets: &Path) -> Result<String> {
         .map(|c| format!("      <ComponentRef Id=\"{c}\" />\n"))
         .collect();
     let asset = |name: &str| xml(&assets.join(name).to_string_lossy());
-    let exe = ident("fil", "estream.exe");
+    let exe = ident("fil", "clutch.exe");
     let regsvr = "&quot;[System64Folder]regsvr32.exe&quot;";
     let vcam = "&quot;[INSTALLFOLDER]estream_vcam.dll&quot;";
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*" Name="eStream" Language="1033" Version="{VERSION}" Manufacturer="eStream" UpgradeCode="{{{UPGRADE_CODE}}}">
-    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" Platform="x64" Description="eStream streaming and recording studio" />
-    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of eStream is already installed." />
+  <Product Id="*" Name="Clutch" Language="1033" Version="{VERSION}" Manufacturer="Clutch" UpgradeCode="{{{UPGRADE_CODE}}}">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" Platform="x64" Description="Clutch streaming, recording and clipping studio" />
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of Clutch is already installed." />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
-    <Icon Id="estream.ico" SourceFile="{icon}" />
-    <Property Id="ARPPRODUCTICON" Value="estream.ico" />
+    <Icon Id="clutch.ico" SourceFile="{icon}" />
+    <Property Id="ARPPRODUCTICON" Value="clutch.ico" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/estream/estream" />
     <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
     <WixVariable Id="WixUILicenseRtf" Value="{license}" />
@@ -322,7 +322,7 @@ fn wix_source(stage: &Path, assets: &Path) -> Result<String> {
     <WixVariable Id="WixUIDialogBmp" Value="{dialog}" />
     <UIRef Id="WixUI_InstallDir" />
 
-    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch eStream" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch Clutch" />
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
     <Property Id="WixShellExecTarget" Value="[#{exe}]" />
     <CustomAction Id="LaunchApp" BinaryKey="WixCA" DllEntry="WixShellExec" Impersonate="yes" />
@@ -332,7 +332,7 @@ fn wix_source(stage: &Path, assets: &Path) -> Result<String> {
 
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder">
-        <Directory Id="INSTALLFOLDER" Name="eStream">
+        <Directory Id="INSTALLFOLDER" Name="Clutch">
 {files}        </Directory>
       </Directory>
       <Directory Id="ProgramMenuFolder" />
@@ -341,18 +341,18 @@ fn wix_source(stage: &Path, assets: &Path) -> Result<String> {
 
     <DirectoryRef Id="ProgramMenuFolder">
       <Component Id="cmp_StartMenu" Guid="{{{start}}}" Win64="yes">
-        <Shortcut Id="StartMenuShortcut" Name="eStream" Description="Streaming and recording studio" Target="[INSTALLFOLDER]estream.exe" WorkingDirectory="INSTALLFOLDER" Icon="estream.ico">
+        <Shortcut Id="StartMenuShortcut" Name="Clutch" Description="Stream, record and clip" Target="[INSTALLFOLDER]clutch.exe" WorkingDirectory="INSTALLFOLDER" Icon="clutch.ico">
           <ShortcutProperty Key="System.AppUserModel.ID" Value="{aumid}" />
         </Shortcut>
-        <RegistryValue Root="HKCU" Key="Software\eStream" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+        <RegistryValue Root="HKCU" Key="Software\Clutch" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
       </Component>
     </DirectoryRef>
     <DirectoryRef Id="DesktopFolder">
       <Component Id="cmp_Desktop" Guid="{{{desktop}}}" Win64="yes">
-        <Shortcut Id="DesktopShortcut" Name="eStream" Description="Streaming and recording studio" Target="[INSTALLFOLDER]estream.exe" WorkingDirectory="INSTALLFOLDER" Icon="estream.ico">
+        <Shortcut Id="DesktopShortcut" Name="Clutch" Description="Stream, record and clip" Target="[INSTALLFOLDER]clutch.exe" WorkingDirectory="INSTALLFOLDER" Icon="clutch.ico">
           <ShortcutProperty Key="System.AppUserModel.ID" Value="{aumid}" />
         </Shortcut>
-        <RegistryValue Root="HKCU" Key="Software\eStream" Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
+        <RegistryValue Root="HKCU" Key="Software\Clutch" Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
       </Component>
     </DirectoryRef>
 
@@ -365,7 +365,7 @@ fn wix_source(stage: &Path, assets: &Path) -> Result<String> {
       <Custom Action="RegisterVcam" After="InstallFiles">NOT REMOVE</Custom>
     </InstallExecuteSequence>
 
-    <Feature Id="Main" Title="eStream" Level="1" Absent="disallow">
+    <Feature Id="Main" Title="Clutch" Level="1" Absent="disallow">
 {component_refs}      <ComponentRef Id="cmp_StartMenu" />
     </Feature>
     <Feature Id="DesktopShortcut" Title="Desktop shortcut" Level="1">
@@ -374,20 +374,20 @@ fn wix_source(stage: &Path, assets: &Path) -> Result<String> {
   </Product>
 </Wix>
 "#,
-        icon = asset("estream.ico"),
+        icon = asset("clutch.ico"),
         license = asset("license.rtf"),
         banner = asset("banner.bmp"),
         dialog = asset("dialog.bmp"),
-        start = guid("shortcut:startmenu"),
-        desktop = guid("shortcut:desktop"),
+        start = guid("clutch:shortcut:startmenu"),
+        desktop = guid("clutch:shortcut:desktop"),
         aumid = APP_USER_MODEL_ID,
     ))
 }
 
 fn license_rtf() -> String {
     let paragraphs = [
-        r"\b eStream\b0",
-        "Copyright (c) the eStream contributors. Licensed under the MIT License or the Apache License, Version 2.0, at your option.",
+        r"\b Clutch\b0",
+        "Copyright (c) the Clutch contributors. Licensed under the MIT License or the Apache License, Version 2.0, at your option.",
         "THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.",
         r"\b Third-party components\b0",
         "FFmpeg (libavcodec, libavformat and related libraries) is licensed under the GNU Lesser General Public License, version 2.1 or later, and is included as unmodified shared libraries. Its license text is in the licenses folder of the installation.",

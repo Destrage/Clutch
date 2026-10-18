@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
-/// A game's local event API that eStream can listen to.
+/// A game's local event API that Clutch can listen to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Integration {
@@ -49,8 +49,9 @@ pub struct Game {
 }
 
 /// Programs that are never offered as games even when fullscreen (video players, browsers,
-/// the desktop, eStream itself).
+/// the desktop, Clutch itself).
 const NEVER_GAMES: &[&str] = &[
+    "clutch.exe",
     "estream.exe",
     "explorer.exe",
     "chrome.exe",

@@ -17,7 +17,7 @@ pub struct LogGuard {
 pub fn init_logging(dir: &Path) -> std::io::Result<LogGuard> {
     std::fs::create_dir_all(dir)?;
     let name = format!(
-        "estream-{}.log",
+        "clutch-{}.log",
         chrono::Local::now().format("%Y%m%d-%H%M%S%.3f")
     );
     let path = dir.join(name);
@@ -33,7 +33,7 @@ pub fn init_logging(dir: &Path) -> std::io::Result<LogGuard> {
         .try_init();
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
-        "eStream logging started"
+        "Clutch logging started"
     );
     Ok(LogGuard {
         _worker: worker,
@@ -41,16 +41,22 @@ pub fn init_logging(dir: &Path) -> std::io::Result<LogGuard> {
     })
 }
 
-/// Deletes all but the `keep` most recent `estream-*.log` files in `dir`.
+/// Deletes all but the `keep` most recent `clutch-*.log` files in `dir`, and every
+/// `estream-*.log` (the app was called eStream up to 0.2).
 pub fn prune_logs(dir: &Path, keep: usize) -> std::io::Result<()> {
-    let mut logs: Vec<PathBuf> = std::fs::read_dir(dir)?
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("estream-") && n.ends_with(".log"))
-        })
-        .collect();
+    let mut logs = Vec::new();
+    for path in std::fs::read_dir(dir)?.filter_map(|e| e.ok().map(|e| e.path())) {
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if !name.ends_with(".log") {
+            continue;
+        }
+        if name.starts_with("clutch-") {
+            logs.push(path);
+        } else if name.starts_with("estream-") {
+            // Best effort: a still-running eStream may hold its log open.
+            let _ = std::fs::remove_file(&path);
+        }
+    }
     // Names embed a sortable timestamp.
     logs.sort();
     let excess = logs.len().saturating_sub(keep);
@@ -66,13 +72,14 @@ mod tests {
 
     #[test]
     fn prune_keeps_most_recent() {
-        let dir = std::env::temp_dir().join(format!("estream-logs-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("clutch-logs-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         for i in 0..15 {
-            std::fs::write(dir.join(format!("estream-20260101-0000{i:02}.000.log")), "").unwrap();
+            std::fs::write(dir.join(format!("clutch-20260101-0000{i:02}.000.log")), "").unwrap();
         }
         std::fs::write(dir.join("other.txt"), "").unwrap();
+        std::fs::write(dir.join("estream-20250101-000000.000.log"), "").unwrap();
         prune_logs(&dir, 10).unwrap();
         let mut left: Vec<_> = std::fs::read_dir(&dir)
             .unwrap()
@@ -80,7 +87,7 @@ mod tests {
             .collect();
         left.sort();
         assert_eq!(left.len(), 11);
-        assert_eq!(left[0], "estream-20260101-000005.000.log");
+        assert_eq!(left[0], "clutch-20260101-000005.000.log");
         assert!(left.contains(&"other.txt".to_owned()));
     }
 }

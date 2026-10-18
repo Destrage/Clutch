@@ -197,7 +197,7 @@ fn golive_key_problem(key: &str) -> Option<&'static str> {
         .any(|p| lower.starts_with(p))
     {
         return Some(
-            "That's the server address, not the stream key. eStream fills in the server \
+            "That's the server address, not the stream key. Clutch fills in the server \
              for you, so paste the stream key instead.",
         );
     }
@@ -708,7 +708,7 @@ impl App {
                 if let Some(w) = self.window() {
                     w.set_startup("ready".into());
                     w.set_collection_name(self.collection_name().into());
-                    w.set_window_title(format!("eStream — {}", self.collection_name()).into());
+                    w.set_window_title(format!("Clutch — {}", self.collection_name()).into());
                     w.invoke_zoom_fit();
                 }
                 self.refresh();
@@ -1515,7 +1515,7 @@ impl App {
             .copied()
     }
 
-    /// What eStream picks for a platform, shown under the key.
+    /// What Clutch picks for a platform, shown under the key.
     fn golive_auto_line(&self, service: Service) -> String {
         let (width, height, fps) = self
             .engine
@@ -1533,7 +1533,7 @@ impl App {
         };
         let kbps = service.recommended_kbps(width, height, fps);
         format!(
-            "eStream sets up the rest: {} server, {encoder}, {kbps} kbps for {width} × {height} at {} fps. \
+            "Clutch sets up the rest: {} server, {encoder}, {kbps} kbps for {width} × {height} at {} fps. \
              Change any of it in More options.",
             service.label(),
             fps.round()
@@ -4107,7 +4107,7 @@ impl App {
             StatTile {
                 label: "CPU".into(),
                 value: format!("{:.0}%", p.cpu).into(),
-                sub: format!("eStream {:.0}%", p.cpu_process).into(),
+                sub: format!("Clutch {:.0}%", p.cpu_process).into(),
                 path: spark(&series(|p| p.cpu), 100.0),
                 level: level(p.cpu > 90.0, false),
             },
@@ -4125,7 +4125,7 @@ impl App {
             StatTile {
                 label: "MEMORY".into(),
                 value: format!("{:.0} MB", p.memory_mb).into(),
-                sub: "used by eStream".into(),
+                sub: "used by Clutch".into(),
                 path: spark(&series(|p| p.memory_mb), 1.0),
                 level: 0,
             },
@@ -4838,14 +4838,14 @@ impl App {
     /// Registers the camera component (shows Windows' permission prompt) on a helper thread.
     fn install_vcam(&mut self, start_after: bool) {
         let Some(dll) = estream_vcam::control::dll_path() else {
-            self.toast("estream_vcam.dll is missing next to eStream".into(), true);
+            self.toast("estream_vcam.dll is missing next to Clutch".into(), true);
             return;
         };
         if self.vcam_install.is_some() {
             return;
         }
         self.toast(
-            "Windows will ask for permission once to install eStream's virtual camera".into(),
+            "Windows will ask for permission once to install Clutch's virtual camera".into(),
             false,
         );
         let (tx, rx) = std::sync::mpsc::channel();
@@ -4867,7 +4867,7 @@ impl App {
         self.vcam_error_shown = false;
         self.vcam = Some(estream_media::vcam::VirtualCamOutput::start(engine, canvas));
         self.toast(
-            "Virtual camera on — pick “eStream Virtual Camera” in your call app".into(),
+            "Virtual camera on — pick “Clutch Virtual Camera” in your call app".into(),
             false,
         );
         self.update_vcam();
@@ -4919,7 +4919,7 @@ impl App {
         if control::dll_path().is_none() {
             return (
                 false,
-                "estream_vcam.dll wasn't found next to eStream.".into(),
+                "estream_vcam.dll wasn't found next to Clutch.".into(),
             );
         }
         match control::registration() {
@@ -4931,7 +4931,7 @@ impl App {
             Registration::Elsewhere(p) => (
                 true,
                 format!(
-                    "Installed for another copy of eStream ({}). Reinstall to use this one.",
+                    "Installed for another copy of Clutch ({}). Reinstall to use this one.",
                     p.display()
                 ),
             ),
@@ -6402,12 +6402,12 @@ impl estream_api::Studio for App {
             Output::Record => self.toggle_recording(),
             Output::ReplayBuffer => self.toggle_replay(),
             Output::VirtualCam => {
-                // Installing needs Windows' permission prompt: only from eStream itself.
+                // Installing needs Windows' permission prompt: only from Clutch itself.
                 let installed = estream_vcam::control::registration()
                     == estream_vcam::control::Registration::Installed;
                 if active && !installed {
                     return Err(
-                        "install the virtual camera in eStream first (Settings → Virtual camera)"
+                        "install the virtual camera in Clutch first (Settings → Virtual camera)"
                             .into(),
                     );
                 }
@@ -6416,8 +6416,8 @@ impl estream_api::Studio for App {
         }
         if active && !running(self) {
             return Err(match output {
-                Output::Stream => "couldn't go live (check the stream destinations in eStream)",
-                Output::Record => "couldn't start recording (see eStream for details)",
+                Output::Stream => "couldn't go live (check the stream destinations in Clutch)",
+                Output::Record => "couldn't start recording (see Clutch for details)",
                 Output::ReplayBuffer => "couldn't start the replay buffer",
                 Output::VirtualCam => "couldn't start the virtual camera (needs Windows 11)",
             }

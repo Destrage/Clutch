@@ -356,7 +356,7 @@ impl Monitor {
                     Severity::Problem,
                     format!("Reconnecting to {}", d.name),
                     format!("{} reconnects so far", d.reconnects),
-                    "eStream keeps retrying on its own. Check your connection and the server address.".to_owned(),
+                    "Clutch keeps retrying on its own. Check your connection and the server address.".to_owned(),
                 )
             });
             conditions.push((format!("reconnecting:{}", d.key), reconnecting, 2, 5));
@@ -373,7 +373,7 @@ impl Monitor {
                 (
                     Severity::Warning,
                     "The CPU is almost fully busy".to_owned(),
-                    format!("{:.0}% total · eStream {:.0}%", s.cpu_total, s.cpu_process),
+                    format!("{:.0}% total · Clutch {:.0}%", s.cpu_total, s.cpu_process),
                     "Close other programs, or switch to a hardware encoder to free the CPU."
                         .to_owned(),
                 )
@@ -388,7 +388,7 @@ impl Monitor {
                     Severity::Warning,
                     "The GPU is almost fully busy".to_owned(),
                     format!("{g:.0}% 3D load"),
-                    "Lower the game's graphics settings or cap its frame rate so eStream can render in time.".to_owned(),
+                    "Lower the game's graphics settings or cap its frame rate so Clutch can render in time.".to_owned(),
                 )
             }),
             15,

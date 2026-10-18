@@ -129,10 +129,10 @@ pub struct RecordingSettings {
 
 impl Default for RecordingSettings {
     fn default() -> Self {
-        let folder = dirs_video().join("eStream");
+        let folder = dirs_video().join("Clutch");
         Self {
             folder,
-            filename: "eStream %Y-%m-%d %H-%M-%S".into(),
+            filename: "Clutch %Y-%m-%d %H-%M-%S".into(),
             container: Container::Mkv,
             codec: VideoCodec::H264,
             encoder: "auto".into(),

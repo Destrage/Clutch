@@ -1,4 +1,4 @@
-//! Machine load: CPU (total and eStream), memory, GPU 3D load and free disk space, sampled
+//! Machine load: CPU (total and Clutch), memory, GPU 3D load and free disk space, sampled
 //! once a second on a background thread.
 
 use std::path::PathBuf;
@@ -10,9 +10,9 @@ use std::time::Duration;
 pub struct SystemSample {
     /// Whole machine, 0–100.
     pub cpu_total: f64,
-    /// eStream's share of all cores, 0–100.
+    /// Clutch's share of all cores, 0–100.
     pub cpu_process: f64,
-    /// eStream's private memory.
+    /// Clutch's private memory.
     pub memory_bytes: u64,
     /// Busiest GPU's 3D engine load, 0–100 (`None` if unavailable).
     pub gpu: Option<f64>,

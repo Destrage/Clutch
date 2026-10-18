@@ -133,7 +133,12 @@ pub fn logo(size: u32) -> RgbaImage {
             (py as f32 + 0.5) / big as f32,
         );
         *p = match logo_color(x, y, size) {
-            Some(c) => Rgba([c[0].round() as u8, c[1].round() as u8, c[2].round() as u8, 255]),
+            Some(c) => Rgba([
+                c[0].round() as u8,
+                c[1].round() as u8,
+                c[2].round() as u8,
+                255,
+            ]),
             None => Rgba([0, 0, 0, 0]),
         };
     }

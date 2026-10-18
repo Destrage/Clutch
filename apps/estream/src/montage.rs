@@ -286,9 +286,7 @@ impl MontageUi {
         if let Ok(entries) = std::fs::read_dir(&ctx.montages) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().and_then(|e| e.to_str())
-                    != Some(estream_montage::model::EXTENSION)
-                {
+                if !estream_montage::model::is_montage(&path) {
                     continue;
                 }
                 let modified = entry.metadata().and_then(|m| m.modified()).ok();

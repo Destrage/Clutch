@@ -4,19 +4,51 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-/// Locations of eStream's files.
+/// Locations of Clutch's files.
 #[derive(Clone, Debug)]
 pub struct Paths {
     pub root: PathBuf,
 }
 
+/// The app's settings folder name up to 0.2, when it was called eStream.
+const LEGACY_NAME: &str = "eStream";
+
 impl Paths {
     pub fn new() -> Self {
-        let root = std::env::var_os("ESTREAM_HOME")
+        let root = ["CLUTCH_HOME", "ESTREAM_HOME"]
+            .into_iter()
+            .find_map(std::env::var_os)
             .map(PathBuf::from)
-            .or_else(|| dirs::config_dir().map(|d| d.join("eStream")))
-            .unwrap_or_else(|| PathBuf::from(".estream"));
+            .or_else(|| dirs::config_dir().map(|d| d.join("Clutch")))
+            .unwrap_or_else(|| PathBuf::from(".clutch"));
         Self { root }
+    }
+
+    /// Clutch's settings folder, unless a home folder is set in the environment.
+    pub fn legacy_root() -> Option<PathBuf> {
+        if ["CLUTCH_HOME", "ESTREAM_HOME"]
+            .into_iter()
+            .any(|v| std::env::var_os(v).is_some())
+        {
+            return None;
+        }
+        dirs::config_dir().map(|d| d.join(LEGACY_NAME))
+    }
+
+    /// Moves the settings folder from `legacy` to `root`, once: only when `legacy` exists and
+    /// `root` doesn't yet. Copies instead when the folder can't be moved (a file in it is
+    /// open), leaving `legacy` as it is. Returns whether anything was taken over.
+    pub fn adopt(&self, legacy: &Path) -> std::io::Result<bool> {
+        if !legacy.is_dir() || self.root.exists() {
+            return Ok(false);
+        }
+        if let Some(parent) = self.root.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        if std::fs::rename(legacy, &self.root).is_err() {
+            copy_dir(legacy, &self.root)?;
+        }
+        Ok(true)
     }
 
     pub fn logs(&self) -> PathBuf {
@@ -38,6 +70,21 @@ impl Paths {
     pub fn instance_lock(&self) -> PathBuf {
         self.root.join("instance.lock")
     }
+}
+
+/// Copies a folder tree (skipping files that can't be read, like a held lock file).
+fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir(&entry.path(), &target)?;
+        } else if let Err(e) = std::fs::copy(entry.path(), &target) {
+            tracing::warn!(file = %entry.path().display(), error = %e, "not copied");
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -387,6 +434,22 @@ impl Settings {
         settings
     }
 
+    /// Points saved paths inside the old settings folder at the new one (after
+    /// [`Paths::adopt`]). Returns whether anything changed.
+    pub fn rebase(&mut self, from: &Path, to: &Path) -> bool {
+        let mut changed = false;
+        for path in [&mut self.last_collection, &mut self.clips.folder]
+            .into_iter()
+            .flatten()
+        {
+            if let Ok(rest) = path.strip_prefix(from) {
+                *path = to.join(rest);
+                changed = true;
+            }
+        }
+        changed
+    }
+
     /// Turns pre-multistream single-stream settings into the first destination.
     fn migrate(&mut self) {
         let legacy = self.legacy_stream.take();
@@ -537,6 +600,39 @@ mod tests {
         if cfg!(windows) {
             assert_eq!(loaded.destinations[0].stream.key, "live_42_secret");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn estream_folder_is_adopted_once() {
+        let dir = std::env::temp_dir().join(format!("clutch-adopt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let legacy = dir.join("eStream");
+        std::fs::create_dir_all(legacy.join("scenes")).unwrap();
+        std::fs::write(legacy.join("scenes/Stream.json"), "{}").unwrap();
+        let s = Settings {
+            last_collection: Some(legacy.join("scenes/Stream.json")),
+            ..Settings::default()
+        };
+        s.save(&legacy.join("settings.json"));
+
+        let paths = Paths {
+            root: dir.join("Clutch"),
+        };
+        assert!(paths.adopt(&legacy).unwrap());
+        assert!(!legacy.exists());
+        assert!(paths.scenes().join("Stream.json").exists());
+        let mut loaded = Settings::load(&paths.settings());
+        assert!(loaded.rebase(&legacy, &paths.root));
+        assert_eq!(
+            loaded.last_collection,
+            Some(paths.scenes().join("Stream.json"))
+        );
+
+        // Never again once the new folder exists.
+        std::fs::create_dir_all(&legacy).unwrap();
+        assert!(!paths.adopt(&legacy).unwrap());
+        assert!(legacy.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

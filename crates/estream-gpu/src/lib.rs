@@ -1,4 +1,4 @@
-//! GPU layer for eStream: device setup, texture pool, the canvas compositor
+//! GPU layer for Clutch: device setup, texture pool, the canvas compositor
 //! and output format conversion. Everything here stays on the GPU; the only
 //! CPU readback is the explicit [`readback`] helper used by tests and tools.
 

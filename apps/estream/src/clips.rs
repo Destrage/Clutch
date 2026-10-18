@@ -112,7 +112,7 @@ pub struct Clipper {
     saving: Vec<Saving>,
     thumbs_tx: Sender<PathBuf>,
     thumbs_rx: Receiver<PathBuf>,
-    /// Clips saved since eStream started.
+    /// Clips saved since Clutch started.
     pub session_clips: u32,
     /// The settings the clipper was last configured with.
     applied: Option<ClipSettings>,

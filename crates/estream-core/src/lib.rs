@@ -1,4 +1,4 @@
-//! Shared foundation types for eStream: IDs, time, geometry and colors.
+//! Shared foundation types for Clutch: IDs, time, geometry and colors.
 
 pub mod clock;
 pub mod color;

@@ -1,12 +1,12 @@
-//! eStream browser helper: renders web pages offscreen with CEF in its own process.
+//! Clutch browser helper: renders web pages offscreen with CEF in its own process.
 //!
 //! Commands arrive as JSON lines on stdin (`create`, `update`, `reload`, `close`); events go
 //! out as JSON lines on stdout. Frames are written into named shared memory (seqlocked,
-//! straight alpha) and page audio into a shared ring, both read by eStream. Closing stdin
-//! (eStream exiting) closes every page and ends the process.
+//! straight alpha) and page audio into a shared ring, both read by Clutch. Closing stdin
+//! (Clutch exiting) closes every page and ends the process.
 
 // No console windows for the helper or the CEF subprocesses it relaunches (its pipes to
-// eStream are redirected handles, which work for GUI-subsystem processes too).
+// Clutch are redirected handles, which work for GUI-subsystem processes too).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use cef::*;
@@ -81,7 +81,7 @@ fn emit(event: serde_json::Value) {
 
 fn mapping_name(id: &str, kind: &str, n: u32) -> String {
     format!(
-        "Local\\estream-browser-{}-{id}-{kind}-{n}",
+        "Local\\clutch-browser-{}-{id}-{kind}-{n}",
         std::process::id()
     )
 }
@@ -140,7 +140,7 @@ wrap_render_handler! {
                 }
             }
             if let Some(frame) = &mut page.frame {
-                // CEF paints premultiplied BGRA; eStream sources are straight-alpha RGBA.
+                // CEF paints premultiplied BGRA; Clutch sources are straight-alpha RGBA.
                 frame.write(|dst| unpremultiply(src, dst));
             }
         }
@@ -343,7 +343,7 @@ wrap_app! {
             let name: CefString = "autoplay-policy".into();
             let value: CefString = "no-user-gesture-required".into();
             cmd.append_switch_with_value(Some(&name), Some(&value));
-            // Don't fight eStream for the system's media keys.
+            // Don't fight Clutch for the system's media keys.
             let name: CefString = "disable-features".into();
             let value: CefString = "HardwareMediaKeyHandling,MediaSessionService".into();
             cmd.append_switch_with_value(Some(&name), Some(&value));
@@ -451,11 +451,17 @@ fn main() {
         std::process::exit(code);
     }
 
-    let cache = std::env::var_os("LOCALAPPDATA")
+    let local = std::env::var_os("LOCALAPPDATA")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("eStream")
-        .join("browser-cache");
+        .unwrap_or_else(std::env::temp_dir);
+    let cache = local.join("Clutch").join("browser-cache");
+    // Clutch was called eStream up to 0.2: keep its cache (page logins) on the first start.
+    let legacy = local.join("eStream").join("browser-cache");
+    if !cache.exists() && legacy.is_dir() {
+        let _ = std::fs::create_dir_all(local.join("Clutch"));
+        let _ = std::fs::rename(&legacy, &cache);
+        let _ = std::fs::remove_dir(local.join("eStream"));
+    }
     let settings = Settings {
         windowless_rendering_enabled: 1,
         multi_threaded_message_loop: 1,
@@ -477,7 +483,7 @@ fn main() {
     }
     emit(serde_json::json!({ "ev": "ready" }));
 
-    // eStream drives everything over stdin; EOF means eStream is gone.
+    // Clutch drives everything over stdin; EOF means Clutch is gone.
     for line in std::io::stdin().lock().lines() {
         let Ok(line) = line else { break };
         match serde_json::from_str::<Command>(&line) {

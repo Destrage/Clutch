@@ -98,7 +98,7 @@ fn source_negotiates_streams_and_delivers_frames() {
     assert_eq!(first_pixel(&sample, w, h), (28, 128, 128));
     assert!(unsafe { sample.GetSampleDuration() }.unwrap() > 0);
 
-    // eStream's side opens the mapping, sees the request size and sends a red frame.
+    // Clutch's side opens the mapping, sees the request size and sends a red frame.
     let producer = Shared::open(&mapping).expect("the source created the mapping");
     assert_eq!(producer.wanted(), (1280, 720));
     assert!(producer.consumer_alive(2000));

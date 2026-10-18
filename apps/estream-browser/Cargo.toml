@@ -4,7 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "eStream browser helper: renders web pages offscreen with CEF in its own process"
+description = "Clutch browser helper: renders web pages offscreen with CEF in its own process"
+
+[[bin]]
+name = "clutch-browser"
+path = "src/main.rs"
 
 [lints]
 workspace = true

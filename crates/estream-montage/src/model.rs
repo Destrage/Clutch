@@ -9,7 +9,16 @@ use std::path::{Component, Path, PathBuf};
 
 pub const VERSION: u32 = 1;
 /// The montage file extension.
-pub const EXTENSION: &str = "estream-montage";
+pub const EXTENSION: &str = "clutch-montage";
+/// The extension up to 0.2, when the app was called eStream (still read).
+pub const LEGACY_EXTENSION: &str = "estream-montage";
+
+/// Whether `path` is a montage file.
+pub fn is_montage(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e == EXTENSION || e == LEGACY_EXTENSION)
+}
 
 /// Output size and frame rate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -506,7 +515,7 @@ pub enum MontageError {
     Io(#[from] std::io::Error),
     #[error("this montage file is damaged: {0}")]
     Json(#[from] serde_json::Error),
-    #[error("this montage was made by a newer eStream (format {0})")]
+    #[error("this montage was made by a newer Clutch (format {0})")]
     TooNew(u32),
 }
 
