@@ -6,9 +6,11 @@
 
 pub mod event;
 pub mod games;
+pub mod hype;
 pub mod platform;
 pub mod scheduler;
 
 pub use event::{ClipEvent, EventKind};
 pub use games::{Detection, Detector, Game, GameList, Integration};
+pub use hype::{HypeConfig, HypeDetector, Peak, Sensitivity};
 pub use scheduler::{ClipRequest, Scheduler, Window};

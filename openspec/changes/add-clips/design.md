@@ -84,6 +84,9 @@ Default auto-clip windows (each one editable per event):
   - short-term loudness: 400 ms window;
   - baseline: 60 s median, so long loud fights don't keep raising the baseline;
   - fire when `short - baseline > threshold` for 300 ms or more, with a 20 s cooldown;
+  - the median of the raw levels over those 300 ms must clear the threshold too, so a short
+    click that lingers in the 400 ms window doesn't count;
+  - levels during a hype run aren't added to the baseline, so a long shout fires once;
   - threshold by sensitivity: 18 / 14 / 10 LU (low / medium / high);
   - the mic counts only if it is above −30 dBFS, which ignores keyboard noise.
 - **Offline use:** the same detector also runs on audio decoded from a file
