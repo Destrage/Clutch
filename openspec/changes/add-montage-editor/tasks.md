@@ -16,7 +16,7 @@
 - [x] 2.6 Renderer: segment decoders, crop/scale, transition shaders, titles
 - [x] 2.7 Audio render: speed/time-stretch, music fades, ducking
 - [ ] 2.8 Preview playback (real-time pacing, scrubbing, frame dropping)
-- [ ] 2.9 Export (background, progress, cancel, presets)
+- [x] 2.9 Export (background, progress, cancel, presets)
 
 ## 3. Studio
 - [ ] 3.1 Montages view: list, New montage wizard, Scan a recording
@@ -31,5 +31,5 @@
       (click tracks at 92–174 BPM with accents pass; real music loops still to add)
 - [x] 4.4 Auto-assembly snapshot tests (target length, beat-aligned cuts, dropped low scores)
 - [x] 4.5 Render golden tests (crossfade midpoint, dip, crop for 9:16, title)
-- [ ] 4.6 Export test: ffprobe duration matches timeline, A/V in sync
+- [x] 4.6 Export test: ffprobe duration matches timeline, A/V in sync
 - [ ] 4.7 In-app check: 10 CS2 clips + music → 60 s vertical montage, edit, export

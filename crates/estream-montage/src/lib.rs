@@ -6,6 +6,7 @@
 pub mod assemble;
 pub mod audio;
 pub mod beats;
+pub mod export;
 pub mod history;
 pub mod model;
 pub mod render;

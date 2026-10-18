@@ -15,6 +15,8 @@ estream-clips.workspace = true
 estream-media = { path = "../estream-media" }
 estream-capture = { path = "../estream-capture" }
 estream-gpu.workspace = true
+estream-engine.workspace = true
+estream-audio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
