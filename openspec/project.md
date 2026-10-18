@@ -172,6 +172,8 @@ Each change below gets its own `openspec/changes/<id>/` when work starts. ✅ = 
 | 3 | ✅ `add-hotkeys-macros` | Global hotkeys, macros and triggers (scene switch on window focus, timers…) | Beyond OBS (built-in Advanced Scene Switcher) |
 | 3 | ✅ `add-stats-health` | Stats dock, network health, encoder overload hints (auto-quality fallback deferred) | Better |
 | 3 | ✅ `simplify-first-run-and-go-live` | Purpose-based first run with device detection; two-step Go Live box (platform + key) | Simpler than OBS |
+| 3 | ✅ `add-clips` | Game-aware replay buffer, clip hotkey, auto-clip (game integrations + audio hype), clip library with trim | Beyond OBS (Medal-style clipping) |
+| 3 | ✅ `add-montage-editor` | Highlight scan of recordings, beat-synced auto-montage, single-track timeline editor, export | Beyond OBS |
 | 4 – Ecosystem | `add-plugin-system` | WASM plugin host (sources, filters, docks, commands) | Better (sandboxed) |
 | 4 | `add-ai-features` | Noise suppression, background removal, auto captions | Beyond OBS |
 | 4 | `add-iso-recording` | Per-source isolated recordings | Beyond OBS |
