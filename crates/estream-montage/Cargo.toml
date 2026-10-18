@@ -1,0 +1,18 @@
+[package]
+name = "estream-montage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Montages for eStream: highlight scan, beat detection, auto-assembly, timeline model, rendering and export"
+
+[lints]
+workspace = true
+
+[dependencies]
+estream-core.workspace = true
+estream-clips.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

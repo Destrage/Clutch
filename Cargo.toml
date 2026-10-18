@@ -20,6 +20,7 @@ estream-api = { path = "crates/estream-api" }
 estream-automation = { path = "crates/estream-automation" }
 estream-health = { path = "crates/estream-health" }
 estream-clips = { path = "crates/estream-clips" }
+estream-montage = { path = "crates/estream-montage" }
 estream-vcam = { path = "crates/estream-vcam" }
 
 anyhow = "1.0.104"

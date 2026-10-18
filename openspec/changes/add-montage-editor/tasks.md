@@ -8,8 +8,8 @@
 - [ ] 1.2 Offline audio decode to 48 kHz f32 (mono mix for analysis, stereo for render)
 
 ## 2. Montage core (`crates/estream-montage`)
-- [ ] 2.1 Project model, timeline math, JSON save/load with migrations and relinking
-- [ ] 2.2 `MontageCommand`s with undo/redo
+- [x] 2.1 Project model, timeline math, JSON save/load with migrations and relinking
+- [x] 2.2 `MontageCommand`s with undo/redo
 - [ ] 2.3 Highlight scan (markers + offline hype, merge, score)
 - [ ] 2.4 Beat detection (spectral flux, tempo, DP beat tracking)
 - [ ] 2.5 Auto-assembly (allocation, anchoring, beat snapping, transitions, slow-mo, vertical crop, title)
@@ -25,7 +25,7 @@
 - [ ] 3.4 Export dialog; add result to clip library
 
 ## 4. Verification
-- [ ] 4.1 Model tests: timeline durations with speeds and transitions; command undo round-trips
+- [x] 4.1 Model tests: timeline durations with speeds and transitions; command undo round-trips
 - [ ] 4.2 Highlight scan test on a synthetic recording with markers and a loud section
 - [ ] 4.3 Beat detection tests (click tracks at known BPMs, test loops)
 - [ ] 4.4 Auto-assembly snapshot tests (target length, beat-aligned cuts, dropped low scores)

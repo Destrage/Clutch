@@ -34,10 +34,14 @@ pub struct Music { pub source: PathBuf, pub src_in: f64, pub gain_db: f32, pub f
 - **Timeline time comes from the model**, never stored: segment *i* lasts
   `(src_out - src_in) / speed`, and a transition overlaps the two segments around it by its
   length.
-- **Edits are `MontageCommand`s** (`MoveSegment`, `TrimSegment`, `Split`, `SetSpeed`,
-  `SetTransition`, `AddTitle`, …). Like the engine's commands they are serializable and
-  invertible, and they share the same `Undo` stack type from `estream-engine`. A montage project
-  is its own document, with its own undo history.
+- **Edits are `MontageCommand`s** (`InsertSegment`, `RemoveSegment`, `MoveSegment`,
+  `SetSegment` for trim/speed/crop/gain, `SetTransition`, title, music, mix and `Batch`; a split
+  is a batch). Like the engine's commands they are serializable, and applying one returns its
+  inverse. The engine's `History` is tied to its own `Command` and `Project` types, so the
+  montage has a small `History` of the same shape (inverse stack, redo stack, coalescing of
+  repeated edits within 500 ms until sealed). A montage project is its own document, with its
+  own undo history. Ids for segments and titles are never reused, so `next_id` may stay ahead
+  after an undo.
 - **Saved as JSON**, with a version number and migrations like project files. Source paths are
   stored absolute and also relative to the montage file. When loading, the absolute path is tried
   first, then the relative one, and if both fail the segment is flagged as missing so the user
