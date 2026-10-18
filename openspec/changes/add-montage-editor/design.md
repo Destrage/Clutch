@@ -89,7 +89,8 @@ music.
 5. **Transitions:**
    - cuts by default;
    - a 0.3 s whip between items from different games or recordings;
-   - dip to black at the end.
+   - a fade to black at the very end (`Montage::fade_out`, 0.6 s by default; a transition only
+     sits between two segments, so the end fade is its own setting, editable with `SetFadeOut`).
 6. **Slow motion:** optionally slow the 1 s around ace/multi-kill anchors to 0.5×. On by default.
 7. **Vertical crop:** for 9:16, crop to the center by default. The user can pan it per segment.
 8. **Title card:** optional first title ("<Game> highlights") over the first 2 s.

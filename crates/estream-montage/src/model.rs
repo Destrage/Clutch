@@ -297,6 +297,9 @@ pub struct Montage {
     pub music: Option<Music>,
     #[serde(default)]
     pub mix: Mix,
+    /// Seconds of fade to black (picture and sound) at the very end.
+    #[serde(default)]
+    pub fade_out: f32,
     /// The next free id for segments and titles.
     #[serde(default)]
     pub next_id: u64,
@@ -319,6 +322,7 @@ impl Montage {
             titles: Vec::new(),
             music: None,
             mix: Mix::default(),
+            fade_out: 0.0,
             next_id: 1,
         }
     }

@@ -5,7 +5,7 @@
 //! repeats of the same edit (dragging a trim handle) coalesce into one undo step.
 
 use crate::model::{
-    MAX_SPEED, MIN_SEGMENT, MIN_SPEED, Mix, Montage, Music, Segment, Title, Transition,
+    Format, MAX_SPEED, MIN_SEGMENT, MIN_SPEED, Mix, Montage, Music, Segment, Title, Transition,
 };
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
@@ -54,6 +54,13 @@ pub enum MontageCommand {
     },
     Rename {
         name: String,
+    },
+    /// Output size and frame rate (crops are kept; the editor recomputes them if asked).
+    SetFormat {
+        format: Format,
+    },
+    SetFadeOut {
+        secs: f32,
     },
     /// Several edits as one undo step (applied in order, undone in reverse).
     Batch {
@@ -199,6 +206,17 @@ impl MontageCommand {
             },
             Rename { name } => Rename {
                 name: std::mem::replace(&mut m.name, name),
+            },
+            SetFormat { format } => {
+                if format.width < 16 || format.height < 16 || format.fps == 0 {
+                    return Err(EditError::Invalid("that format is too small".into()));
+                }
+                SetFormat {
+                    format: std::mem::replace(&mut m.format, format),
+                }
+            }
+            SetFadeOut { secs } => SetFadeOut {
+                secs: std::mem::replace(&mut m.fade_out, secs.clamp(0.0, 10.0)),
             },
             Batch { commands } => {
                 let before = m.clone();
@@ -454,6 +472,10 @@ mod tests {
             },
         });
         round_trip(MontageCommand::Rename { name: "New".into() });
+        round_trip(MontageCommand::SetFormat {
+            format: Format::VERTICAL,
+        });
+        round_trip(MontageCommand::SetFadeOut { secs: 1.5 });
     }
 
     #[test]

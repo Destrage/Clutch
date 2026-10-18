@@ -66,7 +66,11 @@ fn scans_a_recording_with_markers_and_a_loud_moment() {
     }
     markers.save(&recording).unwrap();
     let decoded = estream_media::audio_file::decode_stereo(&recording).unwrap();
-    assert!((decoded.len() as f64 / 2.0 / 48_000.0 - 70.0).abs() < 0.1, "{}", decoded.len());
+    assert!(
+        (decoded.len() as f64 / 2.0 / 48_000.0 - 70.0).abs() < 0.1,
+        "{}",
+        decoded.len()
+    );
 
     let mut last = 0.0;
     let highlights = scan(&recording, Sensitivity::Medium, &mut |p| {
