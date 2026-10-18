@@ -307,7 +307,12 @@ impl MontageUi {
                             format!(
                                 "{} · {shape} · {} clips · {when}",
                                 crate::clips::format_length(m.duration()),
-                                m.segments.len()
+                                // Distinct sources (slow motion splits one clip into pieces).
+                                m.segments
+                                    .iter()
+                                    .map(|s| &s.source)
+                                    .collect::<HashSet<_>>()
+                                    .len()
                             ),
                         )
                     }
@@ -638,7 +643,7 @@ impl MontageUi {
                             if missing > 0 {
                                 return vec![Effect::Toast(
                                     format!(
-                                        "{missing} clips are missing: they show in red. Relink them by moving them back, or pick their folder from the clip's inspector."
+                                        "{missing} clips are missing: they show in red. Move them back, or select one and use “Find their folder…”."
                                     ),
                                     true,
                                 )];
@@ -802,12 +807,37 @@ impl MontageUi {
             "trim-in" | "trim-out" => {
                 let delta = v / zoom;
                 let out = field == "trim-out";
+                // The cut after this clip snaps onto a music beat within 8 px. The clip's
+                // start on the timeline depends only on the clips before it.
+                let start = e.montage.layout().get(i).map_or(0.0, |p| p.start);
+                let beats: Vec<f64> = e
+                    .montage
+                    .music
+                    .as_ref()
+                    .map(|m| {
+                        m.beats
+                            .iter()
+                            .map(|b| b - m.src_in)
+                            .filter(|t| *t > 0.0)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let tolerance = 8.0 / zoom;
                 return self.edit_segment(i, |s| {
-                    let src_delta = delta * s.speed as f64;
+                    let speed = s.speed as f64;
+                    let src_delta = delta * speed;
                     if out {
                         s.src_out = (s.src_out + src_delta).max(s.src_in + 0.3);
                     } else {
                         s.src_in = (s.src_in + src_delta).clamp(0.0, s.src_out - 0.3);
+                    }
+                    if let Some(beat) = beats::nearest(&beats, start + s.length(), tolerance) {
+                        let len = (beat - start).max(0.3 / speed);
+                        if out {
+                            s.src_out = s.src_in + len * speed;
+                        } else {
+                            s.src_in = (s.src_out - len * speed).max(0.0);
+                        }
                     }
                 });
             }
@@ -861,6 +891,26 @@ impl MontageUi {
                 };
             }
             "split" => return self.split(),
+            "relink" => {
+                let Some(folder) = rfd::FileDialog::new()
+                    .set_title("Where are the missing clips?")
+                    .pick_folder()
+                else {
+                    return Vec::new();
+                };
+                let found = e.montage.relink(&folder);
+                let still = e.montage.segments.iter().filter(|s| s.missing).count();
+                let mut out = Self::after_edit(e);
+                out.push(Effect::Toast(
+                    match (found, still) {
+                        (0, _) => "None of the missing clips are in that folder".into(),
+                        (n, 0) => format!("Found {n} clips: all back"),
+                        (n, m) => format!("Found {n} clips; {m} still missing"),
+                    },
+                    found == 0,
+                ));
+                return out;
+            }
             "delete-selected" => return self.delete_selected(),
             "trans-kind" | "trans-secs" => {
                 let Selection::Transition(index) = e.selection else {
@@ -1405,12 +1455,12 @@ impl MontageUi {
             };
         }
         if self.page == Page::Editor {
-            self.editor_form(&mut form);
+            self.editor_form(ctx, &mut form);
         }
         form
     }
 
-    fn editor_form(&mut self, form: &mut MontageForm) {
+    fn editor_form(&mut self, ctx: &Ctx<'_>, form: &mut MontageForm) {
         let Some(e) = &self.editor else { return };
         let m = e.montage.clone();
         let zoom = e.zoom;
@@ -1441,10 +1491,16 @@ impl MontageUi {
                 BlockRow {
                     x: px(p.start),
                     w: px(p.end - p.start),
-                    label: s
-                        .source
-                        .file_stem()
-                        .map(|n| n.to_string_lossy().into_owned())
+                    // The clip's title from the library, else the file name.
+                    label: ctx
+                        .library
+                        .get(&s.source)
+                        .map(|c| c.meta.display_title())
+                        .or_else(|| {
+                            s.source
+                                .file_stem()
+                                .map(|n| n.to_string_lossy().into_owned())
+                        })
                         .unwrap_or_default()
                         .into(),
                     has_thumb: thumb.is_some(),
@@ -1563,6 +1619,7 @@ impl MontageUi {
                     )
                     .into();
                     form.seg_source = s.source.display().to_string().into();
+                    form.seg_missing = s.missing;
                 }
             }
             Selection::Transition(i) => {

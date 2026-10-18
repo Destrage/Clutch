@@ -19,10 +19,10 @@
 - [x] 2.9 Export (background, progress, cancel, presets)
 
 ## 3. Studio
-- [ ] 3.1 Montages view: list, New montage wizard, Scan a recording
-- [ ] 3.2 Timeline widget: blocks, transition chips, title lane, music waveform + beats, zoom, snapping, drag
-- [ ] 3.3 Inspector and keyboard shortcuts; accessibility labels
-- [ ] 3.4 Export dialog; add result to clip library
+- [x] 3.1 Montages view: list, New montage wizard, Scan a recording
+- [x] 3.2 Timeline widget: blocks, transition chips, title lane, music waveform + beats, zoom, snapping, drag
+- [x] 3.3 Inspector and keyboard shortcuts; accessibility labels
+- [x] 3.4 Export dialog; add result to clip library
 
 ## 4. Verification
 - [x] 4.1 Model tests: timeline durations with speeds and transitions; command undo round-trips
@@ -33,3 +33,7 @@
 - [x] 4.5 Render golden tests (crossfade midpoint, dip, crop for 9:16, title)
 - [x] 4.6 Export test: ffprobe duration matches timeline, A/V in sync
 - [ ] 4.7 In-app check: 10 CS2 clips + music → 60 s vertical montage, edit, export
+      (done with 4 test clips and no music: wizard, 9:16 assembly with slow motion and whips,
+      preview playback with the title, split + undo, 1080×1920 export into the clip library;
+      music picked through the file dialog, beat snapping while trimming, and real CS2 clips
+      are still to try)

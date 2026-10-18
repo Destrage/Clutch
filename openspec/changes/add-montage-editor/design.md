@@ -157,7 +157,9 @@ It is deterministic for the same inputs, so it can be tested with snapshots of t
     - transition chips between blocks;
     - a title lane;
     - the music lane with a waveform and beat ticks;
-    - zoom with Ctrl+wheel;
+    - zoom with the zoom buttons or - and = (the timeline scrolls with the wheel);
+    - dragging a block reorders by where its centre lands; dragging an edge trims, and the cut
+      snaps onto a music beat within 8 px;
   - an inspector on the right for the selected segment, transition, title or music.
 - **Keyboard:**
   - Space: play;

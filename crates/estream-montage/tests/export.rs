@@ -8,8 +8,8 @@ use estream_montage::export::{ExportOptions, ExportPreset, export};
 use estream_montage::model::{Format, Montage, Music, Segment, Transition};
 use std::path::PathBuf;
 
-fn setup() -> (PathBuf, Montage) {
-    let dir = std::env::temp_dir().join(format!("estream-export-{}", std::process::id()));
+fn setup(name: &str) -> (PathBuf, Montage) {
+    let dir = std::env::temp_dir().join(format!("estream-export-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let (red, blue, song) = (
@@ -44,7 +44,7 @@ fn setup() -> (PathBuf, Montage) {
 #[test]
 fn export_matches_the_timeline_with_audio_in_sync() {
     let gpu = GpuContext::new_headless(&GpuOptions::default()).unwrap();
-    let (dir, m) = setup();
+    let (dir, m) = setup("timeline");
     let out = dir.join("montage.mp4");
     let options = ExportOptions {
         preset: ExportPreset::Custom(Format {
@@ -93,7 +93,7 @@ fn export_matches_the_timeline_with_audio_in_sync() {
 #[test]
 fn cancelled_export_leaves_nothing() {
     let gpu = GpuContext::new_headless(&GpuOptions::default()).unwrap();
-    let (dir, m) = setup();
+    let (dir, m) = setup("cancel");
     let out = dir.join("cancelled.mp4");
     let options = ExportOptions {
         preset: ExportPreset::Custom(Format {

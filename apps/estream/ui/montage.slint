@@ -432,6 +432,14 @@ component Inspector inherits VerticalLayout {
         spacing: 10px;
         SectionTitle { text: "CLIP"; }
         Text { text: root.form.seg-source; color: Theme.text-muted; font-size: Theme.font-xs; overflow: elide; }
+        if root.form.seg-missing: VerticalLayout {
+            spacing: 6px;
+            Text { text: "This clip's file is missing. If you moved it, point to its folder: every missing clip found there comes back."; color: Theme.live; font-size: Theme.font-xs; wrap: word-wrap; }
+            HorizontalLayout {
+                alignment: start;
+                Button { text: "Find their folder…"; has-icon: true; icon: Icons.folder-open; clicked => { root.action("relink", 0, 0); } }
+            }
+        }
         Text { text: root.form.seg-length; color: Theme.text-faint; font-size: Theme.font-xs; }
         Field {
             label: "Speed";
