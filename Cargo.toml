@@ -6,7 +6,7 @@ members = ["crates/*", "apps/*", "xtask"]
 version = "0.3.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/estream/estream"
+repository = "https://github.com/Destrage/Clutch"
 rust-version = "1.90"
 
 [workspace.dependencies]

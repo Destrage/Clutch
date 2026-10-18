@@ -315,7 +315,7 @@ fn wix_source(stage: &Path, assets: &Path) -> Result<String> {
 
     <Icon Id="clutch.ico" SourceFile="{icon}" />
     <Property Id="ARPPRODUCTICON" Value="clutch.ico" />
-    <Property Id="ARPURLINFOABOUT" Value="https://github.com/estream/estream" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/Destrage/Clutch" />
     <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
     <WixVariable Id="WixUILicenseRtf" Value="{license}" />
     <WixVariable Id="WixUIBannerBmp" Value="{banner}" />
