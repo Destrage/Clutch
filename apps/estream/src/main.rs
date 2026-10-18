@@ -32,6 +32,22 @@ fn acquire_instance_lock(paths: &Paths) -> anyhow::Result<Option<std::fs::File>>
     }
 }
 
+/// Must match `APP_USER_MODEL_ID` in `xtask` (set on the installer's shortcuts).
+#[cfg(windows)]
+const APP_USER_MODEL_ID: windows::core::PCWSTR = windows::core::w!("eStream.Studio");
+
+/// Gives the process the same AppUserModelID as its shortcuts, so Start and the taskbar treat
+/// the window and the shortcuts as one app (pinning, grouping). Must run before any window exists.
+#[cfg(windows)]
+fn set_app_user_model_id() {
+    // SAFETY: the ID is a static, NUL-terminated wide string.
+    if let Err(e) = unsafe {
+        windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
+    } {
+        tracing::warn!("couldn't set the AppUserModelID: {e}");
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     let paths = Paths::new();
     std::fs::create_dir_all(paths.scenes())?;
@@ -41,6 +57,8 @@ fn main() -> anyhow::Result<()> {
         eprintln!("eStream is already running.");
         return Ok(());
     };
+    #[cfg(windows)]
+    set_app_user_model_id();
 
     let settings = Settings::load(&paths.settings());
     let gpu = GpuContext::new_headless(&GpuOptions::default())?;

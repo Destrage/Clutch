@@ -12,6 +12,9 @@ const TARGET: &str = "x86_64-pc-windows-msvc";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Never change: Windows uses it to recognise upgrades of eStream.
 const UPGRADE_CODE: &str = "6F1C2E8A-4B7D-4E21-9C3A-58D0E2B4A719";
+/// Must match `APP_USER_MODEL_ID` in `apps/estream/src/main.rs`, so Start and the taskbar
+/// tie the running window to the shortcuts (pinning, grouping).
+const APP_USER_MODEL_ID: &str = "eStream.Studio";
 const WIX_URL: &str =
     "https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip";
 
@@ -338,13 +341,17 @@ fn wix_source(stage: &Path, assets: &Path) -> Result<String> {
 
     <DirectoryRef Id="ProgramMenuFolder">
       <Component Id="cmp_StartMenu" Guid="{{{start}}}" Win64="yes">
-        <Shortcut Id="StartMenuShortcut" Name="eStream" Description="Streaming and recording studio" Target="[INSTALLFOLDER]estream.exe" WorkingDirectory="INSTALLFOLDER" Icon="estream.ico" />
+        <Shortcut Id="StartMenuShortcut" Name="eStream" Description="Streaming and recording studio" Target="[INSTALLFOLDER]estream.exe" WorkingDirectory="INSTALLFOLDER" Icon="estream.ico">
+          <ShortcutProperty Key="System.AppUserModel.ID" Value="{aumid}" />
+        </Shortcut>
         <RegistryValue Root="HKCU" Key="Software\eStream" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
       </Component>
     </DirectoryRef>
     <DirectoryRef Id="DesktopFolder">
       <Component Id="cmp_Desktop" Guid="{{{desktop}}}" Win64="yes">
-        <Shortcut Id="DesktopShortcut" Name="eStream" Description="Streaming and recording studio" Target="[INSTALLFOLDER]estream.exe" WorkingDirectory="INSTALLFOLDER" Icon="estream.ico" />
+        <Shortcut Id="DesktopShortcut" Name="eStream" Description="Streaming and recording studio" Target="[INSTALLFOLDER]estream.exe" WorkingDirectory="INSTALLFOLDER" Icon="estream.ico">
+          <ShortcutProperty Key="System.AppUserModel.ID" Value="{aumid}" />
+        </Shortcut>
         <RegistryValue Root="HKCU" Key="Software\eStream" Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
       </Component>
     </DirectoryRef>
@@ -373,6 +380,7 @@ fn wix_source(stage: &Path, assets: &Path) -> Result<String> {
         dialog = asset("dialog.bmp"),
         start = guid("shortcut:startmenu"),
         desktop = guid("shortcut:desktop"),
+        aumid = APP_USER_MODEL_ID,
     ))
 }
 
