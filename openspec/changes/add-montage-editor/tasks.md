@@ -5,7 +5,7 @@
 
 ## 1. Media
 - [ ] 1.1 Frame-accurate seeking decoder (hardware decode to GPU textures, look-ahead)
-- [ ] 1.2 Offline audio decode to 48 kHz f32 (mono mix for analysis, stereo for render)
+- [x] 1.2 Offline audio decode to 48 kHz f32 (mono mix for analysis, stereo for render)
 
 ## 2. Montage core (`crates/estream-montage`)
 - [x] 2.1 Project model, timeline math, JSON save/load with migrations and relinking

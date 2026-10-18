@@ -3,6 +3,7 @@
 
 pub use ffmpeg_next as ffmpeg;
 
+pub mod audio_file;
 pub mod encode;
 pub mod media_source;
 pub mod multistream;

@@ -159,3 +159,34 @@ fn thumbnail_is_a_small_jpeg_of_the_requested_frame() {
     let t = estream_media::thumbnail::thumbnail(&input, 60.0, 320, &jpg).unwrap();
     assert!(t > 5.5 && t < 6.2, "last frame at {t}");
 }
+
+#[test]
+fn audio_decodes_to_48k_stereo_from_any_point() {
+    let (_dir, input) = copy_of("audio");
+    let all = estream_media::audio_file::decode_stereo(&input).unwrap();
+    let secs = all.len() as f64 / 2.0 / 48_000.0;
+    assert!(
+        (secs - probe(&input).duration).abs() < 0.1,
+        "decoded {secs} s"
+    );
+    // The source has a 1 kHz tone at -12 dBFS: check the level.
+    let mono = estream_media::audio_file::to_mono(&all);
+    let rms = (mono.iter().map(|s| s * s).sum::<f32>() / mono.len() as f32).sqrt();
+    let db = 20.0 * rms.log10();
+    assert!((db - (-15.0)).abs() < 1.5, "tone at {db} dBFS RMS");
+    // From 4 s: about 2 s left; stopping early works too.
+    let mut n = 0;
+    let rest = estream_media::audio_file::for_each_chunk(&input, 4.0, |c| {
+        n += c.len();
+        true
+    })
+    .unwrap();
+    assert!((rest - (secs - 4.0)).abs() < 0.15, "rest {rest}");
+    let mut chunks = 0;
+    estream_media::audio_file::for_each_chunk(&input, 0.0, |_| {
+        chunks += 1;
+        chunks < 3
+    })
+    .unwrap();
+    assert_eq!(chunks, 3);
+}
