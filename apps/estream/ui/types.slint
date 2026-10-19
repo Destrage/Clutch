@@ -206,6 +206,8 @@ export struct DestinationRow {
 /// A destination in the live panel.
 export struct LiveRow {
     name: string,
+    /// Viewers right now (-1 when the platform doesn't report it).
+    viewers: int,
     /// 0 off, 1 connecting, 2 live, 3 reconnecting, 4 failed
     state: int,
     /// Bitrate and drops, or the error / what is happening.

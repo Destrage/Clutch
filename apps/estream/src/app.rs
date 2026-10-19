@@ -142,6 +142,8 @@ pub struct App {
     chat_sources: Vec<(String, estream_media::Service, String)>,
     /// The selected chat page has shown a frame.
     chat_has_frame: bool,
+    /// Viewer counts while live.
+    viewers: crate::viewers::ViewerCounts,
     /// Settings → Clips: the game whose auto-clip rules are shown.
     clip_rule_game: usize,
     /// Montages: the saved ones, the New montage wizard and the editor.
@@ -491,6 +493,7 @@ impl App {
             chat: crate::chat::ChatUi::default(),
             chat_sources: Vec::new(),
             chat_has_frame: false,
+            viewers: crate::viewers::ViewerCounts::start(),
             clip_rule_game: 0,
             montage_ui: crate::montage::MontageUi::default(),
         };
@@ -3438,6 +3441,7 @@ impl App {
                     "Off · not included in Go Live".into()
                 },
                 health: 0,
+                viewers: -1,
             })
             .collect();
         let mut summary = Vec::new();
@@ -3502,10 +3506,31 @@ impl App {
                         state,
                         info: info.into(),
                         health,
+                        viewers: -1,
                     };
                 }
             }
         }
+        // Viewer counts for the live destinations (where the platform reports them).
+        let targets = self
+            .settings
+            .destinations
+            .iter()
+            .zip(&rows)
+            .filter(|(_, row)| row.state == 2)
+            .map(|(d, _)| (d.name.clone(), d.stream.service, d.channel.clone()))
+            .collect();
+        self.viewers.set_targets(targets);
+        let mut total = None;
+        for row in &mut rows {
+            if row.state == 2
+                && let Some(n) = self.viewers.get(row.name.as_str())
+            {
+                row.viewers = n.min(i32::MAX as u64) as i32;
+                *total.get_or_insert(0u64) += n;
+            }
+        }
+        w.set_viewers_total(total.map_or(-1, |n| n.min(i32::MAX as u64) as i32));
         w.set_live_rows(ModelRc::new(VecModel::from(rows)));
 
         let Some(stream) = &self.stream else {

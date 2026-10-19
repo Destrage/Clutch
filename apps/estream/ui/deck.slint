@@ -30,6 +30,7 @@ component PlatformChip inherits Rectangle {
             Rectangle { width: 8px; height: 8px; border-radius: 4px; background: root.dot; }
         }
         Text { text: root.entry.name; color: Theme.text; font-size: Theme.font-m; font-weight: 600; vertical-alignment: center; }
+        if root.entry.viewers >= 0: Text { text: root.entry.viewers; color: Theme.text-muted; font-size: Theme.font-m; vertical-alignment: center; }
     }
 }
 
@@ -167,6 +168,8 @@ export component LiveDeck inherits Rectangle {
     in property <[MixerStrip]> strips;
     in property <[LiveRow]> live-rows;
     in property <string> stream-time;
+    /// Viewers across platforms that report them (-1: none do).
+    in property <int> viewers-total: -1;
     /// 1 good, 2 congested or connecting, 3 failing.
     in property <int> stream-health;
     in property <string> stream-info;
@@ -232,6 +235,24 @@ export component LiveDeck inherits Rectangle {
                         spacing: 8px;
                         Text { text: "LIVE"; color: Theme.on-accent; font-size: Theme.font-m; font-weight: 800; letter-spacing: 1px; vertical-alignment: center; }
                         Text { text: root.stream-time; color: Theme.on-accent; font-size: Theme.font-m; font-weight: 600; vertical-alignment: center; }
+                    }
+                }
+            }
+            if root.viewers-total >= 0: VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    height: 30px;
+                    width: watching.preferred-width;
+                    border-radius: 15px;
+                    background: Theme.surface-2;
+                    accessible-role: text;
+                    accessible-label: root.viewers-total + " watching";
+                    watching := HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 14px;
+                        spacing: 8px;
+                        VerticalLayout { alignment: center; Icon { source: Icons.eye; size: 16px; tint: Theme.text; } }
+                        Text { text: root.viewers-total + " watching"; color: Theme.text; font-size: Theme.font-m; font-weight: 700; vertical-alignment: center; }
                     }
                 }
             }

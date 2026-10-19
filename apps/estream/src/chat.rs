@@ -29,6 +29,11 @@ pub fn chat_url(service: Service, channel: &str) -> Result<String, &'static str>
     }
 }
 
+/// A Kick channel's slug from its name or link.
+pub fn kick_slug(text: &str) -> Option<String> {
+    channel_name(text, "kick.com")
+}
+
 /// A channel name from a bare name or a channel link on `host`.
 fn channel_name(text: &str, host: &str) -> Option<String> {
     let text = text.trim().trim_end_matches('/');

@@ -9,8 +9,8 @@
 - [x] 2.2 Chat panel with a tab per platform; sign-in inside the tab
 
 ## 3. Viewer widget
-- [ ] 3.1 `estream-chat` crate: viewer counts (Kick public channel page)
-- [ ] 3.2 Top-bar widget with total and per-platform breakdown
+- [x] 3.1 Viewer counts in the background (Kick public channel page; `viewers` module in the app)
+- [x] 3.2 Top-bar widget with total and per-platform breakdown
 
 ## 4. Connected accounts
 - [ ] 4.1 Twitch: device code sign-in, viewer count, chatters ("Active in chat")

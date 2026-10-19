@@ -1623,6 +1623,7 @@ dependencies = [
  "slint",
  "slint-build",
  "tracing",
+ "ureq",
  "uuid",
  "windows",
  "winresource",

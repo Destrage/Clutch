@@ -147,6 +147,8 @@ export component AppWindow inherits Window {
     in property <string> stream-info;
     in property <int> stream-health;
     in property <[LiveRow]> live-rows;
+    /// Viewers across platforms that report them (-1: none do).
+    in property <int> viewers-total: -1;
     // The Live deck shows while a stream runs, unless the user chose to edit the layout.
     // Chat panel (the Live deck's right column and the Chat page).
     in property <[ChatTabRow]> chat-tabs;
@@ -580,6 +582,7 @@ export component AppWindow inherits Window {
             strips: root.mixer-strips;
             live-rows: root.live-rows;
             stream-time: root.stream-time;
+            viewers-total: root.viewers-total;
             stream-health: root.stream-health;
             stream-info: root.stream-info;
             recording: root.recording;

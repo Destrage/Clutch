@@ -11,6 +11,7 @@ mod montage;
 mod presets;
 mod secret;
 mod settings;
+mod viewers;
 
 #[allow(clippy::all, clippy::unwrap_used, clippy::expect_used)]
 pub mod ui {
