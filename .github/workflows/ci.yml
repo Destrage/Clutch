@@ -54,6 +54,31 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
 
+  appimage:
+    # Built on the oldest supported Ubuntu, so the AppImage runs on any newer glibc.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config clang libclang-dev cmake ninja-build \
+            libasound2-dev libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev \
+            libxrandr-dev libxi-dev libfontconfig-dev libssl-dev libdbus-1-dev libudev-dev libpipewire-0.3-dev
+      - name: FFmpeg 9 (LGPL, shared)
+        run: |
+          mkdir -p third_party/ffmpeg
+          curl -sSL https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-linux64-lgpl-shared-9.0.tar.xz \
+            | tar -xJ -C third_party/ffmpeg --strip-components=1
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo xtask package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Clutch-AppImage
+          path: target/package/*.AppImage
+          if-no-files-found: error
+
   openspec:
     runs-on: ubuntu-latest
     steps:
