@@ -1271,7 +1271,10 @@ impl App {
         let theme = w.global::<Theme>();
         theme.set_dark(dark);
         if let Some((r, g, b)) = crate::settings::parse_hex(&self.settings.accent) {
-            theme.set_accent(slint::Color::from_rgb_u8(r, g, b));
+            // Light accents (like the default ice blue) fade on white: the light theme uses a
+            // deeper shade of the same colour, with white text on it.
+            let shade = |c: u8| if dark { c } else { (c as f32 * 0.55).round() as u8 };
+            theme.set_accent(slint::Color::from_rgb_u8(shade(r), shade(g), shade(b)));
         }
     }
 

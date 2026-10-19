@@ -16,8 +16,9 @@ export global Theme {
     out property <color> text: dark ? #e8edf2 : #141a21;
     out property <color> text-muted: dark ? #93a1b0 : #4f5d6b;
     out property <color> text-faint: dark ? #66768a : #8794a2;
-    // Accents are light (ice blue by default), so text on them is dark.
-    out property <color> on-accent: #0f141a;
+    // In the dark theme accents are light (ice blue by default), so text on them is dark; the
+    // light theme gets a deeper shade of the accent (see apply_theme) with white text.
+    out property <color> on-accent: dark ? #0f141a : #ffffff;
 
     out property <color> accent-soft: accent.with-alpha(dark ? 0.16 : 0.13);
     out property <color> accent-strong: dark ? accent.brighter(0.15) : accent.darker(0.1);
