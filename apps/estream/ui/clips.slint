@@ -12,10 +12,10 @@ component ClipTile inherits Rectangle {
     callback clicked();
     callback open();
 
-    border-radius: Theme.radius-m;
-    background: selected ? Theme.accent.with-alpha(0.14) : ta.has-hover ? Theme.hover : transparent;
-    border-width: selected ? 1px : 0px;
-    border-color: Theme.accent.with-alpha(0.6);
+    border-radius: Theme.radius-l;
+    background: ta.has-hover && !selected ? Theme.surface-2 : Theme.surface;
+    border-width: selected ? 2px : 1px;
+    border-color: selected ? Theme.accent : Theme.border;
     accessible-role: list-item;
     accessible-label: entry.title + ", " + entry.game + ", " + entry.length;
     ta := TouchArea {
@@ -24,11 +24,11 @@ component ClipTile inherits Rectangle {
         double-clicked => { root.open(); }
     }
     VerticalLayout {
-        padding: 6px;
+        padding: 8px;
         spacing: 6px;
         Rectangle {
-            height: (root.width - 12px) * 9 / 16;
-            border-radius: Theme.radius-s;
+            height: (root.width - 16px) * 9 / 16;
+            border-radius: Theme.radius-m;
             background: Theme.surface-3;
             clip: true;
             if entry.has-thumb: Image {
@@ -61,8 +61,8 @@ component ClipTile inherits Rectangle {
                 colorize: #ffd54a;
             }
         }
-        Text { text: entry.title; color: Theme.text; font-size: Theme.font-s; font-weight: 600; overflow: elide; }
-        Text { text: entry.game == "" ? entry.when : entry.game + " · " + entry.when; color: Theme.text-faint; font-size: Theme.font-xs; overflow: elide; }
+        Text { text: entry.title; color: Theme.text; font-size: Theme.font-m; font-weight: 600; overflow: elide; }
+        Text { text: entry.game == "" ? entry.when : entry.game + " · " + entry.when; color: Theme.text-muted; font-size: Theme.font-xs; overflow: elide; }
     }
 }
 
@@ -74,13 +74,14 @@ export component ClipsDialog inherits Modal {
     card-width: 1100px;
     card-top: 30px;
 
-    property <int> columns: 3;
-    property <length> grid-width: 580px;
+    // As a page the library gets more room: four columns across about 60% of the width.
+    property <int> columns: root.as-page ? 4 : 3;
+    property <length> grid-width: root.as-page ? max(580px, (root.inner-width - 73px) * 0.62) : 580px;
     // What's left of the card for the selected clip (paddings, gaps and the divider).
     property <length> detail-width: root.inner-width - root.grid-width - 36px - 37px;
-    property <length> gap: 8px;
+    property <length> gap: 12px;
     property <length> tile-width: (grid-width - gap * (columns - 1)) / columns;
-    property <length> tile-height: (tile-width - 12px) * 9 / 16 + 60px;
+    property <length> tile-height: (tile-width - 16px) * 9 / 16 + 66px;
     // Delete asks twice: the first press arms it for a few seconds.
     property <bool> confirm-delete: false;
     property <int> armed-for: -1;
@@ -118,7 +119,7 @@ export component ClipsDialog inherits Modal {
         padding: 18px;
         padding-bottom: 4px;
         spacing: 10px;
-        Text { text: "Clips"; color: Theme.text; font-size: Theme.font-xl; font-weight: 700; vertical-alignment: center; }
+        Text { text: "Clips"; color: Theme.text; font-family: Theme.font-display; font-size: root.as-page ? 28px : Theme.font-xl; font-weight: 600; vertical-alignment: center; }
         Text { text: root.form.summary; color: Theme.text-faint; font-size: Theme.font-s; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
         Button { text: "Make a montage"; has-icon: true; icon: Icons.sparkles; kind: "ghost"; tooltip: "Cut your clips into a highlight video to music"; clicked => { root.action("make-montage", 0, 0); } }
         Button { text: "Open folder"; has-icon: true; icon: Icons.folder-open; kind: "ghost"; clicked => { root.action("open-folder", 0, 0); } }
@@ -197,6 +198,7 @@ export component ClipsDialog inherits Modal {
         if root.form.selected >= 0: VerticalLayout {
             width: root.detail-width;
             spacing: 10px;
+            alignment: start;
             Rectangle {
                 width: root.detail-width;
                 height: root.detail-width * 9 / 16;

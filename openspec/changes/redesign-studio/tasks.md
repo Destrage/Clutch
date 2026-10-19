@@ -19,4 +19,4 @@
 - [x] 4.3 Round sound buttons with levels; full mixer on demand
 
 ## 5. Check
-- [ ] 5.1 Tests, clippy; in-app check of every page, dark and light, and a live session
+- [x] 5.1 Tests, clippy; in-app check of every page, dark and light, and a live session

@@ -617,8 +617,9 @@ export component MontageDialog inherits Modal {
         Text {
             text: root.form.page == "editor" ? root.form.name : root.form.page == "wizard" ? "New montage" : "Montages";
             color: Theme.text;
-            font-size: Theme.font-xl;
-            font-weight: 700;
+            font-family: Theme.font-display;
+            font-size: root.as-page ? 28px : Theme.font-xl;
+            font-weight: 600;
             vertical-alignment: center;
             horizontal-stretch: 1;
             overflow: elide;
