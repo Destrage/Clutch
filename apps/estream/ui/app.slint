@@ -456,6 +456,9 @@ export component AppWindow inherits Window {
                         border-radius: Theme.radius-l;
                         drop-shadow-blur: 18px;
                         drop-shadow-color: #00000050;
+                        // Swallow clicks and wheel on empty panel areas so they do not reach the preview
+                        // (which would deselect and close the panel).
+                        TouchArea { scroll-event(e) => { EventResult.accept } }
                         SourcesPanel {
                             width: parent.width;
                             height: parent.height;
@@ -479,6 +482,7 @@ export component AppWindow inherits Window {
                         border-radius: Theme.radius-l;
                         drop-shadow-blur: 18px;
                         drop-shadow-color: #00000050;
+                        TouchArea { scroll-event(e) => { EventResult.accept } }
                         InspectorPanel {
                             width: parent.width;
                             height: parent.height;
@@ -534,6 +538,7 @@ export component AppWindow inherits Window {
                         border-radius: Theme.radius-l;
                         drop-shadow-blur: 18px;
                         drop-shadow-color: #00000050;
+                        TouchArea { scroll-event(e) => { EventResult.accept } }
                         MixerPanel {
                             width: parent.width;
                             height: parent.height;
