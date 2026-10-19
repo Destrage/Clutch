@@ -230,9 +230,30 @@ fn golive_key_problem(key: &str) -> Option<&'static str> {
 
 /// Opens a web page in the default browser.
 fn open_url(url: &str) -> std::io::Result<()> {
-    let opener = if cfg!(windows) {
-        "explorer"
-    } else if cfg!(target_os = "macos") {
+    // Explorer opens Documents for links with a query string; the shell opens any link.
+    #[cfg(windows)]
+    {
+        use windows::Win32::UI::Shell::ShellExecuteW;
+        use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        use windows::core::{HSTRING, w};
+        let result = unsafe {
+            ShellExecuteW(
+                None,
+                w!("open"),
+                &HSTRING::from(url),
+                None,
+                None,
+                SW_SHOWNORMAL,
+            )
+        };
+        // Values above 32 mean success.
+        if result.0 as usize > 32 {
+            return Ok(());
+        }
+        return Err(std::io::Error::last_os_error());
+    }
+    #[allow(unreachable_code)]
+    let opener = if cfg!(target_os = "macos") {
         "open"
     } else {
         "xdg-open"
