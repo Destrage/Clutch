@@ -113,7 +113,7 @@ chmod +x Clutch-*-x86_64.AppImage
 ./Clutch-*-x86_64.AppImage
 ```
 
-It contains FFmpeg and the browser source's Chromium runtime. Everything else comes from your desktop:
+It runs on distributions from 2024 on (glibc 2.39 or newer: Ubuntu 24.04, Debian 13, Fedora 40, current Arch), and contains FFmpeg and the browser source's Chromium runtime. Everything else comes from your desktop:
 
 | What | Needed for | Usually |
 |---|---|---|

@@ -119,8 +119,9 @@ glibc, the GPU driver (Vulkan/GL), PipeWire, ALSA, fontconfig, D-Bus, the portal
 libraries Chromium uses (NSS, ATK, GBM, cups, X11), which every desktop that runs Chrome has.
 CEF runs without its setuid sandbox (`chrome-sandbox` can't work from an AppImage); the helper is
 isolated as a separate process. The window reports the same app id (`slint::set_xdg_app_id`),
-so the desktop shows the right icon. The AppImage is built on the oldest supported Ubuntu
-(22.04 in CI) so its glibc floor is low.
+so the desktop shows the right icon. The AppImage is built on the oldest supported Ubuntu, 24.04
+(22.04's PipeWire 0.3.48 is too old for the PipeWire bindings), so it needs glibc 2.39 or newer:
+Ubuntu 24.04+, Debian 13, Fedora 40+, current Arch.
 
 ## Risks / Trade-offs
 - **Desktop diversity.** Portal support differs across desktops. Mitigation: feature checks at

@@ -14,6 +14,12 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: FFmpeg 9 (LGPL, shared)
+        shell: pwsh
+        run: |
+          curl.exe -sSL --fail -o ffmpeg.zip https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-win64-lgpl-shared-9.0.zip
+          Expand-Archive ffmpeg.zip -DestinationPath third_party
+          Move-Item third_party/ffmpeg-n9.0-latest-win64-lgpl-shared-9.0 third_party/ffmpeg
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -55,8 +61,9 @@ jobs:
       - run: cargo test --workspace
 
   appimage:
-    # Built on the oldest supported Ubuntu, so the AppImage runs on any newer glibc.
-    runs-on: ubuntu-22.04
+    # Built on the oldest supported Ubuntu (PipeWire 1.0, which the bindings need), so the
+    # AppImage runs on any newer glibc (2.39+).
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: System libraries

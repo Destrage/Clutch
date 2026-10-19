@@ -36,7 +36,8 @@
 - [x] 6.2 xtask: `appimagetool` download, AppImage output (FFmpeg and CEF found through
       `$ORIGIN`, so no `linuxdeploy`; the LGPL FFmpeg comes from `third_party/ffmpeg` as for
       every build)
-- [ ] 6.3 CI: build the AppImage on ubuntu-22.04 and upload it as an artifact
+- [ ] 6.3 CI: build the AppImage on ubuntu-24.04 (22.04's PipeWire is too old) and upload it
+      as an artifact
 - [x] 6.4 README: Linux install (AppImage), build from source (apt/dnf/pacman packages), runtime
       requirements (PipeWire, portals, v4l2loopback)
 
