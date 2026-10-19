@@ -815,7 +815,6 @@ export component SourcesPanel inherits Panel {
                             size: 24px;
                             icon-size: 13px;
                             tint: layer.locked ? Theme.warn : Theme.text-faint;
-                            opacity: layer.locked || layer-ta.has-hover ? 1 : 0;
                             clicked => { root.toggle-lock(layer.id); }
                         }
                     }

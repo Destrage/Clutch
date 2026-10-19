@@ -451,7 +451,8 @@ export component AppWindow inherits Window {
                     if root.layers-open: Rectangle {
                         x: 12px;
                         y: 12px;
-                        width: 270px;
+                        // Room for the title and all five header buttons.
+                        width: 300px;
                         height: min(parent.height - 24px, 120px + root.layers.length * 34px);
                         border-radius: Theme.radius-l;
                         drop-shadow-blur: 18px;
