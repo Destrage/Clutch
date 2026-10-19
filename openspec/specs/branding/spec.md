@@ -1,7 +1,8 @@
 # branding Specification
 
 ## Purpose
-TBD - created by archiving change rename-to-clutch. Update Purpose after archive.
+How the app names and presents itself (Clutch, formerly eStream), and how an install of
+eStream becomes Clutch without the user setting anything up again.
 
 ## Requirements
 

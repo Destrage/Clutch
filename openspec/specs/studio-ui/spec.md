@@ -1,7 +1,8 @@
 # studio-ui Specification
 
 ## Purpose
-TBD - created by archiving change redesign-studio. Update Purpose after archive.
+The layout of the studio window: the Stage for building scenes, the Live deck while
+streaming, and the sidebar sections (Studio, Clips, Montages, Chat).
 
 ## Requirements
 
