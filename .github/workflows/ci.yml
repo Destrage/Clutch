@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+# A newer push to the same pull request supersedes the run in progress.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -26,6 +31,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      # The browser test launches the helper binary, which `cargo test` doesn't build.
+      - run: cargo build -p estream-browser
       - run: cargo test --workspace
       - name: Upload golden image diffs
         if: failure()
@@ -58,6 +65,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      # The browser test launches the helper binary, which `cargo test` doesn't build.
+      - run: cargo build -p estream-browser
       - run: cargo test --workspace
 
   appimage:

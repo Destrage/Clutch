@@ -410,6 +410,13 @@ wrap_app! {
             let name: CefString = "disable-features".into();
             let value: CefString = "HardwareMediaKeyHandling,MediaSessionService".into();
             cmd.append_switch_with_value(Some(&name), Some(&value));
+            // Pages render offscreen only: on Linux don't connect to the display at all, so
+            // the helper also runs without one (and never talks to X11 or Wayland).
+            if cfg!(target_os = "linux") {
+                let name: CefString = "ozone-platform".into();
+                let value: CefString = "headless".into();
+                cmd.append_switch_with_value(Some(&name), Some(&value));
+            }
         }
     }
 }
