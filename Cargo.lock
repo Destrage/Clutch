@@ -1992,8 +1992,11 @@ name = "estream-vcam"
 version = "0.3.3"
 dependencies = [
  "estream-shm",
+ "libc",
  "png",
  "thiserror 2.0.21",
+ "tracing",
+ "v4l",
  "windows",
  "windows-core",
 ]

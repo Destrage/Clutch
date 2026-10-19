@@ -16,6 +16,11 @@ workspace = true
 estream-shm.workspace = true
 thiserror.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2.190"
+tracing.workspace = true
+v4l = "0.14.0"
+
 [target.'cfg(windows)'.dependencies]
 windows-core = "0.62"
 windows = { version = "0.62", features = [

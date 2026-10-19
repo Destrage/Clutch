@@ -1756,6 +1756,7 @@ impl App {
         platform.set_trash(crate::shell::TRASH.into());
         platform.set_key_storage(crate::secret::storage_note().into());
         platform.set_key_remembered(crate::secret::persistent());
+        platform.set_vcam_installable(cfg!(windows));
         let in_app = self
             .runner
             .as_ref()
@@ -5862,8 +5863,10 @@ impl App {
             );
             return;
         }
+        // On Linux there is nothing to install: the camera explains a missing module itself.
         match estream_vcam::control::registration() {
             estream_vcam::control::Registration::Installed => self.start_vcam(),
+            _ if !cfg!(windows) => self.start_vcam(),
             _ => self.install_vcam(true),
         }
     }
@@ -5933,6 +5936,8 @@ impl App {
         let (code, tip) = match (&state, self.vcam_install.is_some()) {
             (_, true) => (1, "Installing the virtual camera…"),
             (Some(VcamState::Starting), _) => (1, "Starting the virtual camera…"),
+            // Linux's loopback device can't tell whether an app is watching.
+            (Some(VcamState::On), _) if !cfg!(windows) => (2, "Virtual camera on — click to stop"),
             (Some(VcamState::On), _) => {
                 (2, "Virtual camera on (no app is using it) — click to stop")
             }
@@ -5953,6 +5958,15 @@ impl App {
             }
             return (false, format!("{reason}."));
         }
+        #[cfg(target_os = "linux")]
+        return match control::loopback_device() {
+            Some(device) => (true, format!("Ready: {}.", device.display())),
+            None => (
+                false,
+                format!("The virtual camera {}.", control::UNSUPPORTED),
+            ),
+        };
+        #[allow(unreachable_code)]
         if control::dll_path().is_none() {
             return (
                 false,

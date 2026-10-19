@@ -1,8 +1,10 @@
-//! Virtual camera output: sends a canvas to "Clutch Virtual Camera" (Windows 11).
+//! Virtual camera output: sends a canvas to "Clutch Virtual Camera".
 //!
-//! A feed thread creates the session camera, then watches the shared memory the camera
-//! source opens while an app uses it. Only then does it take canvas frames from the engine,
-//! scale them to the size the app asked for, and write them; otherwise it costs nothing.
+//! On Windows 11 a feed thread creates the session camera, then watches the shared memory the
+//! camera source opens while an app uses it. Only then does it take canvas frames from the
+//! engine, scale them to the size the app asked for, and write them; otherwise it costs
+//! nothing. On Linux it writes every canvas frame to a `v4l2loopback` device (which can't tell
+//! whether an app is watching).
 
 use crossbeam_channel::RecvTimeoutError;
 use estream_core::CanvasId;
@@ -102,7 +104,72 @@ struct Feed {
 }
 
 impl Feed {
+    /// Linux: writes canvas frames (scaled to fit 1080p) to the loopback device.
+    #[cfg(target_os = "linux")]
+    fn run_loopback(self) {
+        use estream_vcam::control::{Loopback, UNSUPPORTED, loopback_device};
+        if loopback_device().is_none() {
+            *lock(&self.state) = VcamState::Failed(UNSUPPORTED.into());
+            return;
+        }
+        let (tx, rx) = crossbeam_channel::bounded(2);
+        let mut canvas = *lock(&self.canvas);
+        let mut id = self.tap.add(canvas, tx.clone());
+        let mut device: Option<Loopback> = None;
+        let mut scaled = Vec::new();
+        while !self.stop.load(Ordering::Acquire) {
+            let wanted = *lock(&self.canvas);
+            if wanted != canvas {
+                self.tap.remove(id);
+                canvas = wanted;
+                id = self.tap.add(canvas, tx.clone());
+            }
+            let frame = match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(frame) => frame,
+                Err(RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Disconnected) => break,
+            };
+            if device.is_none() {
+                // The first canvas fixes the size; later ones are scaled into it.
+                let (w, h) = fit_within(frame.width, frame.height, MAX_WIDTH, MAX_HEIGHT);
+                match Loopback::open(w, h) {
+                    Ok(d) => {
+                        tracing::info!("virtual camera on");
+                        *lock(&self.state) = VcamState::On;
+                        device = Some(d);
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "virtual camera didn't start");
+                        *lock(&self.state) = VcamState::Failed(e);
+                        break;
+                    }
+                }
+            }
+            let Some(d) = &mut device else { break };
+            scaled.resize(shared::nv12_len(d.width, d.height), 0);
+            fit_nv12(
+                &frame.data,
+                frame.width,
+                frame.height,
+                &mut scaled,
+                d.width,
+                d.height,
+            );
+            if let Err(e) = d.write_nv12(&scaled) {
+                *lock(&self.state) =
+                    VcamState::Failed(format!("writing to the camera failed: {e}"));
+                break;
+            }
+        }
+        self.tap.remove(id);
+        tracing::info!("virtual camera off");
+    }
+
     fn run(self, create_camera: bool) {
+        #[cfg(target_os = "linux")]
+        if create_camera {
+            return self.run_loopback();
+        }
         #[cfg(windows)]
         let _com = estream_vcam::control::ComApartment::multithreaded();
         #[cfg(windows)]
@@ -118,7 +185,7 @@ impl Feed {
         } else {
             None
         };
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, target_os = "linux")))]
         if create_camera {
             *lock(&self.state) = VcamState::Failed(estream_vcam::control::UNSUPPORTED.into());
             return;
@@ -188,5 +255,28 @@ impl Feed {
             self.tap.remove(id);
         }
         tracing::info!("virtual camera off");
+    }
+}
+
+/// The largest even size with `w`×`h`'s aspect that fits in `max_w`×`max_h`.
+#[cfg(target_os = "linux")]
+fn fit_within(w: u32, h: u32, max_w: u32, max_h: u32) -> (u32, u32) {
+    let scale = (max_w as f64 / w.max(1) as f64)
+        .min(max_h as f64 / h.max(1) as f64)
+        .min(1.0);
+    let even = |v: f64| ((v.round() as u32) & !1).max(2);
+    (even(w as f64 * scale), even(h as f64 * scale))
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod loopback_tests {
+    use super::fit_within;
+
+    #[test]
+    fn canvases_fit_1080p() {
+        assert_eq!(fit_within(1920, 1080, 1920, 1080), (1920, 1080));
+        assert_eq!(fit_within(3840, 2160, 1920, 1080), (1920, 1080));
+        assert_eq!(fit_within(1080, 1920, 1920, 1080), (608, 1080));
+        assert_eq!(fit_within(1281, 721, 1920, 1080), (1280, 720));
     }
 }

@@ -82,6 +82,14 @@ The focus trigger reads EWMH `_NET_ACTIVE_WINDOW` on X11 through the clip detect
 (which also needs the window's pid and fullscreen state), plugged into the runner by the app;
 on Wayland, where no portable API exists, the macro editor says the trigger is unavailable.
 
+### Virtual camera
+A `v4l2loopback` device (the one labelled "Clutch" if there are several), found in sysfs as a
+`video4linux` device with no hardware behind it. Clutch sets a YUYV format (what webcam apps
+read most widely) sized to the canvas, fitted within 1080p, and writes every canvas frame with
+`write()`. The loopback device can't tell whether an app is reading, so frames are written
+while the camera is on. Nothing is installed with Clutch: without the module, starting the
+camera fails with how to install and load it.
+
 ### Secrets
 `keyring-core` with the zbus Secret Service store (pure Rust, no libdbus). The Secret Service
 holds one random 256-bit key (`Clutch` / `secrets`); each value is sealed with it

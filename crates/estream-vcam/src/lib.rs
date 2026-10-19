@@ -1,6 +1,7 @@
-//! Clutch's virtual camera (Windows 11, Media Foundation).
+//! Clutch's virtual camera: Windows 11 (Media Foundation), and Linux (a `v4l2loopback`
+//! device, see `control_linux.rs`).
 //!
-//! The crate builds two things:
+//! On Windows the crate builds two things:
 //! - `estream_vcam.dll`: the camera source that Windows' Frame Server loads (COM, registered
 //!   once for all users);
 //! - a library for Clutch: the shared-memory protocol ([`shared`]) and the controls that
@@ -10,7 +11,10 @@ pub mod shared;
 
 #[cfg(windows)]
 pub mod control;
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+#[path = "control_linux.rs"]
+pub mod control;
+#[cfg(not(any(windows, target_os = "linux")))]
 #[path = "control_other.rs"]
 pub mod control;
 #[cfg(windows)]

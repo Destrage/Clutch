@@ -28,7 +28,7 @@
 - [x] 4.3 Focus trigger on X11; "unavailable" on Wayland shown in the macro editor
 
 ## 5. Virtual camera and browser source
-- [ ] 5.1 Virtual camera via `v4l2loopback` (detects the module, explains how to load it)
+- [x] 5.1 Virtual camera via `v4l2loopback` (detects the module, explains how to load it)
 - [ ] 5.2 `clutch-browser` (CEF) builds and runs on Linux
 
 ## 6. AppImage

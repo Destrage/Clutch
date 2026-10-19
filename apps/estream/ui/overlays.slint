@@ -1065,7 +1065,7 @@ export component SettingsDialog inherits Modal {
 
             SectionTitle { text: "VIRTUAL CAMERA"; }
             Text {
-                text: "Shows a canvas as “Clutch Virtual Camera” in Zoom, Teams, Discord, Meet and other apps (Windows 11).";
+                text: "Shows a canvas as a camera in Zoom, Teams, Discord, Meet and other apps (Windows 11, or Linux with v4l2loopback).";
                 color: Theme.text-faint;
                 font-size: Theme.font-s;
                 wrap: word-wrap;
@@ -1080,9 +1080,9 @@ export component SettingsDialog inherits Modal {
                 }
             }
             SettingRow {
-                label: "Camera component";
+                label: Platform.vcam-installable ? "Camera component" : "Camera device";
                 hint: root.form.vcam-status;
-                HorizontalLayout {
+                if Platform.vcam-installable: HorizontalLayout {
                     alignment: start;
                     Button {
                         text: root.form.vcam-installed ? "Reinstall" : "Install";
