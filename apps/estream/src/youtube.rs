@@ -202,9 +202,12 @@ fn sign_in(
             text(&body, "error")
         ));
     }
-    let (status, channels) =
-        get_bearer(&format!("{API}/channels?part=snippet&mine=true"), &access, &[])
-            .ok_or("Couldn't reach YouTube")?;
+    let (status, channels) = get_bearer(
+        &format!("{API}/channels?part=snippet&mine=true"),
+        &access,
+        &[],
+    )
+    .ok_or("Couldn't reach YouTube")?;
     if status != 200 {
         let reason = channels
             .get("error")
@@ -249,11 +252,17 @@ fn redirect_request(mut stream: TcpStream, csrf: &str) -> Option<Result<String, 
     let result = redirect_result(target, csrf);
     let page = match &result {
         None => {
-            let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            let _ = stream.write_all(
+                b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
             return None;
         }
-        Some(Ok(_)) => "Clutch is connecting to YouTube. You can close this tab and go back to Clutch.",
-        Some(Err(_)) => "YouTube wasn't connected. You can close this tab; Clutch shows what happened.",
+        Some(Ok(_)) => {
+            "Clutch is connecting to YouTube. You can close this tab and go back to Clutch."
+        }
+        Some(Err(_)) => {
+            "YouTube wasn't connected. You can close this tab; Clutch shows what happened."
+        }
     };
     let html = format!(
         "<!doctype html><meta charset=utf-8><title>Clutch</title>\
@@ -289,7 +298,9 @@ fn redirect_result(target: &str, csrf: &str) -> Option<Result<String, String>> {
     }
     let code = param("code")?;
     if param("state").as_deref() != Some(csrf) {
-        return Some(Err("The sign-in didn't match this attempt. Try again.".into()));
+        return Some(Err(
+            "The sign-in didn't match this attempt. Try again.".into()
+        ));
     }
     Some(Ok(code))
 }
@@ -361,7 +372,8 @@ impl Session {
 
     /// The connected channel's live broadcast, if it is live.
     pub fn live(&self) -> Option<Live> {
-        let broadcasts = self.api("liveBroadcasts?part=id&broadcastStatus=active&broadcastType=all")?;
+        let broadcasts =
+            self.api("liveBroadcasts?part=id&broadcastStatus=active&broadcastType=all")?;
         let video_id = text(broadcasts.get("items")?.get(0)?, "id");
         if video_id.is_empty() {
             return None;
@@ -380,7 +392,9 @@ fn concurrent_viewers(body: &Value) -> Option<u64> {
         .get(0)?
         .get("liveStreamingDetails")?
         .get("concurrentViewers")?;
-    v.as_str().and_then(|s| s.parse().ok()).or_else(|| v.as_u64())
+    v.as_str()
+        .and_then(|s| s.parse().ok())
+        .or_else(|| v.as_u64())
 }
 
 #[cfg(test)]

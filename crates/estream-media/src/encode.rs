@@ -445,7 +445,8 @@ mod tests {
         for _ in 0..10 {
             enc.push(&block, &mut out).unwrap();
         }
-        enc.pad_silence(SAMPLE_RATE as usize / 10, &mut out).unwrap(); // 100 ms missing
+        enc.pad_silence(SAMPLE_RATE as usize / 10, &mut out)
+            .unwrap(); // 100 ms missing
         for _ in 0..10 {
             enc.push(&block, &mut out).unwrap();
         }

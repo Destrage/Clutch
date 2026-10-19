@@ -72,7 +72,10 @@ pub(crate) struct PitchShift {
 impl PitchShift {
     pub(crate) fn new() -> Self {
         Self {
-            lines: [DelayLine::new(GRAIN as usize + 4), DelayLine::new(GRAIN as usize + 4)],
+            lines: [
+                DelayLine::new(GRAIN as usize + 4),
+                DelayLine::new(GRAIN as usize + 4),
+            ],
             phase: 0.0,
             step: 0.0,
             mix: 1.0,
@@ -93,7 +96,11 @@ impl AudioFilter for PitchShift {
             let (p1, p2) = (self.phase, (self.phase + 0.5).fract());
             // sin² windows half a sweep apart sum to one.
             let (w1, w2) = ((PI * p1).sin().powi(2), (PI * p2).sin().powi(2));
-            for (line, sample) in self.lines.iter_mut().zip([&mut block.l[i], &mut block.r[i]]) {
+            for (line, sample) in self
+                .lines
+                .iter_mut()
+                .zip([&mut block.l[i], &mut block.r[i]])
+            {
                 line.push(*sample);
                 let wet = line.read(p1 * GRAIN) * w1 + line.read(p2 * GRAIN) * w2;
                 *sample = *sample * (1.0 - self.mix) + wet * self.mix;
@@ -248,7 +255,11 @@ impl AudioFilter for Echo {
 
     fn process(&mut self, block: &mut Block) {
         for i in 0..BLOCK {
-            for (line, sample) in self.lines.iter_mut().zip([&mut block.l[i], &mut block.r[i]]) {
+            for (line, sample) in self
+                .lines
+                .iter_mut()
+                .zip([&mut block.l[i], &mut block.r[i]])
+            {
                 // `delay - 1`: the read happens before this sample is written.
                 let echo = line.read(self.delay - 1.0);
                 line.push(flush(*sample + echo * self.feedback));
@@ -364,7 +375,6 @@ impl AudioFilter for Reverb {
     }
 }
 
-
 // ---------------------------------------------------------------- presets
 
 /// One-click voices: `(id, name)`, in menu order (after "Off").
@@ -386,10 +396,19 @@ pub fn preset_filters(id: &str) -> Vec<(&'static str, Value)> {
         "robot" => vec![("robot", json!({ "tone_hz": 50.0 }))],
         "radio" => vec![("radio", json!({}))],
         "cave" => vec![
-            ("reverb", json!({ "room": 95.0, "damping": 20.0, "mix": 45.0 })),
-            ("echo", json!({ "delay_ms": 180.0, "feedback": 30.0, "mix": 20.0 })),
+            (
+                "reverb",
+                json!({ "room": 95.0, "damping": 20.0, "mix": 45.0 }),
+            ),
+            (
+                "echo",
+                json!({ "delay_ms": 180.0, "feedback": 30.0, "mix": 20.0 }),
+            ),
         ],
-        "echo" => vec![("echo", json!({ "delay_ms": 350.0, "feedback": 40.0, "mix": 35.0 }))],
+        "echo" => vec![(
+            "echo",
+            json!({ "delay_ms": 350.0, "feedback": 40.0, "mix": 35.0 }),
+        )],
         _ => Vec::new(),
     };
     filters

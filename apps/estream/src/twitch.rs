@@ -3,9 +3,9 @@
 //! Clutch is a public client: the Client ID ships in the app and there is no client secret.
 //! Tokens are saved encrypted (see [`crate::secret`]) and renewed in the background.
 
+use crate::http::{agent, get_bearer, post_form, text};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use crate::http::{agent, get_bearer, post_form, text};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -125,7 +125,11 @@ fn sign_in(state: &Mutex<Connect>, cancel: &AtomicBool) -> Result<TwitchAccount,
         return Err(format!("Twitch refused the sign-in ({})", message(&body)));
     }
     let expires = Instant::now()
-        + Duration::from_secs(body.get("expires_in").and_then(Value::as_u64).unwrap_or(1800));
+        + Duration::from_secs(
+            body.get("expires_in")
+                .and_then(Value::as_u64)
+                .unwrap_or(1800),
+        );
     let mut interval = body.get("interval").and_then(Value::as_u64).unwrap_or(5);
     if let Ok(mut s) = state.lock() {
         *s = Connect::Code {
@@ -263,7 +267,11 @@ fn chatter_list(body: &Value) -> Option<(u64, Vec<String>)> {
         .get("data")?
         .as_array()?
         .iter()
-        .filter_map(|c| c.get("user_name").and_then(Value::as_str).map(str::to_owned))
+        .filter_map(|c| {
+            c.get("user_name")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
         .collect();
     let total = body
         .get("total")

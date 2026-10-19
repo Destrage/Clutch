@@ -223,8 +223,9 @@ impl WebDialog {
     /// The newest frame (if one arrived), and what to show instead of the page ("" for none).
     pub fn frame(&mut self) -> (Option<slint::Image>, String) {
         let image = self.page.latest().map(|(width, height, rgba)| {
-            let buffer =
-                slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(rgba, width, height);
+            let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                rgba, width, height,
+            );
             slint::Image::from_rgba8(buffer)
         });
         self.shown |= image.is_some();

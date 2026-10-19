@@ -1,4 +1,3 @@
-
 //! Viewer counts while live, polled in the background.
 //!
 //! Kick: the public channel page's data (no sign-in). Twitch: the official API through the
