@@ -197,6 +197,7 @@ export component TopBar inherits Rectangle {
     in property <string> stream-time;
     callback open-palette();
     callback toggle-stream();
+    callback show-deck();
     in property <bool> studio-mode;
     callback toggle-studio();
     callback open-destinations();
@@ -400,6 +401,18 @@ export component TopBar inherits Rectangle {
                 active: root.recording;
                 tooltip: root.recording ? "Stop recording" : "Start recording";
                 clicked => { root.toggle-record(); }
+            }
+        }
+        // While live and editing: back to the Live deck.
+        if root.stream-state != 0: VerticalLayout {
+            alignment: center;
+            Button {
+                text: "Live deck";
+                kind: "primary";
+                has-icon: true;
+                icon: Icons.layout-dashboard;
+                tooltip: "Back to the live controls";
+                clicked => { root.show-deck(); }
             }
         }
         VerticalLayout {

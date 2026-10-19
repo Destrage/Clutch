@@ -1307,6 +1307,7 @@ impl App {
     /// Rebuilds every UI model from the latest engine snapshot.
     pub fn refresh(&mut self) {
         let Some(w) = self.window() else { return };
+        w.set_clip_hotkey(self.settings.clips.hotkey.clone().into());
         if w.get_automation_open() {
             self.refresh_automation(); // edits, undo and redo
         }

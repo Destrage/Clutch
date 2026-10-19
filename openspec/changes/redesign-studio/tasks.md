@@ -9,9 +9,9 @@
 - [ ] 2.2 Clips and Montages as pages instead of dialogs
 
 ## 3. Live deck
-- [ ] 3.1 Live top bar: time, viewers placeholder, health, End stream, Edit layout
-- [ ] 3.2 Program preview with Clip that, scene buttons with F-keys, big faders, Record state
-- [ ] 3.3 Switch to the deck when live and back when the stream ends
+- [x] 3.1 Live top bar: time, viewers placeholder, health, End stream, Edit layout
+- [x] 3.2 Program preview with Clip that, scene buttons with F-keys, big faders, Record state
+- [x] 3.3 Switch to the deck when live and back when the stream ends
 
 ## 4. Stage
 - [ ] 4.1 Full preview with floating layers and contextual settings

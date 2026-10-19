@@ -1,0 +1,405 @@
+// The Live deck: what the studio shows while a stream is running. Big, glanceable controls:
+// stream time and platforms, the program picture with a clip button, scene buttons with
+// F-key shortcuts, and sound faders.
+
+import { Theme } from "theme.slint";
+import { Icons } from "icons.slint";
+import { SceneRow, MixerStrip, LiveRow } from "types.slint";
+import { Button, Icon, Hint } from "widgets.slint";
+import { ProgramView } from "panels.slint";
+
+// One platform's state in the top bar.
+component PlatformChip inherits Rectangle {
+    in property <LiveRow> entry;
+    property <color> dot: entry.state == 2 ? Theme.ok : entry.state == 4 ? Theme.live : Theme.warn;
+    height: 30px;
+    width: chip.preferred-width;
+    border-radius: 15px;
+    background: Theme.surface;
+    border-width: 1px;
+    border-color: Theme.border;
+    accessible-role: text;
+    accessible-label: entry.name + ": " + (entry.state == 2 ? "live" : entry.state == 1 ? "connecting" : entry.state == 3 ? "reconnecting" : entry.state == 4 ? "failed" : "off");
+    chip := HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 8px;
+        VerticalLayout {
+            alignment: center;
+            Rectangle { width: 8px; height: 8px; border-radius: 4px; background: root.dot; }
+        }
+        Text { text: root.entry.name; color: Theme.text; font-size: Theme.font-m; font-weight: 600; vertical-alignment: center; }
+    }
+}
+
+// A big scene button.
+component SceneButton inherits Rectangle {
+    in property <SceneRow> scene;
+    in property <string> key-label;
+    callback clicked;
+    // Equal widths whatever the names.
+    min-width: 0px;
+    preferred-width: 0px;
+    horizontal-stretch: 1;
+    height: 76px;
+    border-radius: 14px;
+    border-width: 2px;
+    border-color: scene.live || scene.active ? Theme.accent : ta.has-hover ? Theme.border-strong : Theme.border;
+    background: scene.live || scene.active ? Theme.accent-soft : ta.pressed ? Theme.pressed : Theme.surface;
+    accessible-role: button;
+    accessible-label: "Switch to " + scene.name;
+    VerticalLayout {
+        padding: 12px;
+        Text {
+            text: root.scene.name;
+            color: Theme.text;
+            font-size: Theme.font-l;
+            font-weight: 600;
+            overflow: elide;
+        }
+        Rectangle { vertical-stretch: 1; }
+        HorizontalLayout {
+            if root.key-label != "": Rectangle {
+                width: key.preferred-width + 10px;
+                height: 18px;
+                border-radius: 4px;
+                border-width: 1px;
+                border-color: Theme.border-strong;
+                key := Text { text: root.key-label; color: Theme.text-muted; font-size: Theme.font-xs; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// A tall fader with a level meter behind it.
+component DeckFader inherits Rectangle {
+    in property <MixerStrip> strip;
+    callback fader(float);
+    callback commit();
+    callback toggle-mute();
+    width: 96px;
+    accessible-role: slider;
+    accessible-label: strip.name + " volume";
+    accessible-value: round(strip.volume-db * 10) / 10 + " dB";
+
+    VerticalLayout {
+        spacing: 8px;
+        alignment: end;
+        track := Rectangle {
+            height: 120px;
+            width: 96px;
+            // The slot, with the live level filling it from the bottom.
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                width: 10px;
+                height: parent.height;
+                border-radius: 5px;
+                background: Theme.surface-3;
+                Rectangle {
+                    y: parent.height - self.height;
+                    height: parent.height * max(root.strip.level-l, root.strip.level-r);
+                    border-radius: 5px;
+                    background: root.strip.muted ? Theme.text-faint : max(root.strip.level-l, root.strip.level-r) > 0.92 ? Theme.live : Theme.ok;
+                }
+            }
+            // The knob at the fader position.
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) * (1 - root.strip.fader);
+                width: 32px;
+                height: 14px;
+                border-radius: 7px;
+                background: root.strip.muted ? Theme.text-faint : Theme.text;
+                drop-shadow-blur: 6px;
+                drop-shadow-color: #00000060;
+            }
+            TouchArea {
+                mouse-cursor: MouseCursor.ns-resize;
+                moved => {
+                    if (self.pressed) {
+                        root.fader(clamp(1 - self.mouse-y / parent.height, 0, 1));
+                    }
+                }
+                pointer-event(e) => {
+                    if (e.kind == PointerEventKind.down) {
+                        root.fader(clamp(1 - self.mouse-y / parent.height, 0, 1));
+                    } else if (e.kind == PointerEventKind.up) {
+                        root.commit();
+                    }
+                }
+            }
+        }
+        HorizontalLayout {
+            alignment: center;
+            spacing: 6px;
+            Rectangle {
+                width: 28px;
+                height: 28px;
+                border-radius: 14px;
+                background: mute-ta.has-hover ? Theme.hover : transparent;
+                accessible-role: button;
+                accessible-label: root.strip.muted ? "Unmute " + root.strip.name : "Mute " + root.strip.name;
+                Icon { source: root.strip.muted ? Icons.volume-x : Icons.volume; size: 16px; tint: root.strip.muted ? Theme.live : Theme.text-muted; }
+                mute-ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.toggle-mute(); } }
+            }
+        }
+        Text {
+            text: root.strip.name;
+            color: root.strip.muted ? Theme.text-muted : Theme.text;
+            font-size: Theme.font-s;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+    }
+}
+
+export component LiveDeck inherits Rectangle {
+    in property <image> frame;
+    in property <float> canvas-w: 1920;
+    in property <float> canvas-h: 1080;
+    in property <[SceneRow]> scenes;
+    in property <[MixerStrip]> strips;
+    in property <[LiveRow]> live-rows;
+    in property <string> stream-time;
+    /// 1 good, 2 congested or connecting, 3 failing.
+    in property <int> stream-health;
+    in property <string> stream-info;
+    in property <bool> recording;
+    in property <string> record-time;
+    in property <bool> replay-active;
+    in property <string> clip-hotkey;
+    callback scene(string);
+    callback fader(string, float);
+    callback commit();
+    callback toggle-mute(string);
+    callback clip-now();
+    callback toggle-record();
+    callback end-stream();
+    callback edit-layout();
+
+    /// The F-key label for scene `i` ("" past F9, or when the key is the clip hotkey).
+    pure function key-label(i: int) -> string {
+        if (i >= 9) { return ""; }
+        if ("F" + (i + 1) == root.clip-hotkey) { return ""; }
+        return "F" + (i + 1);
+    }
+
+    /// End stream asks for a second click within a few seconds.
+    property <bool> confirm-end;
+
+    background: Theme.bg;
+
+    VerticalLayout {
+        // Top bar: on-air state and the platforms.
+        HorizontalLayout {
+            height: 60px;
+            padding-left: 16px;
+            padding-right: 16px;
+            spacing: 12px;
+            VerticalLayout {
+                alignment: center;
+                Image { source: Icons.logo; width: 28px; height: 28px; }
+            }
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    height: 30px;
+                    width: live.preferred-width;
+                    border-radius: 8px;
+                    background: Theme.live;
+                    accessible-role: text;
+                    accessible-label: "Live for " + root.stream-time;
+                    live := HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        spacing: 8px;
+                        Text { text: "LIVE"; color: Theme.on-accent; font-size: Theme.font-m; font-weight: 800; letter-spacing: 1px; vertical-alignment: center; }
+                        Text { text: root.stream-time; color: Theme.on-accent; font-size: Theme.font-m; font-weight: 600; vertical-alignment: center; }
+                    }
+                }
+            }
+            for row in root.live-rows: VerticalLayout {
+                alignment: center;
+                PlatformChip { entry: row; }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            HorizontalLayout {
+                spacing: 8px;
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 8px;
+                        height: 8px;
+                        border-radius: 4px;
+                        background: root.stream-health == 3 ? Theme.live : root.stream-health == 2 ? Theme.warn : Theme.ok;
+                    }
+                }
+                Text {
+                    text: root.stream-health == 3 ? "Connection trouble" : root.stream-health == 2 ? "Connection busy" : "Connection healthy";
+                    color: Theme.text-muted;
+                    font-size: Theme.font-m;
+                    vertical-alignment: center;
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                Button {
+                    text: "Edit layout";
+                    has-icon: true;
+                    icon: Icons.pencil;
+                    tooltip: "Edit scenes and sources. The stream keeps running.";
+                    clicked => { root.edit-layout(); }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                Button {
+                    text: root.confirm-end ? "Click again to end" : "End stream";
+                    kind: "danger";
+                    clicked => {
+                        if (root.confirm-end) {
+                            root.confirm-end = false;
+                            root.end-stream();
+                        } else {
+                            root.confirm-end = true;
+                        }
+                    }
+                }
+            }
+        }
+        Timer {
+            interval: 4s;
+            running: root.confirm-end;
+            triggered => { root.confirm-end = false; }
+        }
+
+        HorizontalLayout {
+            vertical-stretch: 1;
+            padding: 16px;
+            padding-top: 4px;
+            spacing: 16px;
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 12px;
+                // What viewers see.
+                Rectangle {
+                    vertical-stretch: 1;
+                    border-radius: Theme.radius-l;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    clip: true;
+                    ProgramView {
+                        width: parent.width;
+                        height: parent.height;
+                        frame: root.frame;
+                        canvas-w: root.canvas-w;
+                        canvas-h: root.canvas-h;
+                    }
+                    Button {
+                        x: parent.width - self.width - 16px;
+                        y: parent.height - self.height - 16px;
+                        width: 150px;
+                        height: 40px;
+                        text: root.clip-hotkey != "" ? "Clip that  " + root.clip-hotkey : "Clip that";
+                        kind: "primary";
+                        has-icon: true;
+                        icon: Icons.film;
+                        tooltip: "Save the last moments as a clip";
+                        clicked => { root.clip-now(); }
+                    }
+                }
+                // Scenes.
+                HorizontalLayout {
+                    spacing: 10px;
+                    for scene[i] in root.scenes: SceneButton {
+                        scene: scene;
+                        key-label: root.key-label(i);
+                        clicked => { root.scene(scene.id); }
+                    }
+                }
+                // Sound and recording.
+                Rectangle {
+                    height: 200px;
+                    border-radius: Theme.radius-l;
+                    background: Theme.surface;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    HorizontalLayout {
+                        padding: 14px;
+                        spacing: 4px;
+                        for strip in root.strips: DeckFader {
+                            strip: strip;
+                            fader(v) => { root.fader(strip.id, v); }
+                            commit => { root.commit(); }
+                            toggle-mute => { root.toggle-mute(strip.id); }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        VerticalLayout {
+                            alignment: end;
+                            spacing: 8px;
+                            Button {
+                                text: root.recording ? "Recording  " + root.record-time : "Record";
+                                kind: root.recording ? "live" : "default";
+                                has-icon: true;
+                                icon: Icons.circle;
+                                clicked => { root.toggle-record(); }
+                            }
+                            Text {
+                                text: root.replay-active ? "Clip buffer ready" : "Clip buffer off";
+                                color: Theme.text-muted;
+                                font-size: Theme.font-s;
+                                horizontal-alignment: right;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Platforms: how each one is doing (the chat joins this column later).
+            Rectangle {
+                width: 340px;
+                border-radius: Theme.radius-l;
+                background: Theme.surface;
+                border-width: 1px;
+                border-color: Theme.border;
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 12px;
+                    Text { text: "PLATFORMS"; color: Theme.text-muted; font-size: Theme.font-xs; font-weight: 700; letter-spacing: 1px; }
+                    for row in root.live-rows: VerticalLayout {
+                        spacing: 2px;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 8px;
+                                    height: 8px;
+                                    border-radius: 4px;
+                                    background: row.state == 2 ? Theme.ok : row.state == 4 ? Theme.live : Theme.warn;
+                                }
+                            }
+                            Text { text: row.name; color: Theme.text; font-size: Theme.font-l; font-weight: 600; }
+                            Rectangle { horizontal-stretch: 1; }
+                            Text {
+                                text: row.state == 2 ? "Live" : row.state == 1 ? "Connecting" : row.state == 3 ? "Reconnecting" : row.state == 4 ? "Failed" : "Off";
+                                color: Theme.text-muted;
+                                font-size: Theme.font-s;
+                                vertical-alignment: center;
+                            }
+                        }
+                        Text { text: row.info; color: Theme.text-muted; font-size: Theme.font-s; wrap: word-wrap; }
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                    if root.stream-info != "": Text { text: root.stream-info; color: Theme.text-faint; font-size: Theme.font-s; wrap: word-wrap; }
+                }
+            }
+        }
+    }
+}
