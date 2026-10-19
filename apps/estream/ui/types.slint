@@ -539,8 +539,10 @@ export struct ClipsForm {
     /// "All games" first.
     games: [string],
     game-filter: int,
-    /// 0 all, 1 automatic, 2 manual, 3 favorites.
+    /// 0 all, 1 automatic, 2 manual, 3 favorites, 4 recordings.
     kind-filter: int,
+    /// Recordings are listed instead of clips.
+    recordings: bool,
     search: string,
     /// Index into `items`, -1 = none.
     selected: int,

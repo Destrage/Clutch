@@ -130,6 +130,8 @@ pub struct App {
     health_at: Instant,
     /// Clip mode, the clip hotkey, auto-clip and the clip library.
     clipper: crate::clips::Clipper,
+    /// The recordings in the recording folder (shown in the Clips view).
+    recordings: estream_clips::Library,
     /// Markers for the recording in progress: its file, when it started, the markers so far.
     markers: Option<(PathBuf, Instant, estream_clips::markers::Markers)>,
     /// A fullscreen program offered as a game (exe, window title), until answered.
@@ -526,6 +528,7 @@ fn key_from_text(text: &str) -> Option<Key> {
 impl App {
     pub fn new(window: &AppWindow, paths: Paths, settings: Settings, gpu: GpuContext) -> Shared {
         let clipper = crate::clips::Clipper::new(&settings.clips, &settings.recording);
+        let recordings = estream_clips::Library::open_flat(&settings.recording.folder);
         let twitch = crate::twitch::Session::new(settings.twitch.clone());
         let youtube = crate::youtube::Session::new(settings.youtube.clone());
         let app = App {
@@ -590,6 +593,7 @@ impl App {
             system: estream_health::SystemSampler::start(),
             health_at: Instant::now(),
             clipper,
+            recordings,
             markers: None,
             clip_ask: None,
             clips_ui: crate::clips::ClipsUi::default(),
@@ -3065,6 +3069,7 @@ impl App {
                     }
                     self.last_recording = paths.first().cloned();
                     self.last_output = paths.into_iter().next();
+                    self.refresh_recordings();
                 }
                 Err(e) => {
                     self.markers = None;
@@ -3336,8 +3341,104 @@ impl App {
         self.refresh_montages();
     }
 
+    /// Whether the Clips view lists recordings rather than clips.
+    fn showing_recordings(&self) -> bool {
+        self.clips_ui.kind_filter == crate::clips::SHOW_RECORDINGS
+    }
+
+    /// The library the Clips view is listing.
+    fn shown_library(&self) -> &estream_clips::Library {
+        if self.showing_recordings() {
+            &self.recordings
+        } else {
+            &self.clipper.library
+        }
+    }
+
+    fn shown_library_mut(&mut self) -> &mut estream_clips::Library {
+        if self.showing_recordings() {
+            &mut self.recordings
+        } else {
+            &mut self.clipper.library
+        }
+    }
+
+    /// Rescans the recording folder (reopening it if the folder setting changed).
+    fn refresh_recordings(&mut self) {
+        if self.recordings.root() == self.settings.recording.folder {
+            self.recordings.refresh();
+        } else {
+            self.recordings = estream_clips::Library::open_flat(&self.settings.recording.folder);
+        }
+    }
+
+    /// Files a running recording is still writing.
+    fn recording_in_progress(&self, path: &std::path::Path) -> bool {
+        self.recording
+            .as_ref()
+            .is_some_and(|r| r.paths().any(|p| p == path))
+    }
+
+    /// What a clip or recording is called: its title, or a recording's file name.
+    fn entry_title(&self, clip: &estream_clips::Clip) -> String {
+        if clip.meta.title.is_none() && self.recordings.get(&clip.path).is_some() {
+            return clip
+                .path
+                .file_stem()
+                .map_or_else(|| "Recording".into(), |s| s.to_string_lossy().into_owned());
+        }
+        clip.meta.display_title()
+    }
+
+    /// Picks up a recording's finished details and starts the next recording that needs them.
+    fn tick_recording_details(&mut self) -> bool {
+        let mut changed = false;
+        if let Some((path, details)) = self.clips_ui.poll_details() {
+            match details {
+                Ok(meta) => {
+                    // Keep what the user set meanwhile (title, favorite).
+                    let meta = match self.recordings.get(&path) {
+                        Some(c) => estream_clips::ClipMeta {
+                            title: c.meta.title.clone(),
+                            favorite: c.meta.favorite,
+                            ..meta
+                        },
+                        None => meta,
+                    };
+                    let length = meta.duration;
+                    if let Err(e) = self.recordings.add(&path, meta) {
+                        tracing::warn!(error = %e, "couldn't save a recording's details");
+                    }
+                    if self.clips_ui.selected.as_ref() == Some(&path) {
+                        self.clips_ui.select(Some((&path, length)));
+                    }
+                    changed = true;
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, path = %path.display(), "couldn't read a recording")
+                }
+            }
+        }
+        if !self.clips_ui.details_busy() {
+            let next = self
+                .recordings
+                .clips()
+                .iter()
+                .filter(|c| c.meta.duration <= 0.0)
+                .map(|c| c.path.clone())
+                .find(|p| {
+                    !self.clips_ui.details_failed.contains(p) && !self.recording_in_progress(p)
+                });
+            if let Some(path) = next {
+                self.clips_ui.start_details(path);
+            }
+        }
+        changed
+    }
+
     fn open_clips(&mut self) {
         self.clipper.library.refresh();
+        self.refresh_recordings();
         self.clips_ui.refreshed_at = Instant::now();
         self.refresh_clips();
         if let Some(w) = self.window() {
@@ -3358,7 +3459,11 @@ impl App {
         if self.clips_ui.refreshed_at.elapsed() >= Duration::from_secs(30) {
             self.clips_ui.refreshed_at = Instant::now();
             self.clipper.library.refresh();
+            self.refresh_recordings();
             changed = true;
+        }
+        if self.showing_recordings() {
+            changed |= self.tick_recording_details();
         }
         if changed {
             self.refresh_clips();
@@ -3383,11 +3488,14 @@ impl App {
             .filter(|_| self.clips_ui.game_filter > 0);
         let search = self.clips_ui.search.trim().to_lowercase();
         let kind = self.clips_ui.kind_filter;
+        let recordings = self.showing_recordings();
+        // Recordings aren't sorted by game; the game filter is hidden for them.
+        let game = game.filter(|_| !recordings);
         let shown: Vec<estream_clips::Clip> = self
-            .clipper
-            .library
+            .shown_library()
             .clips()
             .iter()
+            .filter(|c| !self.recording_in_progress(&c.path))
             .filter(|c| game.is_none_or(|g| c.meta.game.as_deref() == Some(g.as_str())))
             .filter(|c| match kind {
                 1 => c.meta.trigger == Trigger::Auto,
@@ -3395,29 +3503,35 @@ impl App {
                 3 => c.meta.favorite,
                 _ => true,
             })
-            .filter(|c| {
-                search.is_empty() || c.meta.display_title().to_lowercase().contains(&search)
-            })
+            .filter(|c| search.is_empty() || self.entry_title(c).to_lowercase().contains(&search))
             .cloned()
             .collect();
         if self
             .clips_ui
             .selected
             .as_ref()
-            .is_some_and(|p| self.clipper.library.get(p).is_none())
+            .is_some_and(|p| self.shown_library().get(p).is_none())
         {
             self.clips_ui.select(None);
         }
         self.clips_ui.visible = shown.iter().map(|c| c.path.clone()).collect();
+        let titles: Vec<String> = shown.iter().map(|c| self.entry_title(c)).collect();
         let rows: Vec<ClipRow> = shown
             .iter()
-            .map(|c| {
+            .zip(titles)
+            .map(|(c, title)| {
                 let thumb = c.thumbnail.as_ref().and_then(|t| self.clips_ui.thumb(t));
+                // A recording's length shows once its details are worked out.
+                let pending = recordings && c.meta.duration <= 0.0;
                 ClipRow {
-                    title: c.meta.display_title().into(),
+                    title: title.into(),
                     game: c.meta.game.clone().unwrap_or_default().into(),
                     when: format_when(c.meta.created).into(),
-                    length: format_length(c.meta.duration).into(),
+                    length: if pending {
+                        "…".into()
+                    } else {
+                        format_length(c.meta.duration).into()
+                    },
                     has_thumb: thumb.is_some(),
                     thumb: thumb.unwrap_or_default(),
                     favorite: c.meta.favorite,
@@ -3430,8 +3544,8 @@ impl App {
             .as_ref()
             .and_then(|p| self.clips_ui.visible.iter().position(|v| v == p))
             .map_or(-1, |i| i as i32);
-        let clip = selected.as_ref().and_then(|p| self.clipper.library.get(p));
-        let lib = &self.clipper.library;
+        let clip = selected.as_ref().and_then(|p| self.shown_library().get(p));
+        let lib = self.shown_library();
         let size = |b: u64| {
             if b >= 1_000_000_000 {
                 format!("{:.1} GB", b as f64 / 1e9)
@@ -3439,17 +3553,24 @@ impl App {
                 format!("{:.0} MB", b as f64 / 1e6)
             }
         };
-        let auto = lib.total_size(|c| c.meta.trigger == Trigger::Auto);
-        let count = match lib.clips().len() {
-            1 => "1 clip".to_owned(),
-            n => format!("{n} clips"),
+        let summary = if recordings {
+            let count = match self.clips_ui.visible.len() {
+                1 => "1 recording".to_owned(),
+                n => format!("{n} recordings"),
+            };
+            format!("{count} · {}", size(lib.total_size(|_| true)))
+        } else {
+            let count = match lib.clips().len() {
+                1 => "1 clip".to_owned(),
+                n => format!("{n} clips"),
+            };
+            format!(
+                "{count} · {} (automatic {} of {:.0} GB)",
+                size(lib.total_size(|_| true)),
+                size(lib.total_size(|c| c.meta.trigger == Trigger::Auto)),
+                self.settings.clips.storage_cap_gb
+            )
         };
-        let summary = format!(
-            "{count} · {} (automatic {} of {:.0} GB)",
-            size(lib.total_size(|_| true)),
-            size(auto),
-            self.settings.clips.storage_cap_gb
-        );
         let events = clip
             .map(|c| {
                 c.meta
@@ -3467,7 +3588,9 @@ impl App {
                     parts.push(g.clone());
                 }
                 parts.push(format_when(c.meta.created));
-                parts.push(format_length(c.meta.duration));
+                if c.meta.duration > 0.0 {
+                    parts.push(format_length(c.meta.duration));
+                }
                 parts.push(format!("{:.0} MB", c.size as f64 / 1e6));
                 if c.meta.trigger == Trigger::Auto {
                     parts.push("auto-clip".into());
@@ -3487,10 +3610,8 @@ impl App {
             kind_filter: self.clips_ui.kind_filter as i32,
             search: self.clips_ui.search.clone().into(),
             selected: index,
-            title: clip
-                .map(|c| c.meta.display_title())
-                .unwrap_or_default()
-                .into(),
+            title: clip.map(|c| self.entry_title(c)).unwrap_or_default().into(),
+            recordings,
             subtitle: subtitle.into(),
             events: events.into(),
             favorite: clip.is_some_and(|c| c.meta.favorite),
@@ -3509,7 +3630,12 @@ impl App {
         let i = index.max(0) as usize;
         let at = |s: &Self| s.clips_ui.visible.get(i).cloned();
         let duration =
-            |s: &Self, p: &PathBuf| s.clipper.library.get(p).map_or(0.0, |c| c.meta.duration);
+            |s: &Self, p: &PathBuf| s.shown_library().get(p).map_or(0.0, |c| c.meta.duration);
+        let noun = if self.showing_recordings() {
+            "recording"
+        } else {
+            "clip"
+        };
         match field {
             "close" => self.clips_ui.cancel_trim(),
             "select" => {
@@ -3519,12 +3645,17 @@ impl App {
                 }
             }
             "filter-game" => self.clips_ui.game_filter = i,
-            "filter-kind" => self.clips_ui.kind_filter = i,
+            "filter-kind" => {
+                self.clips_ui.kind_filter = i;
+                if self.showing_recordings() {
+                    self.refresh_recordings();
+                }
+            }
             "play" => {
                 if let Some(p) = at(self)
                     && let Err(e) = crate::clips::open_in_player(&p)
                 {
-                    self.toast(format!("Couldn't open the clip: {e}"), true);
+                    self.toast(format!("Couldn't open the {noun}: {e}"), true);
                 }
             }
             "reveal" => {
@@ -3535,7 +3666,7 @@ impl App {
                 }
             }
             "open-folder" => {
-                let root = self.clipper.library.root().to_path_buf();
+                let root = self.shown_library().root().to_path_buf();
                 let _ = std::fs::create_dir_all(&root);
                 if let Err(e) = crate::clips::open_in_player(&root) {
                     self.toast(format!("Couldn't open the folder: {e}"), true);
@@ -3544,29 +3675,33 @@ impl App {
             "copy" => {
                 if let Some(p) = at(self) {
                     match crate::clips::copy_file_to_clipboard(&p) {
-                        Ok(()) => {
-                            self.toast("Clip copied — paste it into a chat or folder".into(), false)
-                        }
-                        Err(e) => self.toast(format!("Couldn't copy the clip: {e}"), true),
+                        Ok(()) => self.toast(
+                            format!("Copied the {noun} — paste it into a chat or folder"),
+                            false,
+                        ),
+                        Err(e) => self.toast(format!("Couldn't copy the {noun}: {e}"), true),
                     }
                 }
             }
             "delete" => {
                 if let Some(p) = at(self) {
-                    match self.clipper.library.delete(&p) {
+                    match self.shown_library_mut().delete(&p) {
                         Ok(()) => {
+                            if self.showing_recordings() {
+                                let markers = estream_clips::markers::markers_path(&p);
+                                let _ = std::fs::remove_file(markers);
+                            }
                             self.clips_ui.select(None);
-                            self.toast("Clip deleted".into(), false);
+                            self.toast(format!("Deleted the {noun}"), false);
                         }
-                        Err(e) => self.toast(format!("Couldn't delete the clip: {e}"), true),
+                        Err(e) => self.toast(format!("Couldn't delete the {noun}: {e}"), true),
                     }
                 }
             }
             "favorite" => {
                 if let Some(p) = at(self)
                     && let Err(e) = self
-                        .clipper
-                        .library
+                        .shown_library_mut()
                         .update(&p, |m| m.favorite = !m.favorite)
                 {
                     self.toast(format!("Couldn't save: {e}"), true);
@@ -3587,11 +3722,12 @@ impl App {
                 let output = if replace {
                     source.clone()
                 } else {
-                    let clip = self.clipper.library.get(&source);
+                    // New clips go to the clip library, also when cut from a recording.
+                    let clip = self.shown_library().get(&source);
                     let game = clip.and_then(|c| c.meta.game.clone());
                     let title = format!(
                         "{} (trimmed)",
-                        clip.map(|c| c.meta.display_title()).unwrap_or_default()
+                        clip.map(|c| self.entry_title(c)).unwrap_or_default()
                     );
                     self.clipper.library.new_clip_path(
                         game.as_deref(),
@@ -3618,10 +3754,10 @@ impl App {
             "title" => {
                 if let Some(p) = self.clips_ui.selected.clone() {
                     let title = text.trim().to_owned();
-                    if let Err(e) = self.clipper.library.update(&p, |m| {
+                    if let Err(e) = self.shown_library_mut().update(&p, |m| {
                         m.title = (!title.is_empty()).then_some(title);
                     }) {
-                        self.toast(format!("Couldn't rename the clip: {e}"), true);
+                        self.toast(format!("Couldn't rename it: {e}"), true);
                     }
                 }
             }
@@ -3642,11 +3778,13 @@ impl App {
                 return;
             }
         };
-        let Some(original) = self
+        let from_recording = self.recordings.get(&done.source).is_some();
+        let Some((original, original_title)) = self
             .clipper
             .library
             .get(&done.source)
-            .map(|c| c.meta.clone())
+            .or_else(|| self.recordings.get(&done.source))
+            .map(|c| (c.meta.clone(), self.entry_title(c)))
         else {
             return;
         };
@@ -3662,11 +3800,26 @@ impl App {
         let duration = (kept.end - kept.start).max(0.0);
         let thumb_at = duration / 2.0;
         if done.replaced {
-            let result = self.clipper.library.update(&done.output, |m| {
+            let library = if from_recording {
+                // The marker file follows the trim, so montage scans stay right.
+                if let Some(mut markers) = estream_clips::markers::Markers::load(&done.output) {
+                    markers
+                        .markers
+                        .retain(|m| m.at >= kept.start && m.at <= kept.end + 0.05);
+                    markers.markers.iter_mut().for_each(|m| m.at -= kept.start);
+                    if let Err(e) = markers.save(&done.output) {
+                        tracing::warn!(error = %e, "couldn't update the recording markers");
+                    }
+                }
+                &mut self.recordings
+            } else {
+                &mut self.clipper.library
+            };
+            let result = library.update(&done.output, |m| {
                 m.events = events;
                 m.duration = duration;
             });
-            self.clipper.library.reload(&done.output);
+            library.reload(&done.output);
             if let Err(e) = result {
                 self.toast(
                     format!("Trimmed, but couldn't update its details: {e}"),
@@ -3679,7 +3832,7 @@ impl App {
                 duration,
                 created: chrono::Utc::now(),
                 trigger: estream_clips::Trigger::Manual,
-                title: Some(format!("{} (trimmed)", original.display_title())),
+                title: Some(format!("{original_title} (trimmed)")),
                 ..original
             };
             if let Err(e) = self.clipper.library.add(&done.output, meta) {
@@ -3689,13 +3842,16 @@ impl App {
         }
         // A new thumbnail, made in the background like a fresh clip's.
         self.clipper.make_thumbnail(done.output.clone(), thumb_at);
-        let d = duration;
-        self.clips_ui.select(Some((&done.output, d)));
+        // A clip cut from a recording lands in the clip library; the recording stays selected.
+        if done.replaced || !from_recording {
+            self.clips_ui.select(Some((&done.output, duration)));
+        }
         self.toast(
-            if done.replaced {
-                "Clip trimmed".into()
-            } else {
-                "Trimmed clip saved".into()
+            match (done.replaced, from_recording) {
+                (true, true) => "Recording trimmed".into(),
+                (true, false) => "Clip trimmed".into(),
+                (false, true) => "Saved as a new clip (find it under All clips)".into(),
+                (false, false) => "Trimmed clip saved".into(),
             },
             false,
         );

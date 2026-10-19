@@ -126,6 +126,8 @@ pub enum LibraryError {
 #[derive(Debug)]
 pub struct Library {
     root: PathBuf,
+    /// How many folder levels below the root are scanned (game folders: 2; none: 0).
+    depth: u32,
     /// Newest first.
     clips: Vec<Clip>,
 }
@@ -133,8 +135,19 @@ pub struct Library {
 impl Library {
     /// Opens (and scans) the library at `root`; the folder needn't exist yet.
     pub fn open(root: impl Into<PathBuf>) -> Self {
+        Self::scan(root.into(), 2)
+    }
+
+    /// Opens a folder whose own video files are the entries (subfolders are left out), e.g.
+    /// the recording folder, which holds the `Clips` and `Montages` folders.
+    pub fn open_flat(root: impl Into<PathBuf>) -> Self {
+        Self::scan(root.into(), 0)
+    }
+
+    fn scan(root: PathBuf, depth: u32) -> Self {
         let mut lib = Self {
-            root: root.into(),
+            root,
+            depth,
             clips: Vec::new(),
         };
         lib.refresh();
@@ -178,7 +191,7 @@ impl Library {
     /// Rescans the folder.
     pub fn refresh(&mut self) {
         let mut files = Vec::new();
-        collect_videos(&self.root, 0, &mut files);
+        collect_videos(&self.root, self.depth, &mut files);
         let mut clips: Vec<Clip> = files.into_iter().map(|p| load_clip(&p)).collect();
         clips.sort_by(|a, b| {
             b.meta
@@ -306,7 +319,7 @@ fn write_meta(clip: &Path, meta: &ClipMeta) -> Result<(), LibraryError> {
     Ok(())
 }
 
-/// Video files under `dir` (game folders one level down, plus loose clips).
+/// Video files under `dir`, going `depth` folder levels down.
 fn collect_videos(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -316,8 +329,8 @@ fn collect_videos(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
         let Ok(kind) = entry.file_type() else {
             continue;
         };
-        if kind.is_dir() && depth < 2 {
-            collect_videos(&path, depth + 1, out);
+        if kind.is_dir() && depth > 0 {
+            collect_videos(&path, depth - 1, out);
         } else if kind.is_file()
             && path
                 .extension()
@@ -416,6 +429,20 @@ mod tests {
         assert_eq!(again.games(), ["Counter-Strike 2", "Dota 2"]);
         let json = std::fs::read_to_string(sidecar_path(&a)).unwrap_or_default();
         assert!(json.contains("\"kind\": \"kill\""), "{json}");
+    }
+
+    #[test]
+    fn a_flat_library_leaves_out_subfolders() {
+        let root = temp("flat");
+        let _ = std::fs::create_dir_all(root.join("Clips").join("Dota 2"));
+        let _ = std::fs::write(root.join("session.mkv"), b"video");
+        let _ = std::fs::write(root.join("Clips").join("loose.mp4"), b"video");
+        let _ = std::fs::write(root.join("Clips").join("Dota 2").join("kill.mp4"), b"video");
+        let flat = Library::open_flat(&root);
+        assert_eq!(flat.clips().len(), 1);
+        assert_eq!(flat.clips()[0].path, root.join("session.mkv"));
+        // The clip library on the same tree still sees game folders.
+        assert_eq!(Library::open(root.join("Clips")).clips().len(), 2);
     }
 
     #[test]

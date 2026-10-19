@@ -814,6 +814,9 @@ pub struct TrimDone {
     pub result: Result<estream_media::trim::Trimmed, String>,
 }
 
+/// The Show filter choice that lists recordings instead of clips.
+pub const SHOW_RECORDINGS: usize = 4;
+
 /// State of the Clips view (filters, selection, trim, frame preview, thumbnail cache).
 pub struct ClipsUi {
     pub game_filter: usize,
@@ -833,6 +836,10 @@ pub struct ClipsUi {
     trim: Option<TrimJob>,
     thumbs: HashMap<PathBuf, (std::time::SystemTime, slint::Image)>,
     pub refreshed_at: Instant,
+    /// A recording whose details are being worked out.
+    details_rx: Option<Receiver<(PathBuf, Result<ClipMeta, String>)>>,
+    /// Recordings whose details couldn't be worked out (not retried).
+    pub details_failed: std::collections::HashSet<PathBuf>,
 }
 
 impl Default for ClipsUi {
@@ -853,6 +860,8 @@ impl Default for ClipsUi {
             trim: None,
             thumbs: HashMap::new(),
             refreshed_at: Instant::now(),
+            details_rx: None,
+            details_failed: Default::default(),
         }
     }
 }
@@ -1018,6 +1027,74 @@ impl ClipsUi {
         });
         (changed, done)
     }
+
+    /// Whether a recording's details are being worked out.
+    pub fn details_busy(&self) -> bool {
+        self.details_rx.is_some()
+    }
+
+    /// Works out a recording's length, thumbnail and marker events in the background.
+    pub fn start_details(&mut self, recording: PathBuf) {
+        let (tx, rx) = channel();
+        let spawned = std::thread::Builder::new()
+            .name("estream-recording-details".into())
+            .spawn(move || {
+                let details = recording_details(&recording);
+                let _ = tx.send((recording, details));
+            });
+        match spawned {
+            Ok(_) => self.details_rx = Some(rx),
+            Err(e) => tracing::warn!(error = %e, "couldn't start the recording details thread"),
+        }
+    }
+
+    /// A recording's details, once worked out.
+    pub fn poll_details(&mut self) -> Option<(PathBuf, Result<ClipMeta, String>)> {
+        let result = match self.details_rx.as_ref()?.try_recv() {
+            Ok(r) => r,
+            Err(TryRecvError::Empty) => return None,
+            Err(TryRecvError::Disconnected) => {
+                self.details_rx = None;
+                return None;
+            }
+        };
+        self.details_rx = None;
+        if result.1.is_err() {
+            self.details_failed.insert(result.0.clone());
+        }
+        Some(result)
+    }
+}
+
+/// A recording's details: its length, its game events (from its marker file) and a thumbnail
+/// from the middle, written next to it.
+fn recording_details(recording: &Path) -> Result<ClipMeta, String> {
+    use estream_clips::markers::Markers;
+    let duration = estream_media::probe_duration(recording).map_err(|e| e.to_string())?;
+    if duration <= 0.0 {
+        return Err("the file has no length".into());
+    }
+    let markers = Markers::load(recording).unwrap_or_default().markers;
+    let jpg = estream_clips::library::thumbnail_path(recording);
+    if let Err(e) = estream_media::thumbnail::thumbnail(recording, duration / 2.0, 320, &jpg) {
+        tracing::warn!(error = %e, "recording thumbnail failed");
+    }
+    let created = std::fs::metadata(recording)
+        .and_then(|m| m.modified())
+        .map_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH, Into::into);
+    Ok(ClipMeta {
+        game: markers.iter().find_map(|m| m.game.clone()),
+        created,
+        events: markers
+            .iter()
+            .map(|m| ClipMark {
+                kind: m.kind.clone(),
+                at: m.at,
+            })
+            .collect(),
+        duration,
+        ..ClipMeta::default()
+    })
 }
 
 /// "0:17" or "1:02:05".

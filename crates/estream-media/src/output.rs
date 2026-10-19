@@ -514,6 +514,11 @@ pub struct Recording {
 }
 
 impl Recording {
+    /// Every file being written (one per recorded canvas, main first).
+    pub fn paths(&self) -> impl Iterator<Item = &std::path::Path> {
+        self.sessions.iter().map(|(_, p)| p.as_path())
+    }
+
     pub fn start(engine: &Engine, settings: &RecordingSettings) -> Result<Self, MediaError> {
         let snapshot = engine.snapshot();
         let main = resolve_canvas(engine, settings.canvas)
