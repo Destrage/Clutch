@@ -13,7 +13,7 @@
 - [x] 3.2 Top-bar widget with total and per-platform breakdown
 
 ## 4. Connected accounts
-- [ ] 4.1 Twitch: device code sign-in, viewer count, chatters ("Active in chat")
+- [x] 4.1 Twitch: device code sign-in, viewer count, chatters ("Active in chat")
 - [ ] 4.2 YouTube: OAuth sign-in, live chat lookup, viewer count, message box
 - [ ] 4.3 Settings → Stream: Connect / Disconnect per destination; encrypted tokens
 

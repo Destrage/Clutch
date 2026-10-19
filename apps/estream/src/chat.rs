@@ -34,6 +34,11 @@ pub fn kick_slug(text: &str) -> Option<String> {
     channel_name(text, "kick.com")
 }
 
+/// A Twitch login from a channel name or link.
+pub fn twitch_login(text: &str) -> Option<String> {
+    channel_name(text, "twitch.tv")
+}
+
 /// A channel name from a bare name or a channel link on `host`.
 fn channel_name(text: &str, host: &str) -> Option<String> {
     let text = text.trim().trim_end_matches('/');

@@ -147,6 +147,8 @@ pub struct Settings {
     pub vcam_canvas: Option<estream_core::CanvasId>,
     /// Clip mode, the clip hotkey, auto-clip and the clip library.
     pub clips: ClipSettings,
+    /// The connected Twitch account (viewer count, who's in chat).
+    pub twitch: Option<crate::twitch::TwitchAccount>,
     /// Single-stream settings from before multistream; read once, migrated, never written.
     #[serde(rename = "stream", skip_serializing)]
     legacy_stream: Option<estream_media::StreamSettings>,
@@ -416,6 +418,7 @@ impl Default for Settings {
             remote: RemoteSettings::default(),
             vcam_canvas: None,
             clips: ClipSettings::default(),
+            twitch: None,
             legacy_stream: None,
             legacy_key: None,
         }
@@ -441,6 +444,9 @@ impl Settings {
             d.stream.key = crate::secret::unprotect(&d.key_protected);
         }
         settings.remote.password = crate::secret::unprotect(&settings.remote.password_protected);
+        if let Some(t) = &mut settings.twitch {
+            t.unprotect();
+        }
         settings
     }
 

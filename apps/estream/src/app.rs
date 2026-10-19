@@ -142,8 +142,14 @@ pub struct App {
     chat_sources: Vec<(String, estream_media::Service, String)>,
     /// The selected chat page has shown a frame.
     chat_has_frame: bool,
+    /// Who is in the selected tab's chat, as last shown.
+    chat_people: Option<crate::viewers::Chatters>,
     /// Viewer counts while live.
     viewers: crate::viewers::ViewerCounts,
+    /// The connected Twitch account, shared with the viewer counts (which renew its token).
+    twitch: crate::twitch::Session,
+    /// A Twitch sign-in in progress, and the code whose page was opened.
+    twitch_connect: Option<(crate::twitch::Connecting, String)>,
     /// Settings → Clips: the game whose auto-clip rules are shown.
     clip_rule_game: usize,
     /// Montages: the saved ones, the New montage wizard and the editor.
@@ -220,6 +226,18 @@ fn golive_key_problem(key: &str) -> Option<&'static str> {
         );
     }
     None
+}
+
+/// Opens a web page in the default browser.
+fn open_url(url: &str) -> std::io::Result<()> {
+    let opener = if cfg!(windows) {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    std::process::Command::new(opener).arg(url).spawn().map(|_| ())
 }
 
 /// The Stream section of the settings form: the destination list and the selected
@@ -425,6 +443,7 @@ fn key_from_text(text: &str) -> Option<Key> {
 impl App {
     pub fn new(window: &AppWindow, paths: Paths, settings: Settings, gpu: GpuContext) -> Shared {
         let clipper = crate::clips::Clipper::new(&settings.clips, &settings.recording);
+        let twitch = crate::twitch::Session::new(settings.twitch.clone());
         let app = App {
             window: window.as_weak(),
             collection: paths.default_collection(),
@@ -493,7 +512,10 @@ impl App {
             chat: crate::chat::ChatUi::default(),
             chat_sources: Vec::new(),
             chat_has_frame: false,
-            viewers: crate::viewers::ViewerCounts::start(),
+            chat_people: None,
+            viewers: crate::viewers::ViewerCounts::start(twitch.clone()),
+            twitch,
+            twitch_connect: None,
             clip_rule_game: 0,
             montage_ui: crate::montage::MontageUi::default(),
         };
@@ -675,6 +697,22 @@ impl App {
     fn tick_chat(&mut self) {
         let Some(w) = self.window() else { return };
         self.refresh_chat_tabs();
+        let people = self
+            .chat
+            .current()
+            .and_then(|t| self.viewers.chatters(&t.name));
+        if people != self.chat_people {
+            let (total, names) = people.clone().unwrap_or((0, Vec::new()));
+            w.set_chat_people_total(if people.is_some() {
+                total.min(i32::MAX as u64) as i32
+            } else {
+                -1
+            });
+            w.set_chat_people(ModelRc::new(VecModel::from(
+                names.into_iter().map(SharedString::from).collect::<Vec<_>>(),
+            )));
+            self.chat_people = people;
+        }
         let message = match self.chat.current() {
             None => String::new(),
             Some(tab) => match &tab.url {
@@ -703,6 +741,85 @@ impl App {
             None => String::new(),
         };
         w.set_chat_message(message.into());
+    }
+
+    // ---- Twitch account ----
+
+    /// Starts signing in to Twitch: shows a code and opens the page to enter it.
+    fn twitch_connect(&mut self) {
+        self.twitch_connect = Some((crate::twitch::Connecting::start(), String::new()));
+        self.refresh_settings_form();
+    }
+
+    fn twitch_disconnect(&mut self) {
+        self.twitch_connect = None;
+        self.twitch.set(None);
+        self.settings.twitch = None;
+        self.settings.save(&self.paths.settings());
+        self.refresh_settings_form();
+    }
+
+    /// Follows a sign-in in progress, and saves tokens the viewer counts renewed.
+    fn tick_twitch(&mut self) {
+        use crate::twitch::Connect;
+        if let Some(account) = self.twitch.take_change() {
+            if account.is_none() {
+                self.toast(
+                    "Your Twitch sign-in expired. Connect again in Settings → Stream.".into(),
+                    true,
+                );
+            }
+            self.settings.twitch = account;
+            self.settings.save(&self.paths.settings());
+            self.refresh_settings_form();
+        }
+        let Some((connecting, opened)) = &self.twitch_connect else {
+            return;
+        };
+        match connecting.state() {
+            Connect::Starting => {}
+            Connect::Code { code, uri } => {
+                if *opened != code {
+                    if let Some((_, opened)) = &mut self.twitch_connect {
+                        *opened = code;
+                    }
+                    if let Err(e) = open_url(&uri) {
+                        self.toast(format!("Couldn't open your browser: {e}"), true);
+                    }
+                    self.refresh_settings_form();
+                }
+            }
+            Connect::Done(account) => {
+                self.twitch_connect = None;
+                // Twitch destinations without a channel use the connected one.
+                for d in &mut self.settings.destinations {
+                    if d.stream.service == Service::Twitch && d.channel.trim().is_empty() {
+                        d.channel = account.login.clone();
+                    }
+                }
+                self.toast(format!("Connected to Twitch as {}", account.login), false);
+                self.twitch.set(Some(account.clone()));
+                self.settings.twitch = Some(account);
+                self.settings.save(&self.paths.settings());
+                self.viewers.refresh();
+                self.refresh_settings_form();
+            }
+            Connect::Failed(e) => {
+                self.twitch_connect = None;
+                self.toast(e, true);
+                self.refresh_settings_form();
+            }
+        }
+    }
+
+    /// Opens the Twitch page for entering the sign-in code again.
+    fn twitch_open(&mut self) {
+        if let Some((connecting, _)) = &self.twitch_connect
+            && let crate::twitch::Connect::Code { uri, .. } = connecting.state()
+            && let Err(e) = open_url(&uri)
+        {
+            self.toast(format!("Couldn't open your browser: {e}"), true);
+        }
     }
 
     // ---- Setups (scene collections) ----
@@ -1193,6 +1310,7 @@ impl App {
         if w.get_chat_visible() {
             self.tick_chat();
         }
+        self.tick_twitch();
         if let Some(engine) = &self.engine {
             let image = |frame: estream_engine::CanvasFrame<'_>| {
                 slint::Image::try_from(frame.preview.clone())
@@ -2033,14 +2151,7 @@ impl App {
         let Some(url) = Self::golive_service(&w).and_then(Service::key_page) else {
             return;
         };
-        let opener = if cfg!(windows) {
-            "explorer"
-        } else if cfg!(target_os = "macos") {
-            "open"
-        } else {
-            "xdg-open"
-        };
-        if let Err(e) = std::process::Command::new(opener).arg(url).spawn() {
+        if let Err(e) = open_url(url) {
             self.toast(format!("Couldn't open your browser: {e}"), true);
         }
     }
@@ -3648,6 +3759,20 @@ impl App {
             vcam_canvas: index_of(self.vcam_canvas()),
             vcam_status: self.vcam_status().1.into(),
             vcam_installed: self.vcam_status().0,
+            dest_twitch: self
+                .dest_selected
+                .and_then(|i| self.settings.destinations.get(i))
+                .is_some_and(|d| d.stream.service == Service::Twitch),
+            twitch_account: self
+                .settings
+                .twitch
+                .as_ref()
+                .map_or_else(SharedString::new, |a| a.login.clone().into()),
+            twitch_connecting: self.twitch_connect.is_some(),
+            twitch_code: match self.twitch_connect.as_ref().map(|(c, _)| c.state()) {
+                Some(crate::twitch::Connect::Code { code, .. }) => code.into(),
+                _ => SharedString::new(),
+            },
             ..self.clip_settings_form(stream_form(&self.settings.destinations, self.dest_selected))
         });
     }
@@ -3894,6 +4019,16 @@ impl App {
 
     pub fn settings_set(&mut self, field: &str, value: f32) {
         use estream_media::{AudioCodec, Container, Preset, RateControl, VideoCodec, encode};
+        match field {
+            "twitch-connect" => return self.twitch_connect(),
+            "twitch-disconnect" => return self.twitch_disconnect(),
+            "twitch-open" => return self.twitch_open(),
+            "twitch-cancel" => {
+                self.twitch_connect = None;
+                return self.refresh_settings_form();
+            }
+            _ => {}
+        }
         if (field.starts_with("clip") || field.starts_with("hype"))
             && self.clip_setting(field, value)
         {

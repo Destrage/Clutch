@@ -190,6 +190,8 @@ export component LiveDeck inherits Rectangle {
     in property <int> chat-selected;
     in property <image> chat-frame;
     in property <string> chat-message;
+    in property <int> chat-people-total: -1;
+    in property <[string]> chat-people;
     callback chat-select(int);
     callback chat-pointer(string, float, float, int, float, float);
     callback chat-key(string, bool, bool, bool, bool);
@@ -404,6 +406,8 @@ export component LiveDeck inherits Rectangle {
                     selected: root.chat-selected;
                     frame: root.chat-frame;
                     message: root.chat-message;
+                    people-total: root.chat-people-total;
+                    people: root.chat-people;
                     select(i) => { root.chat-select(i); }
                     pointer(k, x, y, b, dx, dy) => { root.chat-pointer(k, x, y, b, dx, dy); }
                     key(t, d, c, s, a) => { root.chat-key(t, d, c, s, a); }

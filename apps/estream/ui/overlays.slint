@@ -607,6 +607,48 @@ component DestinationEditor inherits VerticalLayout {
             edited(t) => { root.set-text("dest-channel", t); }
         }
     }
+    if root.form.dest-twitch: SettingRow {
+        label: "Account";
+        hint: "Connect to see your viewer count and who's in chat";
+        HorizontalLayout {
+            spacing: 8px;
+            if root.form.twitch-account != "": Text {
+                text: "Connected as " + root.form.twitch-account;
+                color: Theme.text;
+                font-size: Theme.font-m;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            if root.form.twitch-account != "": Button {
+                text: "Disconnect";
+                kind: "ghost";
+                clicked => { root.set("twitch-disconnect", 0); }
+            }
+            if root.form.twitch-account == "" && root.form.twitch-connecting: Text {
+                text: root.form.twitch-code == "" ? "Contacting Twitch…" : "Enter code " + root.form.twitch-code + " on the Twitch page that opened";
+                color: Theme.text;
+                font-size: Theme.font-m;
+                vertical-alignment: center;
+                wrap: word-wrap;
+                horizontal-stretch: 1;
+            }
+            if root.form.twitch-account == "" && root.form.twitch-code != "": Button {
+                text: "Open page";
+                kind: "ghost";
+                clicked => { root.set("twitch-open", 0); }
+            }
+            if root.form.twitch-account == "" && root.form.twitch-connecting: Button {
+                text: "Cancel";
+                kind: "ghost";
+                clicked => { root.set("twitch-cancel", 0); }
+            }
+            if root.form.twitch-account == "" && !root.form.twitch-connecting: Button {
+                text: "Connect Twitch";
+                clicked => { root.set("twitch-connect", 0); }
+            }
+            if root.form.twitch-account == "" && !root.form.twitch-connecting: Rectangle { horizontal-stretch: 1; }
+        }
+    }
     if root.form.canvas-names.length > 1: SettingRow {
         label: "Canvas";
         hint: "Which canvas this destination streams";

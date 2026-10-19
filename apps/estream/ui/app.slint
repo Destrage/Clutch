@@ -155,6 +155,9 @@ export component AppWindow inherits Window {
     in property <int> chat-selected;
     in property <image> chat-frame;
     in property <string> chat-message;
+    /// Who is in the selected chat (-1: not listed).
+    in property <int> chat-people-total: -1;
+    in property <[string]> chat-people;
     in-out property <bool> chat-open;
     callback chat-select(int);
     callback chat-pointer(string, float, float, int, float, float);
@@ -601,6 +604,8 @@ export component AppWindow inherits Window {
             chat-selected: root.chat-selected;
             chat-frame: root.chat-frame;
             chat-message: root.chat-message;
+            chat-people-total: root.chat-people-total;
+            chat-people: root.chat-people;
             chat-select(i) => { root.chat-select(i); }
             chat-pointer(k, x, y, b, dx, dy) => { root.chat-pointer(k, x, y, b, dx, dy); }
             chat-key(t, d, c, s, a) => { root.chat-key(t, d, c, s, a); }
@@ -730,6 +735,8 @@ export component AppWindow inherits Window {
                     selected: root.chat-selected;
                     frame: root.chat-frame;
                     message: root.chat-message;
+                    people-total: root.chat-people-total;
+                    people: root.chat-people;
                     select(i) => { root.chat-select(i); }
                     pointer(k, x, y, b, dx, dy) => { root.chat-pointer(k, x, y, b, dx, dy); }
                     key(t, d, c, s, a) => { root.chat-key(t, d, c, s, a); }

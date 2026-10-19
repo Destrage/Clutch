@@ -11,6 +11,7 @@ mod montage;
 mod presets;
 mod secret;
 mod settings;
+mod twitch;
 mod viewers;
 
 #[allow(clippy::all, clippy::unwrap_used, clippy::expect_used)]
