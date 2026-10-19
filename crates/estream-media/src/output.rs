@@ -8,7 +8,7 @@ use crate::mux::{Muxer, PacketRing, StreamSpec, remux};
 use crate::settings::{Container, RecordingSettings};
 use crate::stream::{Entry, NetSpec, NetTarget, share};
 use crossbeam_channel::{Receiver, Sender, bounded, select};
-use estream_audio::{Block, TRACKS, TrackSink};
+use estream_audio::{BLOCK, Block, SAMPLE_RATE, TRACKS, TrackSink};
 use estream_core::{CanvasId, Rational, Timestamp};
 use estream_engine::{Engine, VideoFrame};
 use std::path::PathBuf;
@@ -458,18 +458,31 @@ impl State {
         if chunk.timestamp < self.t0 {
             return Ok(());
         }
+        let at = ((chunk.timestamp.0 - self.t0.0) as f64 * SAMPLE_RATE as f64 / 1e9).round() as i64;
         if !self.audio_started {
-            let start = ((chunk.timestamp.0 - self.t0.0) as f64 * 48_000.0 / 1e9).round() as i64;
-            encoders.iter_mut().for_each(|a| a.set_start(start));
+            encoders.iter_mut().for_each(|a| a.set_start(at));
             self.audio_started = true;
         }
+        // Audio positions count samples, so audio that never arrived (a stalled mixer, a full
+        // queue) would pull everything after it early and the stream drifts out of sync.
+        // Keep audio on the clock: gaps become silence, stale blocks are dropped.
+        let drift = encoders.first().map_or(0, |a| at - a.next_sample());
+        if drift < -RESYNC_SAMPLES {
+            return Ok(());
+        }
         for (k, enc) in encoders.iter_mut().enumerate() {
+            if drift > RESYNC_SAMPLES {
+                enc.pad_silence(drift as usize, &mut |p| self.write(k + 1, p))?;
+            }
             let track = self.tracks[k];
             enc.push(&chunk.tracks[track], &mut |p| self.write(k + 1, p))?;
         }
         Ok(())
     }
 }
+
+/// How far (in samples, 20 ms) audio may stray from the clock before it is realigned.
+const RESYNC_SAMPLES: i64 = 2 * BLOCK as i64;
 
 /// The longest replay buffer, in seconds (clip mode needs room for post-roll).
 pub const MAX_REPLAY_SECONDS: u32 = 600;

@@ -367,6 +367,22 @@ impl AudioEncoder {
         self.pts = samples;
     }
 
+    /// The sample position the next pushed audio will get.
+    pub fn next_sample(&self) -> i64 {
+        self.pts + self.left.len() as i64
+    }
+
+    /// Fills `samples` of silence (audio that never arrived), keeping later audio in place.
+    pub fn pad_silence(
+        &mut self,
+        samples: usize,
+        out: &mut dyn FnMut(ffmpeg::Packet),
+    ) -> Result<(), MediaError> {
+        self.left.resize(self.left.len() + samples, 0.0);
+        self.right.resize(self.right.len() + samples, 0.0);
+        self.flush(out)
+    }
+
     pub fn push(
         &mut self,
         block: &Block,
@@ -374,6 +390,11 @@ impl AudioEncoder {
     ) -> Result<(), MediaError> {
         self.left.extend_from_slice(&block.l);
         self.right.extend_from_slice(&block.r);
+        self.flush(out)
+    }
+
+    /// Encodes every whole frame that is buffered.
+    fn flush(&mut self, out: &mut dyn FnMut(ffmpeg::Packet)) -> Result<(), MediaError> {
         while self.left.len() >= self.frame_size {
             let n = self.frame_size;
             if self.planar {

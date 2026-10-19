@@ -6,7 +6,7 @@ use estream_audio::devices::MonitorOutput;
 use estream_audio::mixer::MeterSet;
 use estream_audio::{AudioCore, TrackSink};
 use estream_core::frame_clock::{FrameClock, wait_until};
-use estream_core::{EngineClock, Rational, SourceId, SourceStatus};
+use estream_core::{EngineClock, Rational, SourceId, SourceStatus, Timestamp};
 use estream_project::Monitoring;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -22,6 +22,8 @@ pub(crate) trait AudioHost: Send + Sync + 'static {
 
 /// At most this many missed blocks are caught up after a stall (keeps tracks continuous).
 const MAX_CATCH_UP: u64 = 10;
+/// One mixer block (100 Hz) in nanoseconds.
+const BLOCK_NANOS: u64 = 10_000_000;
 
 pub(crate) fn run(
     mut core: AudioCore,
@@ -67,8 +69,12 @@ pub(crate) fn run(
         }
         wait_until(&clock, frames.next_deadline());
         let tick = frames.advance(clock.now());
-        for _ in 0..=tick.skipped.min(MAX_CATCH_UP) {
-            core.process(tick.timestamp);
+        // Each caught-up block keeps its own slot on the clock; outputs fill longer gaps.
+        let catch_up = tick.skipped.min(MAX_CATCH_UP);
+        for back in (0..=catch_up).rev() {
+            core.process(Timestamp(
+                tick.timestamp.0.saturating_sub(back * BLOCK_NANOS),
+            ));
         }
     }
 }
