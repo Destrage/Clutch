@@ -87,7 +87,7 @@ impl Drop for SystemSampler {
 
 /// Takes one sample; CPU and GPU are measured since the previous call.
 pub struct Probe {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     imp: imp::Probe,
 }
 
@@ -100,17 +100,17 @@ impl Default for Probe {
 impl Probe {
     pub fn new() -> Self {
         Self {
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             imp: imp::Probe::new(),
         }
     }
 
     pub fn sample(&mut self, disk: Option<&std::path::Path>) -> SystemSample {
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         {
             self.imp.sample(disk)
         }
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, target_os = "linux")))]
         {
             let _ = disk;
             SystemSample::default()
@@ -339,6 +339,253 @@ mod imp {
     }
 }
 
+/// `/proc` and sysfs. GPU load comes from NVML on NVIDIA (the driver's `libnvidia-ml`, loaded
+/// at runtime) and `gpu_busy_percent` on amdgpu and Intel Xe; i915 exposes neither (`None`).
+#[cfg(target_os = "linux")]
+mod imp {
+    use super::SystemSample;
+    use std::path::{Path, PathBuf};
+    use std::time::{Duration, Instant};
+
+    pub struct Probe {
+        system: Option<(u64, u64)>,
+        process: Option<(Duration, Instant)>,
+        cores: f64,
+        gpus: Vec<PathBuf>,
+        nvml: Option<nvml::Nvml>,
+    }
+
+    impl Probe {
+        pub fn new() -> Self {
+            Self {
+                system: None,
+                process: None,
+                cores: std::thread::available_parallelism().map_or(1.0, |n| n.get() as f64),
+                gpus: gpu_load_files(),
+                nvml: nvml::Nvml::load(),
+            }
+        }
+
+        pub fn sample(&mut self, disk: Option<&Path>) -> SystemSample {
+            SystemSample {
+                cpu_total: self.cpu_total(),
+                cpu_process: self.cpu_process(),
+                memory_bytes: memory(),
+                gpu: self.gpu_load(),
+                disk_free: disk.and_then(disk_free),
+            }
+        }
+
+        fn cpu_total(&mut self) -> f64 {
+            let Some(now) = std::fs::read_to_string("/proc/stat")
+                .ok()
+                .and_then(|s| parse_cpu_line(&s))
+            else {
+                return 0.0;
+            };
+            let result = match self.system {
+                Some((total, idle)) if now.0 > total => {
+                    let dt = (now.0 - total) as f64;
+                    let di = now.1.saturating_sub(idle) as f64;
+                    ((dt - di) / dt * 100.0).clamp(0.0, 100.0)
+                }
+                _ => 0.0,
+            };
+            self.system = Some(now);
+            result
+        }
+
+        fn cpu_process(&mut self) -> f64 {
+            // SAFETY: `timespec` is plain data, filled by the call.
+            let mut ts: libc::timespec = unsafe { std::mem::zeroed() };
+            // SAFETY: valid clock id and out-parameter.
+            if unsafe { libc::clock_gettime(libc::CLOCK_PROCESS_CPUTIME_ID, &mut ts) } != 0 {
+                return 0.0;
+            }
+            let used = Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32);
+            let now = Instant::now();
+            let result = match self.process {
+                Some((before, at)) => {
+                    let wall = now.duration_since(at).as_secs_f64() * self.cores;
+                    if wall > 0.0 {
+                        (used.saturating_sub(before).as_secs_f64() / wall * 100.0).clamp(0.0, 100.0)
+                    } else {
+                        0.0
+                    }
+                }
+                None => 0.0,
+            };
+            self.process = Some((used, now));
+            result
+        }
+
+        fn gpu_load(&self) -> Option<f64> {
+            self.gpus
+                .iter()
+                .filter_map(|p| std::fs::read_to_string(p).ok()?.trim().parse::<f64>().ok())
+                .chain(self.nvml.iter().flat_map(|n| n.loads()))
+                .reduce(f64::max)
+                .map(|v| v.clamp(0.0, 100.0))
+        }
+    }
+
+    /// `(total, idle)` jiffies from the first (`cpu`) line of `/proc/stat`. Idle includes
+    /// iowait; guest time is already counted in user time, so it is left out.
+    pub(super) fn parse_cpu_line(stat: &str) -> Option<(u64, u64)> {
+        let line = stat.lines().next()?.strip_prefix("cpu ")?;
+        let v: Vec<u64> = line
+            .split_whitespace()
+            .take(8)
+            .map(|f| f.parse().ok())
+            .collect::<Option<_>>()?;
+        if v.len() < 5 {
+            return None;
+        }
+        Some((v.iter().sum(), v[3] + v[4]))
+    }
+
+    /// `card<N>/device/gpu_busy_percent` files that exist (connectors like `card0-DP-1` skipped).
+    fn gpu_load_files() -> Vec<PathBuf> {
+        let Ok(dir) = std::fs::read_dir("/sys/class/drm") else {
+            return Vec::new();
+        };
+        dir.flatten()
+            .filter(|e| {
+                e.file_name()
+                    .to_str()
+                    .and_then(|n| n.strip_prefix("card"))
+                    .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+            })
+            .map(|e| e.path().join("device/gpu_busy_percent"))
+            .filter(|p| p.exists())
+            .collect()
+    }
+
+    /// Anonymous resident memory (heap, stacks): the closest match to Windows' private bytes.
+    fn memory() -> u64 {
+        std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|s| parse_kib(&s, "RssAnon:"))
+            .unwrap_or(0)
+    }
+
+    pub(super) fn parse_kib(status: &str, field: &str) -> Option<u64> {
+        let rest = status.lines().find_map(|l| l.strip_prefix(field))?;
+        let kib: u64 = rest.trim().strip_suffix("kB")?.trim().parse().ok()?;
+        Some(kib * 1024)
+    }
+
+    /// The few NVML calls needed for utilization, resolved with `dlopen`.
+    mod nvml {
+        use std::ffi::{c_int, c_uint, c_void};
+
+        type Device = *mut c_void;
+        #[repr(C)]
+        struct Utilization {
+            gpu: c_uint,
+            memory: c_uint,
+        }
+        type Init = unsafe extern "C" fn() -> c_int;
+        type GetCount = unsafe extern "C" fn(*mut c_uint) -> c_int;
+        type GetHandle = unsafe extern "C" fn(c_uint, *mut Device) -> c_int;
+        type GetUtilization = unsafe extern "C" fn(Device, *mut Utilization) -> c_int;
+
+        pub struct Nvml {
+            lib: *mut c_void,
+            devices: Vec<Device>,
+            utilization: GetUtilization,
+        }
+
+        /// # Safety
+        /// `T` must be the function pointer type of `name`.
+        unsafe fn symbol<T: Copy>(lib: *mut c_void, name: &std::ffi::CStr) -> Option<T> {
+            // SAFETY: valid library handle and NUL-terminated name.
+            let ptr = unsafe { libc::dlsym(lib, name.as_ptr()) };
+            // SAFETY: non-null symbol of the caller-promised type, which is pointer-sized.
+            (!ptr.is_null()).then(|| unsafe { std::mem::transmute_copy::<*mut c_void, T>(&ptr) })
+        }
+
+        impl Nvml {
+            pub fn load() -> Option<Self> {
+                // SAFETY: NUL-terminated name; the handle is closed in Drop or below.
+                let lib = unsafe { libc::dlopen(c"libnvidia-ml.so.1".as_ptr(), libc::RTLD_NOW) };
+                if lib.is_null() {
+                    return None;
+                }
+                let nvml = Self::init(lib);
+                if nvml.is_none() {
+                    // SAFETY: our handle; nothing from it is kept.
+                    unsafe { libc::dlclose(lib) };
+                }
+                nvml
+            }
+
+            fn init(lib: *mut c_void) -> Option<Self> {
+                // SAFETY: the types match NVML's documented signatures; calls follow its API
+                // (init before any other call, handles only used while initialized).
+                unsafe {
+                    let init: Init = symbol(lib, c"nvmlInit_v2")?;
+                    let count: GetCount = symbol(lib, c"nvmlDeviceGetCount_v2")?;
+                    let handle: GetHandle = symbol(lib, c"nvmlDeviceGetHandleByIndex_v2")?;
+                    let utilization: GetUtilization =
+                        symbol(lib, c"nvmlDeviceGetUtilizationRates")?;
+                    if init() != 0 {
+                        return None;
+                    }
+                    let mut n = 0;
+                    let _ = count(&mut n);
+                    let devices = (0..n)
+                        .filter_map(|i| {
+                            let mut d = std::ptr::null_mut();
+                            (handle(i, &mut d) == 0).then_some(d)
+                        })
+                        .collect();
+                    Some(Self {
+                        lib,
+                        devices,
+                        utilization,
+                    })
+                }
+            }
+
+            /// Each GPU's load, 0–100.
+            pub fn loads(&self) -> impl Iterator<Item = f64> + '_ {
+                self.devices.iter().filter_map(|d| {
+                    let mut u = Utilization { gpu: 0, memory: 0 };
+                    // SAFETY: a handle from this initialized NVML and an out-parameter.
+                    (unsafe { (self.utilization)(*d, &mut u) } == 0).then_some(u.gpu as f64)
+                })
+            }
+        }
+
+        impl Drop for Nvml {
+            fn drop(&mut self) {
+                // SAFETY: shuts down the NVML we initialized, then drops our library handle.
+                unsafe {
+                    if let Some(shutdown) = symbol::<Init>(self.lib, c"nvmlShutdown") {
+                        shutdown();
+                    }
+                    libc::dlclose(self.lib);
+                }
+            }
+        }
+    }
+
+    fn disk_free(path: &Path) -> Option<u64> {
+        use std::os::unix::ffi::OsStrExt;
+        // The folder may not exist yet: walk up to the nearest existing parent.
+        let existing = path.ancestors().find(|p| p.exists())?;
+        let c = std::ffi::CString::new(existing.as_os_str().as_bytes()).ok()?;
+        // SAFETY: `statvfs` is plain data, filled by the call.
+        let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+        // SAFETY: valid NUL-terminated path and out-parameter.
+        if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
+            return None;
+        }
+        Some(st.f_bavail as u64 * st.f_frsize as u64)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -358,7 +605,7 @@ mod tests {
         let s = probe.sample(Some(&temp));
         assert!((0.0..=100.0).contains(&s.cpu_total), "{s:?}");
         assert!((0.0..=100.0).contains(&s.cpu_process), "{s:?}");
-        if cfg!(windows) {
+        if cfg!(any(windows, target_os = "linux")) {
             assert!(s.memory_bytes > 0, "{s:?}");
             assert!(s.disk_free.is_some_and(|f| f > 0), "{s:?}");
             assert!(s.cpu_process > 0.0, "{s:?}");
@@ -366,5 +613,16 @@ mod tests {
         if let Some(g) = s.gpu {
             assert!((0.0..=100.0).contains(&g));
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn proc_files_parse() {
+        let stat = "cpu  10 2 3 80 5 0 0 0 7 0\ncpu0 1 2 3 4 5 6 7 8 9 10\n";
+        assert_eq!(imp::parse_cpu_line(stat), Some((100, 85)));
+        assert_eq!(imp::parse_cpu_line("intr 1 2 3"), None);
+        let status = "Name:\tclutch\nRssAnon:\t  123456 kB\nRssFile:\t 9 kB\n";
+        assert_eq!(imp::parse_kib(status, "RssAnon:"), Some(123456 * 1024));
+        assert_eq!(imp::parse_kib(status, "VmSwap:"), None);
     }
 }
