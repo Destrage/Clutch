@@ -35,10 +35,15 @@ impl GpuContext {
 
     async fn new_async(options: &GpuOptions) -> Result<Self, GpuError> {
         // Prefer the platform's native API (DX12 on Windows: needed for D3D11 capture
-        // interop, and avoids third-party Vulkan layers), then fall back to any backend.
-        // `WGPU_BACKEND` in the environment overrides this.
-        let preferred = if cfg!(windows) && wgpu::Backends::from_env().is_none() {
+        // interop, and avoids third-party Vulkan layers; Vulkan on Linux, then GL for old
+        // drivers), then fall back to any backend. `WGPU_BACKEND` in the environment
+        // overrides this.
+        let preferred = if wgpu::Backends::from_env().is_some() {
+            vec![None]
+        } else if cfg!(windows) {
             vec![Some(wgpu::Backends::DX12), None]
+        } else if cfg!(target_os = "linux") {
+            vec![Some(wgpu::Backends::VULKAN), Some(wgpu::Backends::GL), None]
         } else {
             vec![None]
         };

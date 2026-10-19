@@ -608,9 +608,13 @@ mod tests {
         let dir = config_dir(Integration::Dota2Gsi, Path::new(r"C:\dota 2 beta"));
         assert_eq!(
             dir,
-            Some(PathBuf::from(
-                r"C:\dota 2 beta\game\dota\cfg\gamestate_integration"
-            ))
+            Some(
+                PathBuf::from(r"C:\dota 2 beta").join(
+                    ["game", "dota", "cfg", "gamestate_integration"]
+                        .iter()
+                        .collect::<PathBuf>()
+                )
+            )
         );
         assert_eq!(new_token().len(), 32);
         assert_ne!(new_token(), new_token());

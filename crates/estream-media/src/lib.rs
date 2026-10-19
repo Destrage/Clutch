@@ -46,7 +46,22 @@ pub fn init() {
         }
         ffmpeg::util::log::set_level(ffmpeg::util::log::Level::Error);
         tracing::info!(version = %version(), "FFmpeg loaded");
+        if !headers_match_library() {
+            tracing::error!(
+                "FFmpeg was built against other headers than the library that loaded \
+                 (e.g. the system's FFmpeg headers next to FFMPEG_DIR); codecs will be misread"
+            );
+        }
     });
+}
+
+/// Whether the codec ids compiled in match the loaded libavcodec. They differ when the bindings
+/// came from another FFmpeg version's headers.
+fn headers_match_library() -> bool {
+    // SAFETY: takes a NUL-terminated name; returns a static descriptor or null.
+    let descriptor = unsafe { ffmpeg::ffi::avcodec_descriptor_get_by_name(c"hevc".as_ptr()) };
+    // SAFETY: non-null descriptors point to libavcodec's static table.
+    descriptor.is_null() || unsafe { (*descriptor).id } == ffmpeg::ffi::AVCodecID::AV_CODEC_ID_HEVC
 }
 
 /// A media file's duration in seconds.

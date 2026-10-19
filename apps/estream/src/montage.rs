@@ -668,7 +668,7 @@ impl MontageUi {
             }
             "open-folder" => {
                 let _ = std::fs::create_dir_all(&ctx.montages);
-                let _ = crate::clips::open_in_player(&ctx.montages);
+                let _ = crate::shell::open(&ctx.montages);
             }
             // Wizard
             "tab" => self.source_tab = i.min(1),

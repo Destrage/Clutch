@@ -70,6 +70,8 @@ pub struct Runner {
 impl Runner {
     /// `global_hotkeys`: register hotkeys with the system (off in tests).
     pub fn new(global_hotkeys: bool) -> Self {
+        #[cfg(not(windows))]
+        let _ = global_hotkeys;
         Self {
             #[cfg(windows)]
             hotkeys: global_hotkeys

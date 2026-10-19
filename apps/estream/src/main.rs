@@ -2,10 +2,10 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod account;
 mod actions;
 mod app;
 mod chat;
-mod account;
 mod clips;
 mod http;
 mod interact;
@@ -13,6 +13,7 @@ mod montage;
 mod presets;
 mod secret;
 mod settings;
+mod shell;
 mod twitch;
 mod viewers;
 mod youtube;

@@ -1,5 +1,10 @@
 // Design tokens. Every UI color comes from here (dark and light themes).
 
+// Words that differ per system, set once at startup.
+export global Platform {
+    in property <string> trash: "Recycle Bin";
+}
+
 export global Theme {
     in-out property <bool> dark: true;
     in-out property <color> accent: #8ec5ff;

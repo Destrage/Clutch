@@ -3,8 +3,12 @@
 FFMPEG_DIR = { value = "third_party/ffmpeg", relative = true }
 # Chromium Embedded Framework for the browser helper; downloaded here on first build.
 CEF_PATH = { value = "third_party/cef", relative = true }
-# Clang for bindgen (installed by `winget install LLVM.LLVM`).
-LIBCLANG_PATH = "C:\\Program Files\\LLVM\\bin"
+# Clang for bindgen: found in C:\Program Files\LLVM (Windows) or the system's llvm (Linux).
+# Set LIBCLANG_PATH yourself if it lives somewhere else.
+
+[target.'cfg(target_os = "linux")']
+# Load the FFmpeg and CEF libraries copied next to the executable.
+rustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN"]
 
 [alias]
 xtask = "run --package xtask --"

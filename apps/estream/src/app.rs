@@ -7,8 +7,8 @@ use crate::presets::{self, PRESETS};
 use crate::settings::{PanelLayout, Paths, Settings, ThemeMode, WindowState};
 use crate::ui::{
     AppWindow, AudioInspect, CanvasBox, CanvasTab, DestinationRow, FilterParamRow, FilterRow,
-    Guide, Inspect, LayerRow, LiveRow, MediaInspect, MixerStrip, PaletteEntry, Preset, PropRow,
-    SceneRow, SettingsForm, SourceType, Theme, VideoFilterRow,
+    Guide, Inspect, LayerRow, LiveRow, MediaInspect, MixerStrip, PaletteEntry, Platform, Preset,
+    PropRow, SceneRow, SettingsForm, SourceType, Theme, VideoFilterRow,
 };
 use estream_core::{BlendMode, BoundsMode, CanvasId, ItemId, Rgba8, SceneId, SourceId};
 use estream_engine::{
@@ -237,39 +237,6 @@ fn golive_key_problem(key: &str) -> Option<&'static str> {
     None
 }
 
-/// Opens a web page in the default browser.
-fn open_url(url: &str) -> std::io::Result<()> {
-    // Explorer opens Documents for links with a query string; the shell opens any link.
-    #[cfg(windows)]
-    {
-        use windows::Win32::UI::Shell::ShellExecuteW;
-        use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-        use windows::core::{HSTRING, w};
-        let result = unsafe {
-            ShellExecuteW(
-                None,
-                w!("open"),
-                &HSTRING::from(url),
-                None,
-                None,
-                SW_SHOWNORMAL,
-            )
-        };
-        // Values above 32 mean success.
-        if result.0 as usize > 32 {
-            return Ok(());
-        }
-        return Err(std::io::Error::last_os_error());
-    }
-    #[allow(unreachable_code)]
-    let opener = if cfg!(target_os = "macos") {
-        "open"
-    } else {
-        "xdg-open"
-    };
-    std::process::Command::new(opener).arg(url).spawn().map(|_| ())
-}
-
 /// Filters added by a voice preset have ids starting with this.
 const VOICE_ID: &str = "voice:";
 
@@ -301,12 +268,14 @@ fn set_voice_preset(filters: &mut Vec<AudioFilterDef>, index: usize) {
         return;
     };
     let at = at.unwrap_or(filters.len()).min(filters.len());
-    let added = preset_filters(id).into_iter().map(|(kind, settings)| AudioFilterDef {
-        id: format!("{VOICE_ID}{}", uuid::Uuid::now_v7()),
-        kind: kind.into(),
-        enabled: true,
-        settings,
-    });
+    let added = preset_filters(id)
+        .into_iter()
+        .map(|(kind, settings)| AudioFilterDef {
+            id: format!("{VOICE_ID}{}", uuid::Uuid::now_v7()),
+            kind: kind.into(),
+            enabled: true,
+            settings,
+        });
     filters.splice(at..at, added);
 }
 
@@ -817,7 +786,10 @@ impl App {
                 -1
             });
             w.set_chat_people(ModelRc::new(VecModel::from(
-                names.into_iter().map(SharedString::from).collect::<Vec<_>>(),
+                names
+                    .into_iter()
+                    .map(SharedString::from)
+                    .collect::<Vec<_>>(),
             )));
             self.chat_people = people;
         }
@@ -967,7 +939,7 @@ impl App {
             _ => return,
         };
         self.close_signin();
-        if let Err(e) = open_url(&uri) {
+        if let Err(e) = crate::shell::open_url(&uri) {
             self.toast(format!("Couldn't open your browser: {e}"), true);
         }
     }
@@ -986,7 +958,7 @@ impl App {
     fn youtube_connect(&mut self) {
         match crate::youtube::Connecting::start() {
             Ok(connecting) => {
-                if let Err(e) = open_url(connecting.url()) {
+                if let Err(e) = crate::shell::open_url(connecting.url()) {
                     self.toast(format!("Couldn't open your browser: {e}"), true);
                 }
                 self.youtube_connect = Some(connecting);
@@ -1025,7 +997,10 @@ impl App {
             Connect::Waiting => {}
             Connect::Done(account) => {
                 self.youtube_connect = None;
-                self.toast(format!("Connected to YouTube as {}", account.channel), false);
+                self.toast(
+                    format!("Connected to YouTube as {}", account.channel),
+                    false,
+                );
                 self.youtube.set(Some(account.clone()));
                 self.settings.youtube = Some(account);
                 self.settings.save(&self.paths.settings());
@@ -1093,7 +1068,7 @@ impl App {
             }
             (Some(Service::YouTube), "open") => {
                 if let Some(c) = &self.youtube_connect
-                    && let Err(e) = open_url(c.url())
+                    && let Err(e) = crate::shell::open_url(c.url())
                 {
                     self.toast(format!("Couldn't open your browser: {e}"), true);
                 }
@@ -1345,12 +1320,12 @@ impl App {
         }
         for path in [old.clone(), persist::recovery_path(&old)] {
             if path.exists() {
-                to_recycle_bin(&path).map_err(|e| e.to_string())?;
+                crate::shell::trash(&path).map_err(|e| e.to_string())?;
             }
         }
         self.refresh_setups();
         self.toast(
-            format!("Deleted “{current}” (it's in the Recycle Bin)"),
+            format!("Deleted “{current}” (it's in the {})", crate::shell::TRASH),
             false,
         );
         Ok(())
@@ -1358,7 +1333,7 @@ impl App {
 
     /// What the first run can use: primary screen, first webcam, default mic, encoder.
     fn detect_devices(&self) -> presets::Detected {
-        let monitors = estream_capture::windows::enumerate::monitors();
+        let monitors = estream_capture::devices::displays();
         let monitor = monitors
             .iter()
             .enumerate()
@@ -1370,7 +1345,7 @@ impl App {
                     format!("Display {} ({} × {})", i + 1, m.width, m.height),
                 )
             });
-        let camera = estream_capture::windows::camera::devices()
+        let camera = estream_capture::devices::cameras()
             .into_iter()
             .next()
             .map(|c| (c.id, c.name));
@@ -1777,6 +1752,7 @@ impl App {
             ThemeMode::Light => false,
             ThemeMode::System => crate::settings::system_prefers_dark(),
         };
+        w.global::<Platform>().set_trash(crate::shell::TRASH.into());
         let theme = w.global::<Theme>();
         theme.set_dark(dark);
         if let Some((r, g, b)) = crate::settings::parse_hex(&self.settings.accent) {
@@ -2436,7 +2412,7 @@ impl App {
         let Some(url) = Self::golive_service(&w).and_then(Service::key_page) else {
             return;
         };
-        if let Err(e) = open_url(url) {
+        if let Err(e) = crate::shell::open_url(url) {
             self.toast(format!("Couldn't open your browser: {e}"), true);
         }
     }
@@ -3653,14 +3629,14 @@ impl App {
             }
             "play" => {
                 if let Some(p) = at(self)
-                    && let Err(e) = crate::clips::open_in_player(&p)
+                    && let Err(e) = crate::shell::open(&p)
                 {
                     self.toast(format!("Couldn't open the {noun}: {e}"), true);
                 }
             }
             "reveal" => {
                 if let Some(p) = at(self)
-                    && let Err(e) = crate::clips::reveal(&p)
+                    && let Err(e) = crate::shell::reveal(&p)
                 {
                     self.toast(format!("Couldn't open the folder: {e}"), true);
                 }
@@ -3668,13 +3644,13 @@ impl App {
             "open-folder" => {
                 let root = self.shown_library().root().to_path_buf();
                 let _ = std::fs::create_dir_all(&root);
-                if let Err(e) = crate::clips::open_in_player(&root) {
+                if let Err(e) = crate::shell::open(&root) {
                     self.toast(format!("Couldn't open the folder: {e}"), true);
                 }
             }
             "copy" => {
                 if let Some(p) = at(self) {
-                    match crate::clips::copy_file_to_clipboard(&p) {
+                    match crate::shell::copy_file(&p) {
                         Ok(()) => self.toast(
                             format!("Copied the {noun} — paste it into a chat or folder"),
                             false,
@@ -3860,27 +3836,11 @@ impl App {
     /// Opens the file manager at the last saved recording (or the recording folder).
     fn reveal_output(&mut self) {
         let file = self.last_output.clone().filter(|p| p.exists());
-        let folder = self.settings.recording.folder.clone();
-        let mut cmd = if cfg!(windows) {
-            let mut c = std::process::Command::new("explorer");
-            match &file {
-                Some(f) => c.arg(format!("/select,{}", f.display())),
-                None => c.arg(&folder),
-            };
-            c
-        } else if cfg!(target_os = "macos") {
-            let mut c = std::process::Command::new("open");
-            match &file {
-                Some(f) => c.arg("-R").arg(f),
-                None => c.arg(&folder),
-            };
-            c
-        } else {
-            let mut c = std::process::Command::new("xdg-open");
-            c.arg(file.as_ref().and_then(|f| f.parent()).unwrap_or(&folder));
-            c
+        let result = match &file {
+            Some(f) => crate::shell::reveal(f),
+            None => crate::shell::open(&self.settings.recording.folder),
         };
-        if let Err(e) = cmd.spawn() {
+        if let Err(e) = result {
             self.toast(format!("Couldn't open the folder: {e}"), true);
         }
     }
@@ -5880,7 +5840,10 @@ impl App {
             return; // waiting for the permission prompt
         }
         if !estream_vcam::control::supported() {
-            self.toast("The virtual camera needs Windows 11".into(), true);
+            self.toast(
+                format!("The virtual camera {}", estream_vcam::control::UNSUPPORTED),
+                true,
+            );
             return;
         }
         match estream_vcam::control::registration() {
@@ -5968,7 +5931,11 @@ impl App {
     fn vcam_status(&self) -> (bool, String) {
         use estream_vcam::control::{self, Registration};
         if !control::supported() {
-            return (false, "Needs Windows 11.".into());
+            let mut reason = control::UNSUPPORTED.to_owned();
+            if let Some(first) = reason.get_mut(..1) {
+                first.make_ascii_uppercase();
+            }
+            return (false, format!("{reason}."));
         }
         if control::dll_path().is_none() {
             return (
@@ -7737,34 +7704,6 @@ fn check_setup_name(name: &str, taken: &[String]) -> Result<String, String> {
     Ok(name.to_owned())
 }
 
-/// Moves a file to the Recycle Bin, so a deleted setup can still be restored.
-#[cfg(windows)]
-fn to_recycle_bin(path: &std::path::Path) -> std::io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows::Win32::UI::Shell::{
-        FO_DELETE, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, SHFILEOPSTRUCTW,
-        SHFileOperationW,
-    };
-    // A double-NUL-terminated list of one path.
-    let from: Vec<u16> = path.as_os_str().encode_wide().chain([0, 0]).collect();
-    let mut op = SHFILEOPSTRUCTW {
-        wFunc: FO_DELETE,
-        pFrom: windows::core::PCWSTR(from.as_ptr()),
-        fFlags: (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT).0 as u16,
-        ..Default::default()
-    };
-    // SAFETY: `from` outlives the call and is double-NUL terminated.
-    match unsafe { SHFileOperationW(&mut op) } {
-        0 => Ok(()),
-        code => Err(std::io::Error::other(format!("Windows error {code}"))),
-    }
-}
-
-#[cfg(not(windows))]
-fn to_recycle_bin(path: &std::path::Path) -> std::io::Result<()> {
-    std::fs::remove_file(path)
-}
-
 fn meter_position(level: f32) -> f32 {
     let db = estream_engine::audio_engine::db::from_gain(level);
     ((db + 60.0) / 60.0).clamp(0.0, 1.0)
@@ -7955,12 +7894,18 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
         p.reload()
     });
     on!(on_chat_resized, |a, w, h| a.chat_resized(w, h));
-    on!(on_signin_pointer, |a, kind, x, y, button, dx, dy| if let Some(d) = &mut a.signin {
-        d.pointer(&kind, x, y, button, dx, dy)
-    });
-    on!(on_signin_key, |a, text, down, ctrl, shift, alt| if let Some(d) = &mut a.signin {
-        d.key(&text, down, ctrl, shift, alt)
-    });
+    on!(
+        on_signin_pointer,
+        |a, kind, x, y, button, dx, dy| if let Some(d) = &mut a.signin {
+            d.pointer(&kind, x, y, button, dx, dy)
+        }
+    );
+    on!(
+        on_signin_key,
+        |a, text, down, ctrl, shift, alt| if let Some(d) = &mut a.signin {
+            d.key(&text, down, ctrl, shift, alt)
+        }
+    );
     on!(on_signin_resized, |a, w, h| a.signin_resized(w, h));
     on!(on_signin_browser, |a| a.twitch_open());
     on!(on_signin_cancel, |a| a.twitch_cancel());

@@ -41,6 +41,10 @@ fn read_centre(name: &str, w: u32, h: u32) -> [u8; 4] {
 }
 
 #[test]
+#[cfg_attr(
+    not(windows),
+    ignore = "the helper and shared memory are Windows-only for now (add-linux 2.1, 5.2)"
+)]
 fn renders_pages_and_recovers_from_crashes() {
     let page = PageConfig {
         url: "data:text/html,<html><body style='margin:0;background:rgba(255,0,0,0.5)'></body></html>"

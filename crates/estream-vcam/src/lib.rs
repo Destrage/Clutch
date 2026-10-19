@@ -10,6 +10,9 @@ pub mod shared;
 
 #[cfg(windows)]
 pub mod control;
+#[cfg(not(windows))]
+#[path = "control_other.rs"]
+pub mod control;
 #[cfg(windows)]
 mod dll;
 #[cfg(windows)]

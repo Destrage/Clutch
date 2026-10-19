@@ -153,6 +153,9 @@ fn create_function() -> Option<CreateVirtualCamera> {
     }
 }
 
+/// Why the camera can't be used when [`supported`] is false.
+pub const UNSUPPORTED: &str = "needs Windows 11";
+
 /// True if this Windows version can create virtual cameras (Windows 11).
 pub fn supported() -> bool {
     create_function().is_some()

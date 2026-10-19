@@ -28,6 +28,32 @@ jobs:
           name: golden-diffs
           path: tests/output/
 
+  rust-linux:
+    # GPU tests run on Mesa's software Vulkan (lavapipe).
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: System libraries
+        # No distro libav*-dev: its headers would shadow the bundled FFmpeg 9.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config clang libclang-dev cmake ninja-build \
+            libasound2-dev libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev \
+            libxrandr-dev libxi-dev libfontconfig-dev libssl-dev libdbus-1-dev libudev-dev \
+            mesa-vulkan-drivers
+      - name: FFmpeg 9 (LGPL, shared)
+        run: |
+          mkdir -p third_party/ffmpeg
+          curl -sSL https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-linux64-lgpl-shared-9.0.tar.xz \
+            | tar -xJ -C third_party/ffmpeg --strip-components=1
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
   openspec:
     runs-on: ubuntu-latest
     steps:

@@ -57,6 +57,9 @@ windows = { version = "0.62", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+[target.'cfg(not(windows))'.dependencies]
+trash = "5"
+
 [build-dependencies]
 slint-build.workspace = true
 winresource = "0.1"

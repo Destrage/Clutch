@@ -34,6 +34,7 @@ pub fn unprotect(stored: &str) -> String {
     String::new()
 }
 
+#[cfg(windows)]
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

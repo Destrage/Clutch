@@ -1,4 +1,4 @@
-import { Theme } from "theme.slint";
+import { Theme, Platform } from "theme.slint";
 import { Icons } from "icons.slint";
 import { PaletteEntry, Preset, SourceType, SettingsForm, DestinationRow, LiveRow } from "types.slint";
 import { Button, IconButton, Icon, Badge, TextField, TextArea, NumberField, Select, Toggle, SectionTitle } from "widgets.slint";
@@ -424,7 +424,7 @@ export component SetupDialog inherits Modal {
             text: root.mode == "new"
                 ? "A setup holds its own scenes, sources and audio. Give it a name, then pick what it's for."
                 : root.mode == "rename" ? "The new name for “" + root.current-name + "”."
-                : "Its scenes and sources go to the Recycle Bin. Your recordings and clips are kept.";
+                : "Its scenes and sources go to the " + Platform.trash + ". Your recordings and clips are kept.";
             color: Theme.text-muted;
             font-size: Theme.font-m;
             wrap: word-wrap;

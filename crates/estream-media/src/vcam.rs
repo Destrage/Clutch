@@ -120,7 +120,7 @@ impl Feed {
         };
         #[cfg(not(windows))]
         if create_camera {
-            *lock(&self.state) = VcamState::Failed("needs Windows 11".into());
+            *lock(&self.state) = VcamState::Failed(estream_vcam::control::UNSUPPORTED.into());
             return;
         }
         *lock(&self.state) = VcamState::On;

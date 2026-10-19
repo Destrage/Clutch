@@ -52,6 +52,7 @@ pub enum Notice {
         at: Instant,
     },
     /// The clip hotkey is taken by another program.
+    #[cfg_attr(not(windows), allow(dead_code))]
     HotkeyConflict(String),
     /// A clip's thumbnail is ready (the library entry has it now).
     Thumbnail,
@@ -776,18 +777,6 @@ pub fn play_saved_sound() {
     }
 }
 
-/// Opens a clip in the system's video player.
-pub fn open_in_player(path: &Path) -> std::io::Result<()> {
-    if cfg!(windows) {
-        std::process::Command::new("explorer").arg(path).spawn()?;
-    } else if cfg!(target_os = "macos") {
-        std::process::Command::new("open").arg(path).spawn()?;
-    } else {
-        std::process::Command::new("xdg-open").arg(path).spawn()?;
-    }
-    Ok(())
-}
-
 // ------------------------------------------------------------------ the Clips view
 
 /// A background job's progress (0..=1000 = 0..1) and cancel flag.
@@ -1120,70 +1109,4 @@ pub fn format_when(at: chrono::DateTime<chrono::Utc>) -> String {
     } else {
         format!("{} {time}", local.format("%-d %b %Y"))
     }
-}
-
-/// Puts `path` on the clipboard as a file, so it pastes into Explorer, Discord and chats.
-#[cfg(windows)]
-pub fn copy_file_to_clipboard(path: &Path) -> Result<(), String> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows::Win32::Foundation::{HANDLE, HGLOBAL};
-    use windows::Win32::System::DataExchange::{
-        CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
-    };
-    use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
-    use windows::Win32::System::Ole::CF_HDROP;
-    use windows::Win32::UI::Shell::DROPFILES;
-
-    // DROPFILES, then the path as UTF-16, then two NULs (the end of a one-file list).
-    let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0, 0]).collect();
-    let header = size_of::<DROPFILES>();
-    let bytes = header + wide.len() * 2;
-    // SAFETY: the clipboard is opened and closed here. The global block is sized for the
-    // header plus the path and written while locked; the clipboard owns it once
-    // SetClipboardData succeeds.
-    unsafe {
-        OpenClipboard(None).map_err(|e| e.to_string())?;
-        let result = (|| -> Result<(), String> {
-            EmptyClipboard().map_err(|e| e.to_string())?;
-            let mem: HGLOBAL = GlobalAlloc(GMEM_MOVEABLE, bytes).map_err(|e| e.to_string())?;
-            let ptr = GlobalLock(mem).cast::<u8>();
-            if ptr.is_null() {
-                return Err("couldn't lock clipboard memory".into());
-            }
-            let drop = DROPFILES {
-                pFiles: header as u32,
-                fWide: true.into(),
-                ..Default::default()
-            };
-            std::ptr::copy_nonoverlapping((&raw const drop).cast::<u8>(), ptr, header);
-            std::ptr::copy_nonoverlapping(
-                wide.as_ptr().cast::<u8>(),
-                ptr.add(header),
-                wide.len() * 2,
-            );
-            let _ = GlobalUnlock(mem);
-            SetClipboardData(CF_HDROP.0 as u32, Some(HANDLE(mem.0)))
-                .map(|_| ())
-                .map_err(|e| e.to_string())
-        })();
-        let _ = CloseClipboard();
-        result
-    }
-}
-
-#[cfg(not(windows))]
-pub fn copy_file_to_clipboard(_path: &Path) -> Result<(), String> {
-    Err("copying files isn't supported on this system yet".into())
-}
-
-/// Opens the file manager with `path` selected.
-pub fn reveal(path: &Path) -> std::io::Result<()> {
-    if cfg!(windows) {
-        std::process::Command::new("explorer")
-            .arg(format!("/select,{}", path.display()))
-            .spawn()?;
-    } else {
-        open_in_player(path.parent().unwrap_or(path))?;
-    }
-    Ok(())
 }

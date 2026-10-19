@@ -3,7 +3,7 @@
 // Bundled fonts (SIL Open Font License; the licences ship in the install's licenses folder).
 import "fonts/Figtree.ttf";
 import "fonts/Jost.ttf";
-import { Theme } from "theme.slint";
+import { Theme, Platform } from "theme.slint";
 import { Icons } from "icons.slint";
 import { CanvasTab, SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SourceType, PropRow, MixerStrip, AudioInspect, SettingsForm, LiveRow, DestinationRow, VideoFilterRow, MediaInspect, AutomationForm, MacroRow, TriggerRow, StepRow, ClipsForm, ClipRow, MontageForm, StatsForm, StatTile, StatRow, AlertRow } from "types.slint";
 import { VSplitter, HSplitter, TooltipLayer, Hint } from "widgets.slint";
@@ -20,7 +20,7 @@ import { SceneStrip } from "stage.slint";
 import { ChatPanel, ChatTabRow, SignInDialog } from "chat.slint";
 import { GoLiveDialog } from "golive.slint";
 
-export { Theme }
+export { Theme, Platform }
 
 export component AppWindow inherits Window {
     in property <string> window-title: "Clutch";
