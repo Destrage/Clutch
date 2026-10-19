@@ -1599,6 +1599,7 @@ name = "estream"
 version = "0.3.3"
 dependencies = [
  "anyhow",
+ "base64",
  "chrono",
  "crossbeam-channel",
  "dirs",
@@ -1617,9 +1618,11 @@ dependencies = [
  "fastrand",
  "getrandom 0.3.4",
  "glam",
+ "percent-encoding",
  "rfd",
  "serde",
  "serde_json",
+ "sha2",
  "slint",
  "slint-build",
  "tracing",

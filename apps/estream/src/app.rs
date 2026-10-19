@@ -151,6 +151,10 @@ pub struct App {
     /// A Twitch sign-in in progress, and the code whose page was opened.
     twitch_connect: Option<(crate::twitch::Connecting, String)>,
     /// The sign-in page shown in a dialog, and the dialog's page area size.
+    /// The connected YouTube channel, shared with the viewer counts.
+    youtube: crate::youtube::Session,
+    /// A YouTube sign-in in progress (in the browser).
+    youtube_connect: Option<crate::youtube::Connecting>,
     signin: Option<crate::chat::WebDialog>,
     signin_size: (f32, f32),
     /// Settings → Clips: the game whose auto-clip rules are shown.
@@ -468,6 +472,7 @@ impl App {
     pub fn new(window: &AppWindow, paths: Paths, settings: Settings, gpu: GpuContext) -> Shared {
         let clipper = crate::clips::Clipper::new(&settings.clips, &settings.recording);
         let twitch = crate::twitch::Session::new(settings.twitch.clone());
+        let youtube = crate::youtube::Session::new(settings.youtube.clone());
         let app = App {
             window: window.as_weak(),
             collection: paths.default_collection(),
@@ -537,8 +542,13 @@ impl App {
             chat_sources: Vec::new(),
             chat_has_frame: false,
             chat_people: None,
-            viewers: crate::viewers::ViewerCounts::start(twitch.clone()),
+            viewers: crate::viewers::ViewerCounts::start(crate::viewers::Accounts {
+                twitch: twitch.clone(),
+                youtube: youtube.clone(),
+            }),
             twitch,
+            youtube,
+            youtube_connect: None,
             twitch_connect: None,
             signin: None,
             signin_size: (0.0, 0.0),
@@ -668,7 +678,20 @@ impl App {
             .destinations
             .iter()
             .filter(|d| d.enabled)
-            .map(|d| (d.name.clone(), d.stream.service, d.channel.clone()))
+            .map(|d| {
+                // YouTube without a live link: the live broadcast of the connected channel.
+                let service = d.stream.service;
+                let channel = match self.viewers.video(&d.name) {
+                    Some(video)
+                        if service == Service::YouTube
+                            && crate::chat::chat_url(service, &d.channel).is_err() =>
+                    {
+                        video
+                    }
+                    _ => d.channel.clone(),
+                };
+                (d.name.clone(), service, channel)
+            })
             .collect();
         if sources == self.chat_sources {
             return;
@@ -894,6 +917,129 @@ impl App {
         self.signin_size = (width, height);
         if let Some(dialog) = &mut self.signin {
             dialog.resized(width, height);
+        }
+    }
+
+    // ---- YouTube account ----
+
+    /// Starts connecting YouTube. Google's sign-in opens in the default browser (Google doesn't
+    /// allow signing in inside apps), which hands the result back to Clutch.
+    fn youtube_connect(&mut self) {
+        match crate::youtube::Connecting::start() {
+            Ok(connecting) => {
+                if let Err(e) = open_url(connecting.url()) {
+                    self.toast(format!("Couldn't open your browser: {e}"), true);
+                }
+                self.youtube_connect = Some(connecting);
+            }
+            Err(e) => self.toast(e, true),
+        }
+        self.refresh_settings_form();
+    }
+
+    fn youtube_disconnect(&mut self) {
+        self.youtube_connect = None;
+        self.youtube.set(None);
+        self.settings.youtube = None;
+        self.settings.save(&self.paths.settings());
+        self.refresh_settings_form();
+    }
+
+    /// Follows a sign-in in progress, and saves tokens the viewer counts renewed.
+    fn tick_youtube(&mut self) {
+        use crate::youtube::Connect;
+        if let Some(account) = self.youtube.take_change() {
+            if account.is_none() {
+                self.toast(
+                    "Your YouTube sign-in expired. Connect again in Settings → Stream.".into(),
+                    true,
+                );
+            }
+            self.settings.youtube = account;
+            self.settings.save(&self.paths.settings());
+            self.refresh_settings_form();
+        }
+        let Some(connecting) = &self.youtube_connect else {
+            return;
+        };
+        match connecting.state() {
+            Connect::Waiting => {}
+            Connect::Done(account) => {
+                self.youtube_connect = None;
+                self.toast(format!("Connected to YouTube as {}", account.channel), false);
+                self.youtube.set(Some(account.clone()));
+                self.settings.youtube = Some(account);
+                self.settings.save(&self.paths.settings());
+                self.viewers.refresh();
+                self.refresh_settings_form();
+            }
+            Connect::Failed(e) => {
+                self.youtube_connect = None;
+                self.toast(e, true);
+                self.refresh_settings_form();
+            }
+        }
+    }
+
+    // ---- Connected accounts (Settings → Stream) ----
+
+    fn selected_service(&self) -> Option<Service> {
+        self.dest_selected
+            .and_then(|i| self.settings.destinations.get(i))
+            .map(|d| d.stream.service)
+    }
+
+    /// The selected destination's account row: `(kind, connected name, connecting, code)`.
+    fn account_fields(&self) -> (&'static str, String, bool, String) {
+        match self.selected_service() {
+            Some(Service::Twitch) => (
+                "twitch",
+                self.settings
+                    .twitch
+                    .as_ref()
+                    .map(|a| a.login.clone())
+                    .unwrap_or_default(),
+                self.twitch_connect.is_some(),
+                match self.twitch_connect.as_ref().map(|(c, _)| c.state()) {
+                    Some(crate::twitch::Connect::Code { code, .. }) => code,
+                    _ => String::new(),
+                },
+            ),
+            Some(Service::YouTube) => (
+                "youtube",
+                self.settings
+                    .youtube
+                    .as_ref()
+                    .map(|a| a.channel.clone())
+                    .unwrap_or_default(),
+                self.youtube_connect.is_some(),
+                String::new(),
+            ),
+            _ => ("", String::new(), false, String::new()),
+        }
+    }
+
+    /// Connect, disconnect, cancel or reopen the page, for the selected destination's platform.
+    fn account_action(&mut self, action: &str) {
+        match (self.selected_service(), action) {
+            (Some(Service::Twitch), "connect") => self.twitch_connect(),
+            (Some(Service::Twitch), "disconnect") => self.twitch_disconnect(),
+            (Some(Service::Twitch), "cancel") => self.twitch_cancel(),
+            (Some(Service::Twitch), "open") => self.twitch_open(),
+            (Some(Service::YouTube), "connect") => self.youtube_connect(),
+            (Some(Service::YouTube), "disconnect") => self.youtube_disconnect(),
+            (Some(Service::YouTube), "cancel") => {
+                self.youtube_connect = None;
+                self.refresh_settings_form();
+            }
+            (Some(Service::YouTube), "open") => {
+                if let Some(c) = &self.youtube_connect
+                    && let Err(e) = open_url(c.url())
+                {
+                    self.toast(format!("Couldn't open your browser: {e}"), true);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1386,6 +1532,7 @@ impl App {
             self.tick_chat();
         }
         self.tick_twitch();
+        self.tick_youtube();
         if let Some(engine) = &self.engine {
             let image = |frame: estream_engine::CanvasFrame<'_>| {
                 slint::Image::try_from(frame.preview.clone())
@@ -3765,6 +3912,7 @@ impl App {
             .iter()
             .position(|e| e.name == r.encoder)
             .map_or(0, |i| i + 1);
+        let account = self.account_fields();
         let index = |v: usize| v as i32;
         w.set_settings_form(SettingsForm {
             folder: r.folder.to_string_lossy().into_owned().into(),
@@ -3834,20 +3982,10 @@ impl App {
             vcam_canvas: index_of(self.vcam_canvas()),
             vcam_status: self.vcam_status().1.into(),
             vcam_installed: self.vcam_status().0,
-            dest_twitch: self
-                .dest_selected
-                .and_then(|i| self.settings.destinations.get(i))
-                .is_some_and(|d| d.stream.service == Service::Twitch),
-            twitch_account: self
-                .settings
-                .twitch
-                .as_ref()
-                .map_or_else(SharedString::new, |a| a.login.clone().into()),
-            twitch_connecting: self.twitch_connect.is_some(),
-            twitch_code: match self.twitch_connect.as_ref().map(|(c, _)| c.state()) {
-                Some(crate::twitch::Connect::Code { code, .. }) => code.into(),
-                _ => SharedString::new(),
-            },
+            account_kind: account.0.into(),
+            account_name: account.1.into(),
+            account_connecting: account.2,
+            account_code: account.3.into(),
             ..self.clip_settings_form(stream_form(&self.settings.destinations, self.dest_selected))
         });
     }
@@ -4094,12 +4232,8 @@ impl App {
 
     pub fn settings_set(&mut self, field: &str, value: f32) {
         use estream_media::{AudioCodec, Container, Preset, RateControl, VideoCodec, encode};
-        match field {
-            "twitch-connect" => return self.twitch_connect(),
-            "twitch-disconnect" => return self.twitch_disconnect(),
-            "twitch-open" => return self.twitch_open(),
-            "twitch-cancel" => return self.twitch_cancel(),
-            _ => {}
+        if let Some(action) = field.strip_prefix("account-") {
+            return self.account_action(action);
         }
         if (field.starts_with("clip") || field.starts_with("hype"))
             && self.clip_setting(field, value)

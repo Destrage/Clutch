@@ -5,7 +5,9 @@
 mod actions;
 mod app;
 mod chat;
+mod account;
 mod clips;
+mod http;
 mod interact;
 mod montage;
 mod presets;
@@ -13,6 +15,7 @@ mod secret;
 mod settings;
 mod twitch;
 mod viewers;
+mod youtube;
 
 #[allow(clippy::all, clippy::unwrap_used, clippy::expect_used)]
 pub mod ui {

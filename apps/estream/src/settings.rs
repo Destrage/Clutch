@@ -149,6 +149,8 @@ pub struct Settings {
     pub clips: ClipSettings,
     /// The connected Twitch account (viewer count, who's in chat).
     pub twitch: Option<crate::twitch::TwitchAccount>,
+    /// The connected YouTube channel (its live chat and viewer count).
+    pub youtube: Option<crate::youtube::YouTubeAccount>,
     /// Single-stream settings from before multistream; read once, migrated, never written.
     #[serde(rename = "stream", skip_serializing)]
     legacy_stream: Option<estream_media::StreamSettings>,
@@ -419,6 +421,7 @@ impl Default for Settings {
             vcam_canvas: None,
             clips: ClipSettings::default(),
             twitch: None,
+            youtube: None,
             legacy_stream: None,
             legacy_key: None,
         }
@@ -446,6 +449,9 @@ impl Settings {
         settings.remote.password = crate::secret::unprotect(&settings.remote.password_protected);
         if let Some(t) = &mut settings.twitch {
             t.unprotect();
+        }
+        if let Some(y) = &mut settings.youtube {
+            y.unprotect();
         }
         settings
     }

@@ -32,10 +32,13 @@ anyhow.workspace = true
 rfd.workspace = true
 dirs.workspace = true
 fastrand.workspace = true
+base64 = "0.23"
 getrandom = "0.3"
 glam.workspace = true
+percent-encoding = "2.3"
 serde.workspace = true
 serde_json.workspace = true
+sha2 = "0.11"
 ureq = { version = "3.4", features = ["json"] }
 slint.workspace = true
 tracing.workspace = true

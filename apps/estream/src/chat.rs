@@ -20,7 +20,9 @@ pub fn chat_url(service: Service, channel: &str) -> Result<String, &'static str>
         }
         Service::YouTube => {
             let id = youtube_video_id(channel)
-                .ok_or("Paste your YouTube live link in Settings → Stream")?;
+                .ok_or(
+                    "Connect YouTube in Settings → Stream and your live chat opens here when you go live, or paste your live link there",
+                )?;
             Ok(format!(
                 "https://www.youtube.com/live_chat?is_popout=1&v={id}"
             ))

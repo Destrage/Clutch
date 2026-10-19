@@ -1,7 +1,9 @@
+
 //! Viewer counts while live, polled in the background.
 //!
 //! Kick: the public channel page's data (no sign-in). Twitch: the official API through the
-//! connected account, which also lists who is in chat. YouTube reports nothing yet.
+//! connected account, which also lists who is in chat. YouTube: the connected channel's live
+//! broadcast, which also gives its chat.
 
 use estream_media::Service;
 use std::collections::HashMap;
@@ -18,28 +20,41 @@ pub type Target = (String, Service, String);
 /// Who is in a chat: `(total, names)`.
 pub type Chatters = (u64, Vec<String>);
 
+/// The connected accounts the counts are fetched with.
+#[derive(Clone)]
+pub struct Accounts {
+    pub twitch: crate::twitch::Session,
+    pub youtube: crate::youtube::Session,
+}
+
+/// What the last fetch found, by destination name.
+#[derive(Default)]
+struct Found {
+    counts: HashMap<String, u64>,
+    chatters: HashMap<String, Chatters>,
+    /// The live video of YouTube destinations (for the chat tab).
+    videos: HashMap<String, String>,
+}
+
 pub struct ViewerCounts {
     targets: Arc<Mutex<Vec<Target>>>,
-    counts: Arc<Mutex<HashMap<String, u64>>>,
-    chatters: Arc<Mutex<HashMap<String, Chatters>>>,
+    found: Arc<Mutex<Found>>,
     /// Fetch now rather than at the next 30 s mark.
     wake: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
 }
 
 impl ViewerCounts {
-    pub fn start(twitch: crate::twitch::Session) -> Self {
+    pub fn start(accounts: Accounts) -> Self {
         let counter = Self {
             targets: Arc::new(Mutex::new(Vec::new())),
-            counts: Arc::new(Mutex::new(HashMap::new())),
-            chatters: Arc::new(Mutex::new(HashMap::new())),
+            found: Arc::new(Mutex::new(Found::default())),
             wake: Arc::new(AtomicBool::new(false)),
             stop: Arc::new(AtomicBool::new(false)),
         };
-        let (targets, counts, chatters, wake, stop) = (
+        let (targets, found, wake, stop) = (
             counter.targets.clone(),
-            counter.counts.clone(),
-            counter.chatters.clone(),
+            counter.found.clone(),
             counter.wake.clone(),
             counter.stop.clone(),
         );
@@ -55,22 +70,9 @@ impl ViewerCounts {
                         .is_none_or(|(t, at)| *t != now || at.elapsed() >= EVERY)
                         || wake.swap(false, Ordering::AcqRel);
                     if due {
-                        let (mut fresh, mut in_chat) = (HashMap::new(), HashMap::new());
-                        for (name, service, channel) in &now {
-                            if let Some(n) = fetch(&twitch, *service, channel) {
-                                fresh.insert(name.clone(), n);
-                            }
-                            if *service == Service::Twitch
-                                && let Some(list) = twitch.chatters(channel)
-                            {
-                                in_chat.insert(name.clone(), list);
-                            }
-                        }
-                        if let Ok(mut c) = counts.lock() {
-                            *c = fresh;
-                        }
-                        if let Ok(mut c) = chatters.lock() {
-                            *c = in_chat;
+                        let fresh = fetch_all(&accounts, &now);
+                        if let Ok(mut f) = found.lock() {
+                            *f = fresh;
                         }
                         last = Some((now, Instant::now()));
                     }
@@ -85,13 +87,10 @@ impl ViewerCounts {
         if let Ok(mut t) = self.targets.lock()
             && *t != targets
         {
-            if targets.is_empty() {
-                if let Ok(mut c) = self.counts.lock() {
-                    c.clear();
-                }
-                if let Ok(mut c) = self.chatters.lock() {
-                    c.clear();
-                }
+            if targets.is_empty()
+                && let Ok(mut f) = self.found.lock()
+            {
+                *f = Found::default();
             }
             *t = targets;
         }
@@ -104,12 +103,17 @@ impl ViewerCounts {
 
     /// The latest count for a destination, if its platform reports one.
     pub fn get(&self, name: &str) -> Option<u64> {
-        self.counts.lock().ok()?.get(name).copied()
+        self.found.lock().ok()?.counts.get(name).copied()
     }
 
     /// Who is in a destination's chat, if its platform lists them.
     pub fn chatters(&self, name: &str) -> Option<Chatters> {
-        self.chatters.lock().ok()?.get(name).cloned()
+        self.found.lock().ok()?.chatters.get(name).cloned()
+    }
+
+    /// The live video of a YouTube destination, found through the connected channel.
+    pub fn video(&self, name: &str) -> Option<String> {
+        self.found.lock().ok()?.videos.get(name).cloned()
     }
 }
 
@@ -119,12 +123,35 @@ impl Drop for ViewerCounts {
     }
 }
 
-fn fetch(twitch: &crate::twitch::Session, service: Service, channel: &str) -> Option<u64> {
-    match service {
-        Service::Kick => kick(channel),
-        Service::Twitch => twitch.viewers(channel),
-        _ => None,
+fn fetch_all(accounts: &Accounts, targets: &[Target]) -> Found {
+    let mut found = Found::default();
+    for (name, service, channel) in targets {
+        match service {
+            Service::Kick => {
+                if let Some(n) = kick(channel) {
+                    found.counts.insert(name.clone(), n);
+                }
+            }
+            Service::Twitch => {
+                if let Some(n) = accounts.twitch.viewers(channel) {
+                    found.counts.insert(name.clone(), n);
+                }
+                if let Some(list) = accounts.twitch.chatters(channel) {
+                    found.chatters.insert(name.clone(), list);
+                }
+            }
+            Service::YouTube => {
+                if let Some(live) = accounts.youtube.live() {
+                    if let Some(n) = live.viewers {
+                        found.counts.insert(name.clone(), n);
+                    }
+                    found.videos.insert(name.clone(), live.video_id);
+                }
+            }
+            _ => {}
+        }
     }
+    found
 }
 
 /// Kick's current viewer count for a channel (`None` when offline or unreachable).

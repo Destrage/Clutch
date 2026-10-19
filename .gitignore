@@ -3,3 +3,4 @@
 *.pdb
 /tests/output/
 /third_party/
+/.secrets/

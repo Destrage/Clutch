@@ -263,13 +263,13 @@ export struct SettingsForm {
     dest-name: string,
     /// The channel (or live link) the chat tab opens.
     dest-channel: string,
-    /// The selected destination streams to Twitch (its account can be connected).
-    dest-twitch: bool,
-    /// The connected Twitch login ("" when not connected).
-    twitch-account: string,
-    twitch-connecting: bool,
-    /// The code to enter on Twitch while connecting ("" until it arrives).
-    twitch-code: string,
+    /// The selected destination's platform account: "twitch", "youtube" or "" (none to connect).
+    account-kind: string,
+    /// The connected account's name ("" when not connected).
+    account-name: string,
+    account-connecting: bool,
+    /// A code to enter on the platform while connecting ("" for none).
+    account-code: string,
     stream-services: [string],
     stream-service: int,
     stream-server: string,

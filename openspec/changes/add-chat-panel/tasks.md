@@ -15,7 +15,7 @@
 ## 4. Connected accounts
 - [x] 4.1 Twitch: device code sign-in, viewer count, chatters ("Active in chat")
 - [ ] 4.2 YouTube: OAuth sign-in, live chat lookup, viewer count, message box
-- [ ] 4.3 Settings → Stream: Connect / Disconnect per destination; encrypted tokens
+- [x] 4.3 Settings → Stream: Connect / Disconnect per destination; encrypted tokens
 
 ## 5. Check
 - [ ] 5.1 Tests, clippy; in-app check while live on each platform

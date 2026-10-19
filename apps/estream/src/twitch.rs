@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use crate::http::{agent, get_bearer, post_form, text};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -41,36 +42,6 @@ impl TwitchAccount {
         self.access = crate::secret::unprotect(&self.access_protected);
         self.refresh = crate::secret::unprotect(&self.refresh_protected);
     }
-}
-
-fn agent() -> ureq::Agent {
-    ureq::Agent::config_builder()
-        .http_status_as_error(false)
-        .timeout_global(Some(Duration::from_secs(15)))
-        .user_agent(concat!("Clutch/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .into()
-}
-
-/// POSTs a form to Twitch's sign-in service: `(status, body)`.
-fn post_form(url: &str, form: &[(&str, &str)]) -> Result<(u16, Value), String> {
-    let mut response = agent()
-        .post(url)
-        .send_form(form.iter().copied())
-        .map_err(|e| e.to_string())?;
-    let status = response.status().as_u16();
-    let body = response
-        .body_mut()
-        .read_json::<Value>()
-        .unwrap_or(Value::Null);
-    Ok((status, body))
-}
-
-fn text(body: &Value, key: &str) -> String {
-    body.get(key)
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned()
 }
 
 /// Who a token belongs to: `(login, user_id)`.
@@ -211,54 +182,24 @@ fn message(body: &Value) -> String {
 // ---- Using the account ----
 
 /// The account shared by the UI and the background fetches, which renew its token.
-#[derive(Clone, Default)]
-pub struct Session(Arc<Inner>);
-
-#[derive(Default)]
-struct Inner {
-    account: Mutex<Option<TwitchAccount>>,
-    /// Set when a renewal changed the account (or signed it out).
-    changed: AtomicBool,
-}
+pub type Session = crate::account::Session<TwitchAccount>;
 
 impl Session {
-    pub fn new(account: Option<TwitchAccount>) -> Self {
-        let session = Self::default();
-        session.set(account);
-        session
-    }
-
-    pub fn set(&self, account: Option<TwitchAccount>) {
-        if let Ok(mut a) = self.0.account.lock() {
-            *a = account;
-        }
-    }
-
-    pub fn account(&self) -> Option<TwitchAccount> {
-        self.0.account.lock().ok()?.clone()
-    }
-
-    /// The account after a background renewal (`Some(None)`: the sign-in expired), once.
-    pub fn take_change(&self) -> Option<Option<TwitchAccount>> {
-        self.0
-            .changed
-            .swap(false, Ordering::AcqRel)
-            .then(|| self.account())
-    }
-
     /// GETs a Helix API path, renewing the token once if it has expired.
     fn helix(&self, path: &str) -> Option<Value> {
         let account = self.account()?;
-        let mut response = helix_get(path, &account.access)?;
-        if response.status().as_u16() == 401 {
+        let url = format!("https://api.twitch.tv/helix/{path}");
+        let headers = [("Client-Id", CLIENT_ID)];
+        let (mut status, mut body) = get_bearer(&url, &account.access, &headers)?;
+        if status == 401 {
             let renewed = self.renew(&account)?;
-            response = helix_get(path, &renewed.access)?;
+            (status, body) = get_bearer(&url, &renewed.access, &headers)?;
         }
-        if response.status().as_u16() != 200 {
-            tracing::debug!(status = response.status().as_u16(), path, "Twitch API");
+        if status != 200 {
+            tracing::debug!(status, path, "Twitch API");
             return None;
         }
-        response.body_mut().read_json().ok()
+        Some(body)
     }
 
     fn renew(&self, old: &TwitchAccount) -> Option<TwitchAccount> {
@@ -271,11 +212,6 @@ impl Session {
             ],
         )
         .ok()?;
-        let mut current = self.0.account.lock().ok()?;
-        // Disconnected or reconnected meanwhile: leave it alone.
-        if current.as_ref() != Some(old) {
-            return current.clone();
-        }
         let renewed = if status == 200 {
             let mut account = old.clone();
             account.set_tokens(&text(&body, "access_token"), &text(&body, "refresh_token"));
@@ -284,9 +220,7 @@ impl Session {
             tracing::warn!(status, "Twitch sign-in could not be renewed");
             None
         };
-        *current = renewed.clone();
-        self.0.changed.store(true, Ordering::Release);
-        renewed
+        self.renewed(old, renewed)
     }
 
     /// The live viewer count for a channel (`None` when offline, unknown or not connected).
@@ -318,16 +252,6 @@ impl Session {
             .filter(|l| !l.is_empty())
             .map(|l| l.to_ascii_lowercase())
     }
-}
-
-fn helix_get(path: &str, access: &str) -> Option<ureq::http::Response<ureq::Body>> {
-    agent()
-        .get(&format!("https://api.twitch.tv/helix/{path}"))
-        .header("Client-Id", CLIENT_ID)
-        .header("Authorization", &format!("Bearer {access}"))
-        .call()
-        .map_err(|e| tracing::debug!(error = %e, "Twitch API"))
-        .ok()
 }
 
 fn stream_viewers(body: &Value) -> Option<u64> {
