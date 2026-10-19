@@ -283,7 +283,7 @@ pub fn send_key(page: &PanelPage, text: &str, down: bool, ctrl: bool, shift: boo
     if alt {
         flags |= mods::ALT;
     }
-    let (code, ch) = key_code(text);
+    let (code, ch) = key_code(text, ctrl);
     if code != 0 {
         page.key(
             if down { "down" } else { "up" },
@@ -304,7 +304,7 @@ pub fn send_key(page: &PanelPage, text: &str, down: bool, ctrl: bool, shift: boo
 }
 
 /// The Windows virtual-key code and the character for a key as Slint reports it.
-fn key_code(text: &str) -> (i32, Option<u32>) {
+fn key_code(text: &str, ctrl: bool) -> (i32, Option<u32>) {
     use slint::platform::Key as K;
     let is = |k: K| text == slint::SharedString::from(k).as_str();
     let special = [
@@ -321,6 +321,16 @@ fn key_code(text: &str) -> (i32, Option<u32>) {
         (K::End, 0x23, None),
         (K::PageUp, 0x21, None),
         (K::PageDown, 0x22, None),
+        // Modifier keys arrive as control characters too (Shift is U+0010); they type nothing.
+        (K::Shift, 0x10, None),
+        (K::ShiftR, 0x10, None),
+        (K::Control, 0x11, None),
+        (K::ControlR, 0x11, None),
+        (K::Alt, 0x12, None),
+        (K::AltGr, 0x12, None),
+        (K::CapsLock, 0x14, None),
+        (K::Meta, 0x5b, None),
+        (K::MetaR, 0x5c, None),
     ];
     for (key, code, ch) in special {
         if is(key) {
@@ -335,10 +345,11 @@ fn key_code(text: &str) -> (i32, Option<u32>) {
         return (0, None);
     }
     // Ctrl+letter may arrive as an ASCII control character.
-    let c = if (c as u32) >= 1 && (c as u32) <= 26 {
-        char::from(b'a' + (c as u8) - 1)
-    } else {
-        c
+    let c = match c as u32 {
+        n @ 1..=26 if ctrl => char::from(b'a' + n as u8 - 1),
+        // Other control and private-use characters (function keys, …) type nothing.
+        0..=0x1f | 0xf700..=0xf8ff => return (0, None),
+        _ => c,
     };
     let code = match c {
         'a'..='z' | 'A'..='Z' => c.to_ascii_uppercase() as i32,
@@ -382,12 +393,15 @@ mod tests {
 
     #[test]
     fn keys_map_to_windows_codes() {
-        assert_eq!(key_code("a"), (0x41, Some('a' as u32)));
-        assert_eq!(key_code("\u{1}"), (0x41, Some('a' as u32))); // Ctrl+A
-        assert_eq!(key_code("!"), (0, Some('!' as u32)));
-        assert_eq!(
-            key_code(slint::SharedString::from(slint::platform::Key::Backspace).as_str()),
-            (0x08, None)
-        );
+        use slint::platform::Key;
+        let key = |k: Key| slint::SharedString::from(k);
+        assert_eq!(key_code("a", false), (0x41, Some('a' as u32)));
+        assert_eq!(key_code("\u{1}", true), (0x41, Some('a' as u32))); // Ctrl+A
+        assert_eq!(key_code("!", false), (0, Some('!' as u32)));
+        assert_eq!(key_code(&key(Key::Backspace), false), (0x08, None));
+        // Shift and the Windows key are modifiers, not Ctrl+P / Ctrl+W.
+        assert_eq!(key_code(&key(Key::Shift), false), (0x10, None));
+        assert_eq!(key_code(&key(Key::Meta), false), (0x5b, None));
+        assert_eq!(key_code(&key(Key::F1), false), (0, None));
     }
 }
