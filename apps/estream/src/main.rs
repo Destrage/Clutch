@@ -163,6 +163,11 @@ fn main() -> anyhow::Result<()> {
         .select()?;
 
     let window = ui::AppWindow::new()?;
+    // Ties the window to the desktop entry (icon, taskbar grouping) on Wayland and X11.
+    #[cfg(target_os = "linux")]
+    if let Err(e) = slint::set_xdg_app_id(APP_ID) {
+        tracing::warn!(error = %e, "couldn't set the app id");
+    }
     if let Some(state) = settings.window {
         window.window().set_size(slint::PhysicalSize::new(
             state.width.max(800),

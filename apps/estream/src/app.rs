@@ -3198,7 +3198,10 @@ impl App {
                 }
             }
             Notice::HotkeyConflict(key) => self.toast(
-                format!("Another program already uses {key}; pick another clip hotkey in Settings"),
+                format!(
+                    "{} (Settings → Clips)",
+                    estream_automation::hotkeys::unavailable_message(&key)
+                ),
                 true,
             ),
             Notice::Event { game, kind, at } => {

@@ -105,14 +105,22 @@ and unlinked by the creator on drop.
 ### AppImage
 `cargo xtask package` on Linux:
 1. `cargo build --release` for `clutch` and `clutch-browser`.
-2. Stage an AppDir: `usr/bin/clutch`, `usr/bin/clutch-browser`, the CEF files next to it,
-   `clutch.desktop`, the icon (from `xtask/src/icon.rs`) and an `AppRun`.
-3. Run `linuxdeploy` (downloaded into `target/xtask-tools` like WiX on Windows) to copy the
-   FFmpeg libraries and other non-system dependencies into `usr/lib` and fix their rpaths.
-   glibc, the GPU driver (Vulkan/GL), PipeWire, D-Bus and the portals come from the system and
-   are excluded, as the AppImage guidelines require.
-4. Produce `target/package/Clutch-<version>-x86_64.AppImage` with `appimagetool`.
-The AppImage is built on the oldest supported Ubuntu (22.04 in CI) so its glibc floor is low.
+2. Stage an AppDir: `usr/bin` holds `clutch`, `clutch-browser`, the CEF files and the FFmpeg
+   libraries side by side (stripped: CEF ships with ~1.2 GB of symbols), plus the desktop entry
+   `io.github.destrage.Clutch.desktop`, the icon (from `xtask/src/icon.rs`), AppStream metainfo
+   and an `AppRun` script.
+3. Produce `target/package/Clutch-<version>-x86_64.AppImage` with `appimagetool` (pinned,
+   downloaded into `third_party/appimage` like WiX on Windows; run extract-and-run, so building
+   needs no FUSE).
+
+`linuxdeploy` isn't needed: the binaries find FFmpeg and CEF through their `$ORIGIN` RPATH,
+and what they need beyond that comes from the system, as the AppImage guidelines require:
+glibc, the GPU driver (Vulkan/GL), PipeWire, ALSA, fontconfig, D-Bus, the portals, and the
+libraries Chromium uses (NSS, ATK, GBM, cups, X11), which every desktop that runs Chrome has.
+CEF runs without its setuid sandbox (`chrome-sandbox` can't work from an AppImage); the helper is
+isolated as a separate process. The window reports the same app id (`slint::set_xdg_app_id`),
+so the desktop shows the right icon. The AppImage is built on the oldest supported Ubuntu
+(22.04 in CI) so its glibc floor is low.
 
 ## Risks / Trade-offs
 - **Desktop diversity.** Portal support differs across desktops. Mitigation: feature checks at

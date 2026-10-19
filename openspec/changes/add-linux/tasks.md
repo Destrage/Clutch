@@ -32,8 +32,10 @@
 - [x] 5.2 `clutch-browser` (CEF) builds and runs on Linux
 
 ## 6. AppImage
-- [ ] 6.1 xtask: AppDir staging (binaries, CEF, desktop entry, icon, AppRun)
-- [ ] 6.2 xtask: LGPL FFmpeg fetch, `linuxdeploy` + `appimagetool` download, AppImage output
+- [x] 6.1 xtask: AppDir staging (binaries, CEF, desktop entry, icon, AppRun)
+- [x] 6.2 xtask: `appimagetool` download, AppImage output (FFmpeg and CEF found through
+      `$ORIGIN`, so no `linuxdeploy`; the LGPL FFmpeg comes from `third_party/ffmpeg` as for
+      every build)
 - [ ] 6.3 CI: build the AppImage on ubuntu-22.04 and upload it as an artifact
 - [ ] 6.4 README: Linux install (AppImage), build from source (apt/dnf/pacman packages), runtime
       requirements (PipeWire, portals, v4l2loopback)

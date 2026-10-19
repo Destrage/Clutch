@@ -1,5 +1,7 @@
-//! Developer tasks: `cargo xtask icon` and `cargo xtask package` (the Windows installer).
+//! Developer tasks: `cargo xtask icon` and `cargo xtask package` (the Windows installer, or
+//! on Linux the AppImage).
 
+mod appimage;
 mod icon;
 
 use std::fmt::Write as _;
@@ -88,6 +90,14 @@ fn wanted(name: &str) -> bool {
 }
 
 fn package() -> Result<()> {
+    if cfg!(target_os = "linux") {
+        appimage::package()
+    } else {
+        package_msi()
+    }
+}
+
+fn package_msi() -> Result<()> {
     let root = root();
     let release = root.join("target").join(TARGET).join("release");
     let out = root.join("target/installer");

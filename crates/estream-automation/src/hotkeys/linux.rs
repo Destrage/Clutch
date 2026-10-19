@@ -31,6 +31,11 @@ pub fn start() -> Option<Box<dyn GlobalHotkeys>> {
     None
 }
 
+/// Whether hotkeys go through the desktop's shortcut settings (the portal).
+pub fn desktop_managed() -> bool {
+    portal::started()
+}
+
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -60,10 +65,16 @@ mod portal {
         next: AtomicU64,
     }
 
+    static SERVICE: OnceLock<Option<Service>> = OnceLock::new();
+
     /// The process-wide portal session, if this desktop has the portal.
     pub fn service() -> Option<&'static Service> {
-        static SERVICE: OnceLock<Option<Service>> = OnceLock::new();
         SERVICE.get_or_init(Service::start).as_ref()
+    }
+
+    /// Whether the portal session is in use (without starting it).
+    pub fn started() -> bool {
+        SERVICE.get().is_some_and(Option::is_some)
     }
 
     impl Service {

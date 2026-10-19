@@ -35,6 +35,19 @@ pub fn start() -> Option<Box<dyn GlobalHotkeys>> {
     None
 }
 
+/// Why a hotkey couldn't be registered, for the user. Desktops that manage shortcuts
+/// themselves (the GlobalShortcuts portal) may leave one unassigned until the user sets it.
+pub fn unavailable_message(key: &str) -> String {
+    #[cfg(target_os = "linux")]
+    if linux::desktop_managed() {
+        return format!(
+            "{key} isn't set as a global shortcut: assign it to Clutch in your desktop's \
+             shortcut settings, or pick another hotkey"
+        );
+    }
+    format!("Another program already uses {key}; pick another hotkey")
+}
+
 /// How far hotkeys reach on this system, for the settings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Reach {
