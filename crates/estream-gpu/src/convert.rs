@@ -22,9 +22,11 @@ pub fn create_preview_texture(gpu: &GpuContext, width: u32, height: u32) -> wgpu
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: PREVIEW_FORMAT,
+        // COPY_DST: the studio copies pictures into preview-sized textures (scene thumbnails).
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_SRC,
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST,
         view_formats: &[PREVIEW_VIEW_FORMAT],
     })
 }

@@ -41,7 +41,15 @@ component SceneCard inherits Rectangle {
                 source: root.frame;
                 image-fit: contain;
             }
-            if !root.scene.active: Text {
+            if !root.scene.active && root.scene.thumb.width > 0: Image {
+                x: 2px;
+                y: 2px;
+                width: parent.width - 4px;
+                height: parent.height - 4px;
+                source: root.scene.thumb;
+                image-fit: contain;
+            }
+            if !root.scene.active && root.scene.thumb.width == 0: Text {
                 text: root.scene.items == 1 ? "1 item" : root.scene.items + " items";
                 color: Theme.text-faint;
                 font-size: Theme.font-s;

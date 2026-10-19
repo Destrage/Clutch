@@ -91,6 +91,9 @@ pub struct App {
     studio: bool,
     preview_scene: Option<SceneId>,
     last_preview_sequence: u64,
+    /// The last picture of each scene (a GPU copy, refreshed twice a second).
+    scene_thumbs: HashMap<SceneId, (estream_gpu::wgpu::Texture, slint::Image)>,
+    thumb_at: Instant,
     /// What the shader editor is editing.
     shader_target: ShaderTarget,
     /// Canvas shown and edited in the studio (`None` = the first).
@@ -454,6 +457,8 @@ impl App {
             studio: false,
             preview_scene: None,
             last_preview_sequence: 0,
+            scene_thumbs: HashMap::new(),
+            thumb_at: Instant::now(),
             shader_target: ShaderTarget::Transition,
             current_canvas: None,
             last_output: None,
@@ -1085,13 +1090,24 @@ impl App {
                     .ok()
             };
             let snapshot = engine.snapshot();
-            if let Some(canvas) = self.canvas_of(&snapshot).map(|c| c.id) {
+            if let Some((canvas, on_air)) =
+                self.canvas_of(&snapshot).map(|c| (c.id, c.active_scene))
+            {
+                // Scene cards show the last picture seen of each scene, refreshed twice a second.
+                let snap = self.thumb_at.elapsed() >= Duration::from_millis(500);
+                if snap {
+                    self.thumb_at = Instant::now();
+                }
                 // Program: the main view normally, the Program view in studio mode.
                 if let Some(output) = engine.canvas_output(canvas)
                     && let Some(frame) = output.latest()
                     && frame.sequence != self.last_sequence
                 {
                     self.last_sequence = frame.sequence;
+                    if snap && let Some(scene) = on_air {
+                        changed |=
+                            snap_thumb(&self.gpu, &mut self.scene_thumbs, scene, frame.preview);
+                    }
                     if let Some(img) = image(frame) {
                         if self.studio {
                             w.set_program_frame(img);
@@ -1107,6 +1123,10 @@ impl App {
                     && frame.sequence != self.last_preview_sequence
                 {
                     self.last_preview_sequence = frame.sequence;
+                    if snap && let Some(scene) = self.preview_scene {
+                        changed |=
+                            snap_thumb(&self.gpu, &mut self.scene_thumbs, scene, frame.preview);
+                    }
                     if let Some(img) = image(frame) {
                         w.set_preview_frame(img);
                     }
@@ -1333,6 +1353,9 @@ impl App {
             .map(|s| interact::scene_geometry(s, &size_of))
             .unwrap_or_default();
 
+        // Thumbnails of deleted scenes.
+        self.scene_thumbs
+            .retain(|id, _| snapshot.scene(*id).is_some());
         sync_model(
             &self.scenes_model,
             snapshot
@@ -1343,6 +1366,11 @@ impl App {
                     SceneRow {
                         id: id_str(s.id),
                         name: s.name.clone().into(),
+                        thumb: self
+                            .scene_thumbs
+                            .get(&s.id)
+                            .map(|(_, image)| image.clone())
+                            .unwrap_or_default(),
                         active: Some(s.id) == editing,
                         live: Some(s.id) == canvas.active_scene,
                         items,
@@ -6888,6 +6916,43 @@ fn push_layers(
 }
 
 /// Meter position (0..1) for a linear level on a -60..0 dB scale.
+/// Copies a scene's current picture into its thumbnail texture (made on first use, and again
+/// when the canvas size changes). Returns whether a new thumbnail was made, so the scene cards
+/// need rebuilding; later copies update the texture the card already shows.
+fn snap_thumb(
+    gpu: &GpuContext,
+    thumbs: &mut HashMap<SceneId, (estream_gpu::wgpu::Texture, slint::Image)>,
+    scene: SceneId,
+    picture: &estream_gpu::wgpu::Texture,
+) -> bool {
+    use estream_gpu::wgpu;
+    let size = picture.size();
+    let fresh = thumbs.get(&scene).is_none_or(|(t, _)| t.size() != size);
+    if fresh {
+        // Made like the engine's own preview textures, which the UI already accepts.
+        let texture = estream_gpu::create_preview_texture(gpu, size.width, size.height);
+        let image = match slint::Image::try_from(texture.clone()) {
+            Ok(image) => image,
+            Err(e) => {
+                tracing::warn!(error = %e, "scene thumbnail rejected");
+                return false;
+            }
+        };
+        thumbs.insert(scene, (texture, image));
+    }
+    let Some((texture, _)) = thumbs.get(&scene) else {
+        return false;
+    };
+    let mut encoder = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("scene thumbnail"),
+        });
+    encoder.copy_texture_to_texture(picture.as_image_copy(), texture.as_image_copy(), size);
+    gpu.queue.submit([encoder.finish()]);
+    fresh
+}
+
 /// A short canvas description for the top bar: "1080p60", "1080p30 vertical" or "1440×1080 · 60".
 fn canvas_tag(width: u32, height: u32, fps: &str) -> String {
     if width * 9 == height * 16 {
