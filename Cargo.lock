@@ -1841,6 +1841,7 @@ dependencies = [
 name = "estream-shm"
 version = "0.3.3"
 dependencies = [
+ "libc",
  "windows",
 ]
 

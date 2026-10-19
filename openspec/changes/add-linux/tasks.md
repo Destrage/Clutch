@@ -9,7 +9,7 @@
 - [x] 1.4 Opening files, folders and URLs (`xdg-open`) in one helper used by the app
 
 ## 2. Portable building blocks
-- [ ] 2.1 `estream-shm`: POSIX `shm_open` + `mmap` with the same API; tests run on Linux
+- [x] 2.1 `estream-shm`: POSIX `shm_open` + `mmap` with the same API; tests run on Linux
 - [ ] 2.2 Secrets: `keyring` backend with the `keyring:` prefix; session-only without one
 - [ ] 2.3 `estream-health`: CPU, memory and GPU stats on Linux
 - [ ] 2.4 `estream-clips`: Steam library paths on Linux

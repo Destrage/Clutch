@@ -1,8 +1,10 @@
 //! Shared-memory channels between Clutch and its helper processes (the browser helper):
 //! a seqlocked video frame and a single-writer audio ring, both in named file mappings.
 //!
-//! Layouts are `repr(C)` with fixed field sizes so both processes agree. Only Windows is
-//! implemented (named file mappings); other platforms report an error.
+//! Layouts are `repr(C)` with fixed field sizes so both processes agree. Windows uses named
+//! file mappings, Linux POSIX shared memory (`shm_open` + `mmap`); other platforms report an
+//! error. Names are written the Windows way (`Local\clutch-…`); on Linux the namespace is
+//! dropped and the region lives at `/dev/shm/clutch-…` until its creator drops it.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -33,6 +35,9 @@ pub struct Mapping {
     len: usize,
     #[cfg(windows)]
     handle: windows::Win32::Foundation::HANDLE,
+    /// The POSIX name, set on the creator's side, which removes it on drop.
+    #[cfg(target_os = "linux")]
+    unlink: Option<std::ffi::CString>,
 }
 
 // SAFETY: the mapping is plain memory; synchronization is done with atomics in the layouts.
@@ -138,12 +143,96 @@ impl Mapping {
         })
     }
 
-    #[cfg(not(windows))]
+    /// Creates (or opens an existing) region of `len` bytes. Dropping it removes the name, so
+    /// later `open`s fail; processes that already mapped it keep their view.
+    #[cfg(target_os = "linux")]
+    pub fn create(name: &str, len: usize) -> Result<Self, ShmError> {
+        let path = posix_name(name)?;
+        // SAFETY: valid NUL-terminated name; the descriptor is closed by `map_fd`.
+        let fd = unsafe { libc::shm_open(path.as_ptr(), libc::O_CREAT | libc::O_RDWR, 0o600) };
+        if fd < 0 {
+            return Err(os_error("shm_open"));
+        }
+        // Grow a new (empty) region; never shrink one another process already maps.
+        match fd_len(fd) {
+            Ok(size) if size >= len => {}
+            Ok(_) => {
+                // SAFETY: `fd` is a valid descriptor we opened read-write.
+                if unsafe { libc::ftruncate(fd, len as libc::off_t) } != 0 {
+                    let err = os_error("ftruncate");
+                    // SAFETY: we own `fd`.
+                    unsafe { libc::close(fd) };
+                    return Err(err);
+                }
+            }
+            Err(e) => {
+                // SAFETY: we own `fd`.
+                unsafe { libc::close(fd) };
+                return Err(e);
+            }
+        }
+        Self::map_fd(fd, len, Some(path))
+    }
+
+    /// Opens an existing region created by another process.
+    #[cfg(target_os = "linux")]
+    pub fn open(name: &str, len: usize) -> Result<Self, ShmError> {
+        let path = posix_name(name)?;
+        // SAFETY: valid NUL-terminated name; the descriptor is closed by `map_fd`.
+        let fd = unsafe { libc::shm_open(path.as_ptr(), libc::O_RDWR, 0) };
+        if fd < 0 {
+            return Err(os_error("shm_open"));
+        }
+        Self::map_fd(fd, len, None)
+    }
+
+    /// Maps `len` bytes of `fd` and closes it (the mapping keeps the memory alive).
+    #[cfg(target_os = "linux")]
+    fn map_fd(
+        fd: libc::c_int,
+        len: usize,
+        unlink: Option<std::ffi::CString>,
+    ) -> Result<Self, ShmError> {
+        // Touching pages past the end of the object raises SIGBUS, so check its size first.
+        let mapped = match fd_len(fd) {
+            Ok(size) if size < len => Err(ShmError::TooSmall),
+            Ok(_) => {
+                // SAFETY: maps `len` bytes of a valid, large enough descriptor.
+                let ptr = unsafe {
+                    libc::mmap(
+                        std::ptr::null_mut(),
+                        len,
+                        libc::PROT_READ | libc::PROT_WRITE,
+                        libc::MAP_SHARED,
+                        fd,
+                        0,
+                    )
+                };
+                if ptr == libc::MAP_FAILED {
+                    Err(os_error("mmap"))
+                } else {
+                    Ok(ptr.cast::<u8>())
+                }
+            }
+            Err(e) => Err(e),
+        };
+        // SAFETY: we own `fd`; an established mapping stays valid after it is closed.
+        unsafe { libc::close(fd) };
+        let ptr = mapped.inspect_err(|_| {
+            if let Some(path) = &unlink {
+                // SAFETY: valid NUL-terminated name; we created it and nobody was told it.
+                unsafe { libc::shm_unlink(path.as_ptr()) };
+            }
+        })?;
+        Ok(Self { ptr, len, unlink })
+    }
+
+    #[cfg(not(any(windows, target_os = "linux")))]
     pub fn create(_: &str, _: usize) -> Result<Self, ShmError> {
         Err(ShmError::Unsupported)
     }
 
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "linux")))]
     pub fn open(_: &str, _: usize) -> Result<Self, ShmError> {
         Err(ShmError::Unsupported)
     }
@@ -198,7 +287,57 @@ impl Drop for Mapping {
             });
             let _ = CloseHandle(self.handle);
         }
+        #[cfg(target_os = "linux")]
+        // SAFETY: we own the view; the name is ours to remove when we created it.
+        unsafe {
+            libc::munmap(self.ptr.cast(), self.len);
+            if let Some(path) = &self.unlink {
+                libc::shm_unlink(path.as_ptr());
+            }
+        }
     }
+}
+
+/// `Local\clutch-x` (or `Global\…`, or a bare name) as a POSIX name: `/clutch-x`. Other
+/// characters POSIX names can't hold become `_`.
+#[cfg(target_os = "linux")]
+fn posix_name(name: &str) -> Result<std::ffi::CString, ShmError> {
+    let bare = name
+        .strip_prefix("Local\\")
+        .or_else(|| name.strip_prefix("Global\\"))
+        .unwrap_or(name);
+    let mut path = String::from("/");
+    if !bare.starts_with("clutch-") {
+        path.push_str("clutch-");
+    }
+    path.extend(bare.chars().map(|c| {
+        if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+            c
+        } else {
+            '_'
+        }
+    }));
+    // NAME_MAX for the file under /dev/shm.
+    if path.len() > 255 {
+        return Err(ShmError::Os(format!("name too long: {name}")));
+    }
+    std::ffi::CString::new(path).map_err(|e| ShmError::Os(e.to_string()))
+}
+
+#[cfg(target_os = "linux")]
+fn fd_len(fd: libc::c_int) -> Result<usize, ShmError> {
+    // SAFETY: `stat` is plain data and `fd` is a valid descriptor.
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: as above.
+    if unsafe { libc::fstat(fd, &mut stat) } != 0 {
+        return Err(os_error("fstat"));
+    }
+    Ok(stat.st_size as usize)
+}
+
+#[cfg(target_os = "linux")]
+fn os_error(call: &str) -> ShmError {
+    ShmError::Os(format!("{call}: {}", std::io::Error::last_os_error()))
 }
 
 // ---------------------------------------------------------------- video frame
@@ -369,7 +508,7 @@ impl AudioReader {
     }
 }
 
-#[cfg(all(test, windows))]
+#[cfg(all(test, any(windows, target_os = "linux")))]
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
@@ -430,5 +569,30 @@ mod tests {
         let got = reader.read(&mut l, &mut r);
         assert_eq!(got, 4, "only recent audio (half the ring)");
         assert_eq!(&l[..4], &[16.0, 17.0, 18.0, 19.0]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn posix_names_drop_the_namespace() {
+        let p = |n: &str| posix_name(n).unwrap().into_string().unwrap();
+        assert_eq!(
+            p("Local\\clutch-browser-1-a-video-0"),
+            "/clutch-browser-1-a-video-0"
+        );
+        assert_eq!(p("Global\\estream-vcam-v1"), "/clutch-estream-vcam-v1");
+        assert_eq!(p("a/b c"), "/clutch-a_b_c");
+        assert!(posix_name(&"x".repeat(300)).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn creator_removes_the_name_on_drop() {
+        let n = name("unlink");
+        let writer = FrameWriter::create(&n, 4, 2).unwrap();
+        let mut reader = FrameReader::open(&n, 4, 2).unwrap();
+        drop(writer);
+        assert!(FrameReader::open(&n, 4, 2).is_err(), "name is gone");
+        let mut buf = Vec::new();
+        assert!(!reader.read(&mut buf), "an open reader keeps its view");
     }
 }
