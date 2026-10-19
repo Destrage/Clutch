@@ -46,8 +46,56 @@ fn device_id(d: &cpal::Device) -> Option<String> {
     d.id().ok().map(|id| id.to_string())
 }
 
+/// On PipeWire, cpal also lists virtual "default" entries and apps' playback streams, and
+/// counts sinks as inputs (capturing one records what it plays). Microphones are the
+/// sources; speakers and headphones (for desktop audio and monitoring) are the sinks.
+#[cfg(target_os = "linux")]
+fn pipewire_device(d: &cpal::Device, direction: Direction) -> bool {
+    use cpal::DeviceDirection;
+    let virtual_default = device_id(d).is_some_and(|id| id.ends_with("_default"));
+    let Ok(desc) = d.description() else {
+        return false;
+    };
+    !virtual_default
+        && match direction {
+            Direction::Input => desc.direction() == DeviceDirection::Input,
+            Direction::Output => desc.direction() == DeviceDirection::Duplex,
+        }
+}
+
+#[cfg(target_os = "linux")]
+fn on_pipewire(host: &cpal::Host) -> bool {
+    host.id() == cpal::HostId::PipeWire
+}
+
 pub fn devices(direction: Direction) -> Vec<DeviceInfo> {
     let host = host();
+    #[cfg(target_os = "linux")]
+    if on_pipewire(&host) {
+        let graph = crate::pipewire::snapshot().unwrap_or_default();
+        let default = match direction {
+            Direction::Input => graph.default_source,
+            Direction::Output => graph.default_sink,
+        }
+        .map(|name| format!("pipewire:{name}"));
+        let list = match direction {
+            Direction::Input => host.input_devices().map(|d| d.collect::<Vec<_>>()),
+            Direction::Output => host.output_devices().map(|d| d.collect::<Vec<_>>()),
+        };
+        return list
+            .unwrap_or_default()
+            .iter()
+            .filter(|d| pipewire_device(d, direction))
+            .filter_map(|d| {
+                let id = device_id(d)?;
+                Some(DeviceInfo {
+                    is_default: Some(&id) == default.as_ref(),
+                    name: device_name(d),
+                    id,
+                })
+            })
+            .collect();
+    }
     let default = match direction {
         Direction::Input => host.default_input_device(),
         Direction::Output => host.default_output_device(),
@@ -73,6 +121,15 @@ pub fn devices(direction: Direction) -> Vec<DeviceInfo> {
 /// Finds a device by id; an empty id means the system default.
 fn find(direction: Direction, id: &str) -> Option<cpal::Device> {
     let host = host();
+    #[cfg(target_os = "linux")]
+    if id.is_empty() && direction == Direction::Output && on_pipewire(&host) {
+        // The default sink itself (it follows default changes): unlike cpal's default
+        // output, it can be captured as well as played to.
+        return host
+            .output_devices()
+            .ok()?
+            .find(|d| device_id(d).as_deref() == Some("pipewire:sink_default"));
+    }
     if id.is_empty() {
         return match direction {
             Direction::Input => host.default_input_device(),

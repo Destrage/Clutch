@@ -1,6 +1,8 @@
 //! Linux capture: displays and windows through the ScreenCast portal over PipeWire, cameras
-//! through V4L2.
+//! through V4L2, and per-app audio through PipeWire. (Desktop audio is the engine's
+//! `audio_output` type, which captures a PipeWire sink.)
 
+mod app_audio;
 pub mod camera;
 mod capture;
 mod frames;
@@ -15,4 +17,5 @@ pub fn register(registry: &mut SourceRegistry) {
         registry.register(t);
     }
     registry.register(camera::source_type());
+    registry.register(app_audio::source_type());
 }

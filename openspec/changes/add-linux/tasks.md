@@ -19,8 +19,8 @@
 - [x] 3.1 ScreenCast portal session (display and window) with restore token in source settings
 - [x] 3.2 PipeWire video stream → upload → compositor texture (SHM buffers)
 - [x] 3.3 V4L2 camera source: enumeration, formats, YUYV/MJPEG/NV12 upload
-- [ ] 3.4 PipeWire desktop audio (default sink monitor) and per-app audio
-- [ ] 3.5 Register Linux source types
+- [x] 3.4 PipeWire desktop audio (default sink monitor) and per-app audio
+- [x] 3.5 Register Linux source types
 
 ## 4. Automation
 - [ ] 4.1 `GlobalHotkeys` trait; current Windows listener behind it

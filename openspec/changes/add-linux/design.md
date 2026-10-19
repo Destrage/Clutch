@@ -50,9 +50,16 @@ every start would mark the project unsaved and add an undo step: they live in
 from `SourceContext::source`.
 
 ### Audio
-cpal already covers microphones and output devices (ALSA, which PipeWire serves). Desktop audio
-comes from the PipeWire monitor of the default sink; per-app audio links to the app's output
-node. Both feed the existing `StereoConsumer` ring buffers, so the mixer is unchanged.
+cpal's PipeWire host (its `pipewire` feature, Linux only) covers microphones and desktop audio:
+opening an input stream on a sink captures what it plays, as WASAPI loopback does, so the
+existing `audio_output` type works unchanged. Its device lists are filtered to sources
+(microphones) and sinks (speakers, headphones), leaving out cpal's virtual "default" entries and
+apps' playback streams; the real defaults come from PipeWire's `default` metadata, and default
+desktop audio uses the default sink itself (it follows default changes). Per-app audio opens a
+capture stream on each playback stream of the chosen app (`target.object`, not reconnecting
+when the app's stream ends) and mixes them on the audio thread. Apps are matched by
+`application.process.binary`, ignoring case and `.exe`, so Windows projects carry over. Both
+feed the existing `StereoConsumer` ring buffers, so the mixer is unchanged.
 
 ### Hotkeys and focus
 A small `GlobalHotkeys` trait in `estream-automation`, with the current Windows `RegisterHotKey`

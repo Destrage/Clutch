@@ -11,6 +11,8 @@ pub mod devices;
 pub mod filters;
 pub mod meter;
 pub mod mixer;
+#[cfg(target_os = "linux")]
+pub mod pipewire;
 pub mod ring;
 pub mod source;
 pub mod tone;
