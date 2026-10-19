@@ -4,6 +4,9 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// Clutch's ice-blue accent.
+pub const DEFAULT_ACCENT: &str = "#8ec5ff";
+
 /// Locations of Clutch's files.
 #[derive(Clone, Debug)]
 pub struct Paths {
@@ -400,7 +403,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             theme: ThemeMode::Dark,
-            accent: "#6c8cff".into(),
+            accent: DEFAULT_ACCENT.into(),
             window: None,
             layout: PanelLayout::default(),
             snapping: true,
@@ -427,6 +430,10 @@ impl Settings {
             Err(_) => Self::default(),
         };
         settings.migrate();
+        // The accent before the Clutch look; anyone who kept it gets the new default.
+        if settings.accent.eq_ignore_ascii_case("#6c8cff") {
+            settings.accent = DEFAULT_ACCENT.into();
+        }
         for d in &mut settings.destinations {
             d.stream.key = crate::secret::unprotect(&d.key_protected);
         }

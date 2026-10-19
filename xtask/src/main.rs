@@ -138,6 +138,12 @@ fn package() -> Result<()> {
         &root.join("third_party/ffmpeg/LICENSE.txt"),
         &notices.join("FFmpeg-LGPL.txt"),
     )?;
+    for font in ["Jost", "Figtree"] {
+        copy(
+            &root.join(format!("apps/estream/ui/fonts/{font}-OFL.txt")),
+            &notices.join(format!("{font}-OFL.txt")),
+        )?;
+    }
     copy(
         &release.join("CREDITS.html"),
         &notices.join("Chromium-CEF-credits.html"),

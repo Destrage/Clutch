@@ -2,34 +2,35 @@
 
 export global Theme {
     in-out property <bool> dark: true;
-    in-out property <color> accent: #6c8cff;
+    in-out property <color> accent: #8ec5ff;
 
     // Surfaces, from the window background up to raised controls.
-    out property <color> bg: dark ? #0e1014 : #eef0f4;
-    out property <color> surface: dark ? #15181e : #ffffff;
-    out property <color> surface-2: dark ? #1b1f27 : #f5f6f8;
-    out property <color> surface-3: dark ? #232833 : #e8ebf0;
-    out property <color> border: dark ? #262b35 : #dce0e7;
-    out property <color> border-strong: dark ? #353b48 : #c7cdd7;
-    out property <color> canvas-bg: dark ? #08090c : #d5d9e0;
+    out property <color> bg: dark ? #0f141a : #eef1f4;
+    out property <color> surface: dark ? #161d25 : #ffffff;
+    out property <color> surface-2: dark ? #1e2731 : #f5f7f9;
+    out property <color> surface-3: dark ? #26313d : #e6ebf0;
+    out property <color> border: dark ? #232d38 : #d9e0e7;
+    out property <color> border-strong: dark ? #34414f : #c3cdd7;
+    out property <color> canvas-bg: dark ? #0a0e12 : #d3dae1;
 
-    out property <color> text: dark ? #e9ebf1 : #171a20;
-    out property <color> text-muted: dark ? #8d95a6 : #5a6372;
-    out property <color> text-faint: dark ? #5d6474 : #98a0ad;
-    out property <color> on-accent: #ffffff;
+    out property <color> text: dark ? #e8edf2 : #141a21;
+    out property <color> text-muted: dark ? #93a1b0 : #4f5d6b;
+    out property <color> text-faint: dark ? #66768a : #8794a2;
+    // Accents are light (ice blue by default), so text on them is dark.
+    out property <color> on-accent: #0f141a;
 
     out property <color> accent-soft: accent.with-alpha(dark ? 0.16 : 0.13);
     out property <color> accent-strong: dark ? accent.brighter(0.15) : accent.darker(0.1);
     out property <color> hover: dark ? #ffffff0c : #00000009;
     out property <color> pressed: dark ? #ffffff16 : #00000012;
-    out property <color> live: #f0435a;
+    out property <color> live: #ff5a6a;
     out property <color> live-soft: live.with-alpha(0.16);
     out property <color> warn: #f2b84b;
-    out property <color> ok: #3dd68c;
+    out property <color> ok: #4ad69a;
     out property <color> scrim: dark ? #000000a6 : #10131a66;
 
-    out property <length> radius-s: 6px;
-    out property <length> radius-m: 9px;
+    out property <length> radius-s: 8px;
+    out property <length> radius-m: 10px;
     out property <length> radius-l: 14px;
 
     out property <length> font-xs: 11px;
@@ -37,5 +38,7 @@ export global Theme {
     out property <length> font-m: 13px;
     out property <length> font-l: 15px;
     out property <length> font-xl: 20px;
-    out property <string> font-family: "Segoe UI Variable Text";
+    out property <string> font-family: "Figtree";
+    /// Headings and the brand (Jost, like the Clutch wordmark).
+    out property <string> font-display: "Jost";
 }
