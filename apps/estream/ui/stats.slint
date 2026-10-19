@@ -144,7 +144,7 @@ export component StatsDialog inherits Modal {
             if root.form.encoders.length == 0: Text { text: "Nothing is recording or streaming."; color: Theme.text-faint; font-size: Theme.font-s; }
             if root.form.encoders.length > 0: TableRow {
                 header: true;
-                row-data: { name: "Output", c1: "Frames/s", c2: "Dropped", c3: "Bitrate", c4: "" };
+                row-data: { name: "Output", c1: "Frames/s", c2: "Dropped", c3: "Bitrate", c4: "Audio gaps" };
             }
             for r in root.form.encoders: TableRow { row-data: r; }
 

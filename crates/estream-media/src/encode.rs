@@ -435,6 +435,30 @@ mod tests {
     use super::*;
     use estream_core::Timestamp;
 
+    /// Silence for missing audio moves the audio after it to the right time.
+    #[test]
+    fn padded_silence_keeps_later_audio_in_place() {
+        let mut enc = AudioEncoder::open(AudioCodec::Aac, 128).unwrap();
+        let mut last_pts = 0;
+        let mut out = |p: ffmpeg::Packet| last_pts = last_pts.max(p.pts().unwrap_or(0));
+        let block = Block::SILENT;
+        for _ in 0..10 {
+            enc.push(&block, &mut out).unwrap();
+        }
+        enc.pad_silence(SAMPLE_RATE as usize / 10, &mut out).unwrap(); // 100 ms missing
+        for _ in 0..10 {
+            enc.push(&block, &mut out).unwrap();
+        }
+        assert_eq!(enc.next_sample(), 3 * 4_800);
+        enc.finish(&mut out).unwrap();
+        // The last packet ends at the full length, give or take the AAC frame and priming.
+        let frame = 1_024;
+        assert!(
+            (3 * 4_800 - 2 * frame..=3 * 4_800 + frame).contains(&last_pts),
+            "last audio packet at {last_pts}"
+        );
+    }
+
     /// Every probed encoder honours a forced keyframe in the middle of a GOP.
     #[test]
     fn forced_keyframes_are_idr() {

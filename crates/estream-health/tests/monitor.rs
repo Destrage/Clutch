@@ -21,6 +21,7 @@ struct Sim {
     queue_ms: u64,
     reconnecting: bool,
     recording: bool,
+    audio_gap_ms: u64,
 }
 
 impl Sim {
@@ -45,6 +46,7 @@ impl Sim {
             queue_ms: 20,
             reconnecting: false,
             recording: true,
+            audio_gap_ms: 0,
         }
     }
 
@@ -75,6 +77,7 @@ impl Sim {
                 frames: self.frames,
                 dropped: self.dropped,
                 bytes: self.bytes,
+                audio_gap_ms: self.audio_gap_ms,
                 recording: self.recording,
             }],
             destinations: vec![DestCounters {
@@ -246,4 +249,27 @@ fn system_load_and_disk_space() {
     s.step(&mut m, 0, 0, 0);
     s.step(&mut m, 0, 0, 0);
     assert!(m.alerts().iter().all(|a| a.id != "disk"));
+}
+
+#[test]
+fn audio_gaps_warn_at_once_and_clear_after_quiet() {
+    let mut m = Monitor::new();
+    let mut s = Sim::new();
+    s.step(&mut m, 0, 0, 0);
+    // One 300 ms dropout: a warning right away.
+    s.audio_gap_ms += 300;
+    let raised = s.step(&mut m, 0, 0, 0);
+    assert_eq!(raised, ["audio-gap:record"]);
+    assert_eq!(m.health(), Severity::Warning);
+    assert_eq!(m.outputs()[0].audio_gap_ms, 300);
+    // More than a second within 10 s: a problem.
+    s.audio_gap_ms += 900;
+    s.step(&mut m, 0, 0, 0);
+    assert_eq!(m.health(), Severity::Problem);
+    // Quiet: the window empties after 10 s, then the alert clears 10 s later.
+    for _ in 0..25 {
+        s.step(&mut m, 0, 0, 0);
+    }
+    assert_eq!(m.health(), Severity::Ok);
+    assert_eq!(m.outputs()[0].audio_gap_ms, 1200, "the total stays");
 }

@@ -5005,6 +5005,7 @@ impl App {
                 frames: s.frames.load(Relaxed),
                 dropped: s.dropped.load(Relaxed),
                 bytes: s.bytes.load(Relaxed),
+                audio_gap_ms: s.audio_gap_ms.load(Relaxed),
                 recording: true,
             });
         }
@@ -5017,6 +5018,7 @@ impl App {
                 frames: s.frames.load(Relaxed),
                 dropped: s.dropped.load(Relaxed),
                 bytes: s.bytes.load(Relaxed),
+                audio_gap_ms: s.audio_gap_ms.load(Relaxed),
                 recording: false,
             });
         }
@@ -5036,6 +5038,7 @@ impl App {
                         frames: s.frames.load(Relaxed),
                         dropped: s.dropped.load(Relaxed),
                         bytes: s.bytes.load(Relaxed),
+                        audio_gap_ms: s.audio_gap_ms.load(Relaxed),
                         recording: false,
                     });
                 }
@@ -5218,8 +5221,15 @@ impl App {
                 c1: format!("{:.1}", o.fps).into(),
                 c2: format!("{:.1}%", o.dropped_pct).into(),
                 c3: format!("{:.1} Mb/s", o.kbps / 1000.0).into(),
-                c4: SharedString::new(),
-                level: level(o.dropped_pct > 1.0, o.dropped_pct > 5.0),
+                c4: if o.audio_gap_ms == 0 {
+                    "None".into()
+                } else {
+                    format!("{:.1} s", o.audio_gap_ms as f64 / 1000.0).into()
+                },
+                level: level(
+                    o.dropped_pct > 1.0 || o.audio_gap_ms > 0,
+                    o.dropped_pct > 5.0,
+                ),
             })
             .collect();
         let destinations: Vec<StatRow> = m

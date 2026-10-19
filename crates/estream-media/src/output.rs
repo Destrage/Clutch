@@ -24,6 +24,8 @@ pub struct OutputStats {
     pub bytes: AtomicU64,
     /// Frames dropped before reaching the encoder.
     pub dropped: AtomicU64,
+    /// Milliseconds of audio that never arrived and were filled with silence.
+    pub audio_gap_ms: AtomicU64,
     pub encoder: Mutex<String>,
     /// Set if the output failed while running.
     pub error: Mutex<Option<String>>,
@@ -466,13 +468,18 @@ impl State {
         // Audio positions count samples, so audio that never arrived (a stalled mixer, a full
         // queue) would pull everything after it early and the stream drifts out of sync.
         // Keep audio on the clock: gaps become silence, stale blocks are dropped.
-        let drift = encoders.first().map_or(0, |a| at - a.next_sample());
-        if drift < -RESYNC_SAMPLES {
-            return Ok(());
-        }
+        let pad = match encoders.first().map(|a| realign(at, a.next_sample())) {
+            Some(Realign::Drop) => return Ok(()),
+            Some(Realign::Pad(n)) => {
+                let ms = n as u64 * 1000 / SAMPLE_RATE as u64;
+                self.stats.audio_gap_ms.fetch_add(ms, Ordering::Relaxed);
+                n
+            }
+            _ => 0,
+        };
         for (k, enc) in encoders.iter_mut().enumerate() {
-            if drift > RESYNC_SAMPLES {
-                enc.pad_silence(drift as usize, &mut |p| self.write(k + 1, p))?;
+            if pad > 0 {
+                enc.pad_silence(pad, &mut |p| self.write(k + 1, p))?;
             }
             let track = self.tracks[k];
             enc.push(&chunk.tracks[track], &mut |p| self.write(k + 1, p))?;
@@ -483,6 +490,24 @@ impl State {
 
 /// How far (in samples, 20 ms) audio may stray from the clock before it is realigned.
 const RESYNC_SAMPLES: i64 = 2 * BLOCK as i64;
+
+/// What to do with an audio block due at sample `at` when the encoder is at sample `next`.
+#[derive(Debug, PartialEq)]
+enum Realign {
+    Keep,
+    /// Audio went missing: fill this many samples of silence first.
+    Pad(usize),
+    /// The block is for time already covered.
+    Drop,
+}
+
+fn realign(at: i64, next: i64) -> Realign {
+    match at - next {
+        d if d > RESYNC_SAMPLES => Realign::Pad(d as usize),
+        d if d < -RESYNC_SAMPLES => Realign::Drop,
+        _ => Realign::Keep,
+    }
+}
 
 /// The longest replay buffer, in seconds (clip mode needs room for post-roll).
 pub const MAX_REPLAY_SECONDS: u32 = 600;
@@ -671,5 +696,29 @@ impl ReplayBuffer {
 
     pub fn stop(self, engine: &Engine) -> Result<(), MediaError> {
         self.session.stop(engine)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn audio_on_time_is_kept() {
+        assert_eq!(realign(48_000, 48_000), Realign::Keep);
+        // Rounding and one block of jitter stay within the window.
+        assert_eq!(realign(48_000 + BLOCK as i64, 48_000), Realign::Keep);
+        assert_eq!(realign(48_000 - BLOCK as i64, 48_000), Realign::Keep);
+    }
+
+    #[test]
+    fn missing_audio_is_filled_with_silence() {
+        // A 300 ms stall: the block is due 14 400 samples after where the encoder is.
+        assert_eq!(realign(62_400, 48_000), Realign::Pad(14_400));
+    }
+
+    #[test]
+    fn stale_audio_is_dropped() {
+        assert_eq!(realign(48_000, 48_000 + 3 * BLOCK as i64), Realign::Drop);
     }
 }

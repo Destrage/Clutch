@@ -30,6 +30,8 @@ pub struct OutputCounters {
     pub frames: u64,
     pub dropped: u64,
     pub bytes: u64,
+    /// Milliseconds of audio filled with silence because it never arrived.
+    pub audio_gap_ms: u64,
     /// Writes to the recording drive (counts toward the disk check).
     pub recording: bool,
 }
@@ -106,6 +108,8 @@ pub struct OutputRate {
     pub fps: f64,
     pub dropped_pct: f64,
     pub kbps: f64,
+    /// Audio filled with silence since the output started (ms).
+    pub audio_gap_ms: u64,
 }
 
 /// A destination's current rates.
@@ -295,6 +299,7 @@ impl Monitor {
                 fps: frames / secs,
                 dropped_pct: pct,
                 kbps: bytes * 8.0 / secs / 1000.0,
+                audio_gap_ms: o.audio_gap_ms,
             });
             let condition = (pct > 1.0).then(|| {
                 (
@@ -309,6 +314,27 @@ impl Monitor {
                 )
             });
             conditions.push((format!("encoder:{}", o.key), condition, 5, 10));
+            // Audio that never arrived: shown at once, cleared after 10 quiet seconds.
+            let gap = delta(o.audio_gap_ms, before.map(|b| b.audio_gap_ms));
+            let window = self.windows.entry(format!("gap:{}", o.key)).or_default();
+            window.push(gap, 1.0);
+            let recent_ms: f64 = window.0.iter().map(|(n, _)| n).sum();
+            let condition = (recent_ms > 0.0).then(|| {
+                (
+                    if recent_ms > 1000.0 {
+                        Severity::Problem
+                    } else {
+                        Severity::Warning
+                    },
+                    format!("Audio dropped out on the {}", o.name.to_lowercase()),
+                    format!(
+                        "{recent_ms:.0} ms of audio was missing in the last 10 s and was replaced \
+                         with silence to keep sound in sync with the picture"
+                    ),
+                    "Close CPU-heavy apps, use a hardware encoder (NVENC, AMF, Quick Sync) or a faster preset.".to_owned(),
+                )
+            });
+            conditions.push((format!("audio-gap:{}", o.key), condition, 0, 10));
         }
         point.encoder_dropped_pct = worst_encoder;
 
