@@ -202,8 +202,16 @@ fn sign_in(
             text(&body, "error")
         ));
     }
-    let (_, channels) = get_bearer(&format!("{API}/channels?part=snippet&mine=true"), &access, &[])
-        .ok_or("Couldn't reach YouTube")?;
+    let (status, channels) =
+        get_bearer(&format!("{API}/channels?part=snippet&mine=true"), &access, &[])
+            .ok_or("Couldn't reach YouTube")?;
+    if status != 200 {
+        let reason = channels
+            .get("error")
+            .map(|e| text(e, "message"))
+            .unwrap_or_default();
+        return Err(format!("YouTube refused the request ({status}): {reason}"));
+    }
     let (channel_id, channel) = channel_of(&channels)
         .ok_or("This Google account has no YouTube channel. Pick the account that owns it.")?;
     let mut account = YouTubeAccount {
