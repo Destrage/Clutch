@@ -54,6 +54,11 @@ windows = { version = "0.62", features = [
 ] }
 windows-core = "0.62"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "0.13.13", default-features = false, features = ["async-io", "screencast"] }
+pipewire = "0.10.1"
+pollster.workspace = true
+
 [dev-dependencies]
 estream-project.workspace = true
 pollster.workspace = true

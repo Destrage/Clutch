@@ -1,4 +1,4 @@
-//! A GPU texture filled from CPU pixels (images, rendered text).
+//! A GPU texture filled from CPU pixels (images, rendered text, captured frames).
 
 use estream_core::Size;
 use estream_engine::{SourceContext, SourceFrame};
@@ -32,26 +32,50 @@ pub struct CpuTexture {
 impl CpuTexture {
     /// Uploads pixels, recreating the texture only when the size changes.
     pub fn upload(&mut self, ctx: &SourceContext<'_>, pixels: &Pixels) {
-        if pixels.width == 0 || pixels.height == 0 {
+        self.upload_raw(
+            ctx,
+            pixels.width,
+            pixels.height,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            &pixels.rgba,
+            pixels.width * 4,
+        );
+    }
+
+    /// Uploads 4-byte pixels in `format` with rows `bytes_per_row` apart, recreating the
+    /// texture only when the size or format changes.
+    pub fn upload_raw(
+        &mut self,
+        ctx: &SourceContext<'_>,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+        data: &[u8],
+        bytes_per_row: u32,
+    ) {
+        if width == 0
+            || height == 0
+            || data.len() < (bytes_per_row * (height - 1) + width * 4) as usize
+        {
             self.clear();
             return;
         }
-        let same_size = self
+        let same = self
             .texture
             .as_ref()
-            .is_some_and(|t| t.width() == pixels.width && t.height() == pixels.height);
-        if !same_size {
+            .is_some_and(|t| t.width() == width && t.height() == height && t.format() == format);
+        if !same {
             let texture = ctx.gpu.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("cpu source"),
                 size: wgpu::Extent3d {
-                    width: pixels.width,
-                    height: pixels.height,
+                    width,
+                    height,
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
@@ -64,16 +88,16 @@ impl CpuTexture {
         if let Some(texture) = &self.texture {
             ctx.gpu.queue.write_texture(
                 texture.as_image_copy(),
-                &pixels.rgba,
+                data,
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(pixels.width * 4),
-                    rows_per_image: Some(pixels.height),
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: Some(height),
                 },
                 texture.size(),
             );
         }
-        self.size = Size::new(pixels.width as f32, pixels.height as f32);
+        self.size = Size::new(width as f32, height as f32);
     }
 
     pub fn clear(&mut self) {

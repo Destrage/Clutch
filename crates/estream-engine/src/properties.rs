@@ -49,6 +49,11 @@ pub enum PropKind {
     },
     /// Font family name.
     Font,
+    /// A button with this text. Pressing it adds one to the (integer) value, which tells the
+    /// source to act (e.g. "Choose again…" reopens the system's screen picker).
+    Button {
+        text: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -94,6 +99,10 @@ impl Property {
         Self::new(key, label, PropKind::Text { multiline }, default)
     }
 
+    pub fn button(key: &str, label: &str, text: &str) -> Self {
+        Self::new(key, label, PropKind::Button { text: text.into() }, 0)
+    }
+
     pub fn select(
         key: &str,
         label: &str,
@@ -131,6 +140,10 @@ impl Property {
                 .as_str()
                 .map(|_| ())
                 .ok_or(format!("{label} must be text")),
+            PropKind::Button { .. } => value
+                .as_i64()
+                .map(|_| ())
+                .ok_or(format!("{label} must be a whole number")),
             PropKind::Color => serde_json::from_value::<estream_core::Rgba8>(value.clone())
                 .map(|_| ())
                 .map_err(|_| format!("{label} must be a color")),

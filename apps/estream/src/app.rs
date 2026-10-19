@@ -6460,9 +6460,19 @@ impl App {
         }
     }
 
+    /// The button of a path (file picker) or button property.
     pub fn prop_browse(&mut self, key: &str) {
-        let Some(PropKind::Path { filters }) = self.prop(key).map(|p| p.kind) else {
-            return;
+        let filters = match self.prop(key).map(|p| p.kind) {
+            Some(PropKind::Path { filters }) => filters,
+            Some(PropKind::Button { .. }) => {
+                let presses = self
+                    .current_setting(key)
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
+                self.set_setting(key, (presses + 1).into());
+                return;
+            }
+            _ => return,
         };
         let filters: Vec<&str> = filters.iter().map(String::as_str).collect();
         let mut dialog = rfd::FileDialog::new().set_title("Choose a file");
@@ -6573,6 +6583,13 @@ impl App {
     }
 
     /// Sets one key of the selected source's settings.
+    /// A setting of the source shown in the properties panel.
+    fn current_setting(&self, key: &str) -> Option<serde_json::Value> {
+        let (snapshot, _, _) = self.canvas_and_scene()?;
+        let source = self.current_source(&snapshot)?;
+        snapshot.source(source)?.settings.get(key).cloned()
+    }
+
     fn set_setting(&mut self, key: &str, value: serde_json::Value) {
         let Some((snapshot, _, _)) = self.canvas_and_scene() else {
             return;
@@ -7764,6 +7781,10 @@ fn prop_row(p: &estream_engine::Property, value: &serde_json::Value) -> PropRow 
         PropKind::Path { .. } => {
             row.kind = "path".into();
             row.text = value.as_str().unwrap_or_default().into();
+        }
+        PropKind::Button { text } => {
+            row.kind = "button".into();
+            row.text = text.as_str().into();
         }
         PropKind::Color => {
             row.kind = "color".into();

@@ -3,7 +3,7 @@
 
 use crate::properties::{PropKind, Property, PropertySchema, SelectOption};
 use estream_audio::AudioSource;
-use estream_core::{Rgba8, Size, Timestamp};
+use estream_core::{Rgba8, Size, SourceId, Timestamp};
 use estream_gpu::{Compositor, GpuContext, wgpu};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -25,10 +25,12 @@ pub enum SourceError {
 /// Status text of a source whose type another system has but this one doesn't.
 pub const NOT_ON_THIS_SYSTEM: &str = "Not available on this system";
 
-/// GPU resources available to sources.
+/// GPU resources available to sources, and which source is being called.
 pub struct SourceContext<'a> {
     pub gpu: &'a GpuContext,
     pub compositor: &'a Compositor,
+    /// Stable across restarts: sources key per-machine state by it (e.g. screen-share grants).
+    pub source: SourceId,
 }
 
 /// The latest frame of a source, ready for compositing.

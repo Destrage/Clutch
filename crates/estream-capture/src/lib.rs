@@ -4,6 +4,8 @@
 //! `platform::*` behind `cfg`; image and text sources are cross-platform.
 
 pub mod devices;
+#[cfg(target_os = "linux")]
+pub mod linux;
 pub mod media;
 #[cfg(windows)]
 pub mod windows;
@@ -19,6 +21,15 @@ pub enum CaptureError {
     #[cfg(windows)]
     #[error(transparent)]
     Windows(#[from] ::windows::core::Error),
+}
+
+/// Where per-machine capture state is kept (Clutch's settings folder): on Linux, the
+/// screen-share grants that skip the system's picker.
+pub fn set_state_dir(dir: std::path::PathBuf) {
+    #[cfg(target_os = "linux")]
+    linux::tokens::set_dir(dir);
+    #[cfg(not(target_os = "linux"))]
+    let _ = dir;
 }
 
 /// Capture types some system has: `(kind, name, description, has video)`. Projects carry
@@ -62,6 +73,8 @@ pub fn register_all(registry: &mut SourceRegistry) {
     media::register(registry);
     #[cfg(windows)]
     windows::register(registry);
+    #[cfg(target_os = "linux")]
+    linux::register(registry);
     for &(kind, name, description, video) in PLATFORM_TYPES {
         if registry.get(kind).is_none() {
             registry.register(SourceType::unavailable(kind, name, description, video));

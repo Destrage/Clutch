@@ -41,8 +41,13 @@ Windows camera uses. One CPU copy per frame (~500 MB/s at 1080p60) is within bud
 ### Screen capture: portal only
 The ScreenCast portal works on GNOME, KDE, wlroots and on X11 sessions with the portal installed,
 and it is the only option on Wayland. A direct X11 path would be a second backend for a shrinking
-audience, so it is not included. The portal's restore token is saved in the source settings so
-the picker isn't shown at every start.
+audience, so it is not included. The system's picker chooses the display or window; the
+source's "Choose again…" button (a new `PropKind::Button`) reopens it. The portal's restore
+token skips the picker at later starts. Tokens are single-use (each start returns the next
+one) and mean nothing on another machine, so they are not kept in the source settings, where
+every start would mark the project unsaved and add an undo step: they live in
+`portal-tokens.json` in Clutch's settings folder, keyed by source id. Sources learn their id
+from `SourceContext::source`.
 
 ### Audio
 cpal already covers microphones and output devices (ALSA, which PipeWire serves). Desktop audio

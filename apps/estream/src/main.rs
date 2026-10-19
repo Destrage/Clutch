@@ -71,6 +71,7 @@ fn main() -> anyhow::Result<()> {
     };
     #[cfg(windows)]
     set_app_user_model_id();
+    estream_capture::set_state_dir(paths.root.clone());
 
     let mut settings = Settings::load(&paths.settings());
     match (adopted, legacy) {

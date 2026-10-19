@@ -894,6 +894,10 @@ component PropEditor inherits VerticalLayout {
         }
         Button { text: "Browse…"; clicked => { root.browse(); } }
     }
+    if prop.kind == "button": HorizontalLayout {
+        alignment: start;
+        Button { text: root.prop.text; clicked => { root.browse(); } }
+    }
     if prop.kind == "color": HorizontalLayout {
         spacing: 6px;
         Rectangle {

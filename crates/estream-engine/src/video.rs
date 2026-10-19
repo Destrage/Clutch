@@ -344,14 +344,14 @@ impl VideoCore {
 
     /// Reconciles sources and canvases with `graph`. Allocates only when something changed.
     pub fn sync(&mut self, graph: Arc<RenderGraph>, now: Timestamp) {
-        let ctx = SourceContext {
-            gpu: &self.gpu,
-            compositor: &self.compositor,
-        };
-
         self.sources
             .retain(|id, _| graph.sources.iter().any(|s| s.id == *id));
         for def in &graph.sources {
+            let ctx = SourceContext {
+                gpu: &self.gpu,
+                compositor: &self.compositor,
+                source: def.id,
+            };
             // Audio-only types (microphones…) have no video part.
             if self.registry.get(&def.kind).is_some_and(|t| !t.has_video()) {
                 self.sources.remove(&def.id);
@@ -486,12 +486,13 @@ impl VideoCore {
 
     /// Advances every source to `now`.
     pub fn tick_sources(&mut self, encoder: &mut wgpu::CommandEncoder, now: Timestamp) {
-        let ctx = SourceContext {
-            gpu: &self.gpu,
-            compositor: &self.compositor,
-        };
-        for slot in self.sources.values_mut() {
+        for (id, slot) in &mut self.sources {
             if let Some(instance) = &mut slot.instance {
+                let ctx = SourceContext {
+                    gpu: &self.gpu,
+                    compositor: &self.compositor,
+                    source: *id,
+                };
                 instance.tick(&ctx, encoder, now);
             }
         }
