@@ -1,7 +1,7 @@
 //! Display and window capture through the ScreenCast portal. The system's picker chooses
 //! what is shared; "Choose again…" reopens it, and a saved token skips it at later starts.
 
-use super::frames::Frame;
+use super::frames::{Frame, Layout};
 use super::screencast::{Session, Target};
 use crate::media::upload::CpuTexture;
 use estream_core::Timestamp;
@@ -86,8 +86,10 @@ impl VideoSource for PortalCapture {
         };
         if session.shared.frames.take(&mut self.last, &mut self.frame) {
             let f = &self.frame;
-            self.texture
-                .upload_raw(ctx, f.width, f.height, f.format, &f.data, f.width * 4);
+            if let Layout::Packed(format) = f.layout {
+                self.texture
+                    .upload_raw(ctx, f.width, f.height, format, &f.data, f.width * 4);
+            }
         } else if !matches!(session.shared.status(), SourceStatus::Active) {
             self.texture.clear();
         }

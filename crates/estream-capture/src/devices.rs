@@ -1,5 +1,5 @@
 //! What can be captured on this system, in a platform-neutral form (the first run uses it to
-//! build a ready scene). Systems without a capture backend yet report nothing.
+//! build a ready scene). Displays on Linux are chosen in the system's picker, so none are listed.
 
 /// A display that display capture can show.
 #[derive(Clone, Debug, PartialEq)]
@@ -49,7 +49,17 @@ pub fn cameras() -> Vec<Camera> {
             })
             .collect()
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        crate::linux::camera::devices()
+            .into_iter()
+            .map(|c| Camera {
+                id: c.id,
+                name: c.name,
+            })
+            .collect()
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         Vec::new()
     }

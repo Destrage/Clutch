@@ -4,7 +4,7 @@
 //! system's picker), then a PipeWire loop that copies every frame out of the shared-memory
 //! buffer into a [`FrameSlot`]. DMA-BUF is not offered, so the compositor gets SHM buffers.
 
-use super::frames::{Frame, FrameSlot, copy_rows};
+use super::frames::{Frame, FrameSlot, Layout, copy_rows};
 use super::tokens;
 use ashpd::desktop::screencast::{CursorMode, Screencast, SelectSourcesOptions, SourceType};
 use ashpd::desktop::{PersistMode, ResponseError, Session as PortalSession};
@@ -288,7 +288,7 @@ fn receive(
                 if copy_rows(src, n.width, n.height, stride, opaque, &mut n.frame.data) {
                     n.frame.width = n.width;
                     n.frame.height = n.height;
-                    n.frame.format = format;
+                    n.frame.layout = Layout::Packed(format);
                     shared.frames.publish(&mut n.frame);
                 }
             }

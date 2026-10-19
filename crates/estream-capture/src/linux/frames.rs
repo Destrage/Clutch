@@ -1,14 +1,22 @@
 //! Hands frames from a capture thread to the video thread without copying or holding a lock
 //! across a frame: each side owns a buffer and they swap with the slot's.
 
-use estream_gpu::wgpu;
+use estream_gpu::{YuvMatrix, wgpu};
 use std::sync::Mutex;
 
-/// Tightly packed 4-byte pixels.
+/// How a frame's bytes are laid out (always tightly packed: rows are `width` pixels).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Layout {
+    /// 4-byte pixels.
+    Packed(wgpu::TextureFormat),
+    /// A Y plane, then interleaved CbCr at half height.
+    Nv12 { matrix: YuvMatrix, full_range: bool },
+}
+
 pub struct Frame {
     pub width: u32,
     pub height: u32,
-    pub format: wgpu::TextureFormat,
+    pub layout: Layout,
     pub data: Vec<u8>,
 }
 
@@ -17,7 +25,7 @@ impl Default for Frame {
         Self {
             width: 0,
             height: 0,
-            format: wgpu::TextureFormat::Bgra8UnormSrgb,
+            layout: Layout::Packed(wgpu::TextureFormat::Bgra8UnormSrgb),
             data: Vec::new(),
         }
     }
