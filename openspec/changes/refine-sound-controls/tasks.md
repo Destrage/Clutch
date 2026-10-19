@@ -11,6 +11,11 @@
       Live deck while live)
 - [ ] 2.2 Close button on the settings panel; Escape closes it
 
-## 3. Check
-- [ ] 3.1 Clippy; in-app check of click, drag, scroll, double-click and the settings panel in both
-      views
+## 3. Hearing media
+- [ ] 3.1 Media and browser sources start with "Monitor and output"; "Hear on my speakers" toggle
+- [ ] 3.2 Desktop Audio leaves out Clutch's own process when no game is left out; warning when a
+      monitored source would be captured twice
+
+## 4. Check
+- [ ] 4.1 Clippy; in-app check of click, drag, scroll, double-click and the settings panel in both
+      views; media heard locally once and on the stream once

@@ -51,3 +51,16 @@ The item settings panel SHALL have a close button, and Escape SHALL close it.
 #### Scenario: Close button
 - **WHEN** the user clicks the close button on the settings panel
 - **THEN** the panel closes and nothing is selected
+
+### Requirement: Hearing media locally
+Media files and browser sources SHALL be heard on the streamer's speakers by default, and sounds
+Clutch plays to the speakers SHALL NOT be captured again by Desktop Audio when no game's audio is
+being left out.
+
+#### Scenario: New media source
+- **WHEN** the user adds a media file with sound
+- **THEN** it is heard on the streamer's speakers and sent to the stream
+
+#### Scenario: No echo through Desktop Audio
+- **WHEN** a monitored media source plays while Desktop Audio is on and no game is left out
+- **THEN** the stream contains the media once
