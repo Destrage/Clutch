@@ -7,8 +7,9 @@ CEF_PATH = { value = "third_party/cef", relative = true }
 # Set LIBCLANG_PATH yourself if it lives somewhere else.
 
 [target.'cfg(target_os = "linux")']
-# Load the FFmpeg and CEF libraries copied next to the executable.
-rustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN"]
+# Load the FFmpeg and CEF libraries copied next to the executable. An old-style RPATH (not
+# RUNPATH) also applies to the libraries' own dependencies (libavdevice needs libavfilter).
+rustflags = ["-C", "link-arg=-Wl,--disable-new-dtags,-rpath,$ORIGIN"]
 
 [alias]
 xtask = "run --package xtask --"
