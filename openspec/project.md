@@ -181,4 +181,5 @@ Each change below gets its own `openspec/changes/<id>/` when work starts. ✅ = 
 | 4 | `add-ai-features` | Background blur and replacement (virtual background), face masks and avatars for camera privacy, auto captions, AI voice conversion | Beyond OBS |
 | 4 | `add-iso-recording` | Per-source isolated recordings | Beyond OBS |
 | 4 | `add-obs-import` | Import OBS scene collections & profiles | Migration path |
-| 4 | `add-macos-linux` | Platform backends for macOS and Linux | Parity |
+| 4 | ✅ `add-linux` | Linux backends (PipeWire, portals, V4L2) and an AppImage | Parity |
+| 4 | `add-macos` | macOS backends (ScreenCaptureKit, AVFoundation) | Parity |
