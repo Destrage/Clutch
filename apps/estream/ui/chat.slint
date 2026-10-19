@@ -3,12 +3,71 @@
 
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
-import { IconButton, Icon, EmptyState } from "widgets.slint";
+import { Button, IconButton, Icon, EmptyState } from "widgets.slint";
+import { Modal } from "overlays.slint";
 
 export struct ChatTabRow {
     name: string,
     /// "kick" | "twitch" | "youtube"
     kind: string,
+}
+
+/// A web page drawn by the browser helper, taking clicks, scrolling and typing.
+export component WebView inherits Rectangle {
+    in property <image> frame;
+    /// Shown instead of the page (loading, or what went wrong).
+    in property <string> message;
+    callback pointer(string, float, float, int, float, float);
+    callback key(string, bool, bool, bool, bool);
+
+    if root.message == "": Image {
+        width: parent.width;
+        height: parent.height;
+        source: root.frame;
+        image-fit: fill;
+    }
+    if root.message != "": VerticalLayout {
+        alignment: center;
+        padding: 20px;
+        spacing: 10px;
+        Text {
+            text: root.message;
+            color: Theme.text-muted;
+            font-size: Theme.font-m;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+    }
+    keys := FocusScope {
+        key-pressed(e) => {
+            root.key(e.text, true, e.modifiers.control, e.modifiers.shift, e.modifiers.alt);
+            return EventResult.accept;
+        }
+        key-released(e) => {
+            root.key(e.text, false, e.modifiers.control, e.modifiers.shift, e.modifiers.alt);
+            return EventResult.accept;
+        }
+        TouchArea {
+            mouse-cursor: MouseCursor.default;
+            moved => { root.pointer("move", self.mouse-x / 1px, self.mouse-y / 1px, -1, 0, 0); }
+            changed has-hover => {
+                if (!self.has-hover) { root.pointer("leave", self.mouse-x / 1px, self.mouse-y / 1px, -1, 0, 0); }
+            }
+            pointer-event(e) => {
+                let button = e.button == PointerEventButton.left ? 0 : e.button == PointerEventButton.middle ? 1 : 2;
+                if (e.kind == PointerEventKind.down) {
+                    keys.focus();
+                    root.pointer("down", self.mouse-x / 1px, self.mouse-y / 1px, button, 0, 0);
+                } else if (e.kind == PointerEventKind.up) {
+                    root.pointer("up", self.mouse-x / 1px, self.mouse-y / 1px, button, 0, 0);
+                }
+            }
+            scroll-event(e) => {
+                root.pointer("wheel", self.mouse-x / 1px, self.mouse-y / 1px, -1, e.delta-x / 1px, e.delta-y / 1px);
+                return EventResult.accept;
+            }
+        }
+    }
 }
 
 export component ChatPanel inherits Rectangle {
@@ -126,53 +185,11 @@ export component ChatPanel inherits Rectangle {
                     body: "Add Kick, Twitch or YouTube under Settings → Stream, with your channel name, and its chat appears here.";
                 }
             }
-            if root.tabs.length > 0 && root.message == "": Image {
-                width: parent.width;
-                height: parent.height;
-                source: root.frame;
-                image-fit: fill;
-            }
-            if root.tabs.length > 0 && root.message != "": VerticalLayout {
-                alignment: center;
-                padding: 20px;
-                spacing: 10px;
-                Text {
-                    text: root.message;
-                    color: Theme.text-muted;
-                    font-size: Theme.font-m;
-                    wrap: word-wrap;
-                    horizontal-alignment: center;
-                }
-            }
-            keys := FocusScope {
-                key-pressed(e) => {
-                    root.key(e.text, true, e.modifiers.control, e.modifiers.shift, e.modifiers.alt);
-                    return EventResult.accept;
-                }
-                key-released(e) => {
-                    root.key(e.text, false, e.modifiers.control, e.modifiers.shift, e.modifiers.alt);
-                    return EventResult.accept;
-                }
-                TouchArea {
-                    mouse-cursor: MouseCursor.default;
-                    moved => { root.pointer("move", self.mouse-x / 1px, self.mouse-y / 1px, -1, 0, 0); }
-                    changed has-hover => {
-                        if (!self.has-hover) { root.pointer("leave", self.mouse-x / 1px, self.mouse-y / 1px, -1, 0, 0); }
-                    }
-                    pointer-event(e) => {
-                        let button = e.button == PointerEventButton.left ? 0 : e.button == PointerEventButton.middle ? 1 : 2;
-                        if (e.kind == PointerEventKind.down) {
-                            keys.focus();
-                            root.pointer("down", self.mouse-x / 1px, self.mouse-y / 1px, button, 0, 0);
-                        } else if (e.kind == PointerEventKind.up) {
-                            root.pointer("up", self.mouse-x / 1px, self.mouse-y / 1px, button, 0, 0);
-                        }
-                    }
-                    scroll-event(e) => {
-                        root.pointer("wheel", self.mouse-x / 1px, self.mouse-y / 1px, -1, e.delta-x / 1px, e.delta-y / 1px);
-                        return EventResult.accept;
-                    }
-                }
+            if root.tabs.length > 0: WebView {
+                frame: root.frame;
+                message: root.message;
+                pointer(k, x, y, b, dx, dy) => { root.pointer(k, x, y, b, dx, dy); }
+                key(t, d, c, s, a) => { root.key(t, d, c, s, a); }
             }
             // The list of who is in chat, over the page.
             if root.people-open: Rectangle {
@@ -197,6 +214,69 @@ export component ChatPanel inherits Rectangle {
                     }
                 }
             }
+        }
+    }
+}
+
+// Signing in to a platform inside Clutch, so the chat tabs share the login.
+export component SignInDialog inherits Modal {
+    in property <string> title;
+    in property <string> hint;
+    in property <image> frame;
+    in property <string> message;
+    out property <length> view-width: web.width;
+    out property <length> view-height: web.height;
+    callback pointer(string, float, float, int, float, float);
+    callback key(string, bool, bool, bool, bool);
+    callback resized(float, float);
+    callback open-browser();
+    changed view-width => { root.resized(root.view-width / 1px, root.view-height / 1px); }
+    changed view-height => { root.resized(root.view-width / 1px, root.view-height / 1px); }
+    init => { root.resized(root.view-width / 1px, root.view-height / 1px); }
+
+    card-width: 560px;
+    dismissable: false;
+
+    VerticalLayout {
+        padding: 18px;
+        spacing: 12px;
+        HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: root.title;
+                color: Theme.text;
+                font-family: Theme.font-display;
+                font-size: 20px;
+                font-weight: 600;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            IconButton { icon: Icons.x; tooltip: "Cancel"; clicked => { root.dismiss(); } }
+        }
+        if root.hint != "": Text { text: root.hint; color: Theme.text-muted; font-size: Theme.font-m; wrap: word-wrap; }
+        Rectangle {
+            height: max(320px, min(660px, root.height - 200px));
+            border-radius: Theme.radius-m;
+            border-width: 1px;
+            border-color: Theme.border;
+            background: Theme.bg;
+            clip: true;
+            web := WebView {
+                frame: root.frame;
+                message: root.message;
+                pointer(k, x, y, b, dx, dy) => { root.pointer(k, x, y, b, dx, dy); }
+                key(t, d, c, s, a) => { root.key(t, d, c, s, a); }
+            }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            Button {
+                text: "Use my browser instead";
+                kind: "ghost";
+                clicked => { root.open-browser(); }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Button { text: "Cancel"; kind: "ghost"; clicked => { root.dismiss(); } }
         }
     }
 }

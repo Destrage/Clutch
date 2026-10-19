@@ -150,6 +150,9 @@ pub struct App {
     twitch: crate::twitch::Session,
     /// A Twitch sign-in in progress, and the code whose page was opened.
     twitch_connect: Option<(crate::twitch::Connecting, String)>,
+    /// The sign-in page shown in a dialog, and the dialog's page area size.
+    signin: Option<crate::chat::WebDialog>,
+    signin_size: (f32, f32),
     /// Settings → Clips: the game whose auto-clip rules are shown.
     clip_rule_game: usize,
     /// Montages: the saved ones, the New montage wizard and the editor.
@@ -537,6 +540,8 @@ impl App {
             viewers: crate::viewers::ViewerCounts::start(twitch.clone()),
             twitch,
             twitch_connect: None,
+            signin: None,
+            signin_size: (0.0, 0.0),
             clip_rule_game: 0,
             montage_ui: crate::montage::MontageUi::default(),
         };
@@ -766,18 +771,42 @@ impl App {
 
     // ---- Twitch account ----
 
-    /// Starts signing in to Twitch: shows a code and opens the page to enter it.
+    /// Starts connecting Twitch: Twitch's page opens in a dialog inside Clutch, so logging in
+    /// there also signs in the Twitch chat tab.
     fn twitch_connect(&mut self) {
         self.twitch_connect = Some((crate::twitch::Connecting::start(), String::new()));
+        self.signin = None;
+        if let Some(w) = self.window() {
+            w.set_signin_title("Connect Twitch".into());
+            w.set_signin_hint(
+                "Log in to Twitch and approve Clutch. Your Twitch chat tab signs in too.".into(),
+            );
+            w.set_signin_message("Contacting Twitch…".into());
+            w.set_signin_open(true);
+        }
         self.refresh_settings_form();
     }
 
     fn twitch_disconnect(&mut self) {
-        self.twitch_connect = None;
+        self.twitch_cancel();
         self.twitch.set(None);
         self.settings.twitch = None;
         self.settings.save(&self.paths.settings());
         self.refresh_settings_form();
+    }
+
+    /// Stops a sign-in in progress and closes its dialog.
+    fn twitch_cancel(&mut self) {
+        self.twitch_connect = None;
+        self.close_signin();
+        self.refresh_settings_form();
+    }
+
+    fn close_signin(&mut self) {
+        self.signin = None;
+        if let Some(w) = self.window() {
+            w.set_signin_open(false);
+        }
     }
 
     /// Follows a sign-in in progress, and saves tokens the viewer counts renewed.
@@ -794,6 +823,15 @@ impl App {
             self.settings.save(&self.paths.settings());
             self.refresh_settings_form();
         }
+        if let Some(dialog) = &mut self.signin
+            && let Some(w) = self.window.upgrade()
+        {
+            let (image, message) = dialog.frame();
+            if let Some(image) = image {
+                w.set_signin_frame(image);
+            }
+            w.set_signin_message(message.into());
+        }
         let Some((connecting, opened)) = &self.twitch_connect else {
             return;
         };
@@ -804,14 +842,18 @@ impl App {
                     if let Some((_, opened)) = &mut self.twitch_connect {
                         *opened = code;
                     }
-                    if let Err(e) = open_url(&uri) {
-                        self.toast(format!("Couldn't open your browser: {e}"), true);
+                    let open = self.window().is_some_and(|w| w.get_signin_open());
+                    if open {
+                        let mut dialog = crate::chat::WebDialog::new("panel:signin:twitch", &uri);
+                        dialog.resized(self.signin_size.0, self.signin_size.1);
+                        self.signin = Some(dialog);
                     }
                     self.refresh_settings_form();
                 }
             }
             Connect::Done(account) => {
                 self.twitch_connect = None;
+                self.close_signin();
                 // Twitch destinations without a channel use the connected one.
                 for d in &mut self.settings.destinations {
                     if d.stream.service == Service::Twitch && d.channel.trim().is_empty() {
@@ -823,23 +865,35 @@ impl App {
                 self.settings.twitch = Some(account);
                 self.settings.save(&self.paths.settings());
                 self.viewers.refresh();
+                // The chat tab picks up the login made in the dialog.
+                self.chat.reload_service(Service::Twitch);
                 self.refresh_settings_form();
             }
             Connect::Failed(e) => {
                 self.twitch_connect = None;
+                self.close_signin();
                 self.toast(e, true);
                 self.refresh_settings_form();
             }
         }
     }
 
-    /// Opens the Twitch page for entering the sign-in code again.
+    /// Opens Twitch's page for the code in the default browser instead.
     fn twitch_open(&mut self) {
-        if let Some((connecting, _)) = &self.twitch_connect
-            && let crate::twitch::Connect::Code { uri, .. } = connecting.state()
-            && let Err(e) = open_url(&uri)
-        {
+        let uri = match self.twitch_connect.as_ref().map(|(c, _)| c.state()) {
+            Some(crate::twitch::Connect::Code { uri, .. }) => uri,
+            _ => return,
+        };
+        self.close_signin();
+        if let Err(e) = open_url(&uri) {
             self.toast(format!("Couldn't open your browser: {e}"), true);
+        }
+    }
+
+    pub fn signin_resized(&mut self, width: f32, height: f32) {
+        self.signin_size = (width, height);
+        if let Some(dialog) = &mut self.signin {
+            dialog.resized(width, height);
         }
     }
 
@@ -4044,10 +4098,7 @@ impl App {
             "twitch-connect" => return self.twitch_connect(),
             "twitch-disconnect" => return self.twitch_disconnect(),
             "twitch-open" => return self.twitch_open(),
-            "twitch-cancel" => {
-                self.twitch_connect = None;
-                return self.refresh_settings_form();
-            }
+            "twitch-cancel" => return self.twitch_cancel(),
             _ => {}
         }
         if (field.starts_with("clip") || field.starts_with("hype"))
@@ -7519,6 +7570,15 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
         p.reload()
     });
     on!(on_chat_resized, |a, w, h| a.chat_resized(w, h));
+    on!(on_signin_pointer, |a, kind, x, y, button, dx, dy| if let Some(d) = &mut a.signin {
+        d.pointer(&kind, x, y, button, dx, dy)
+    });
+    on!(on_signin_key, |a, text, down, ctrl, shift, alt| if let Some(d) = &mut a.signin {
+        d.key(&text, down, ctrl, shift, alt)
+    });
+    on!(on_signin_resized, |a, w, h| a.signin_resized(w, h));
+    on!(on_signin_browser, |a| a.twitch_open());
+    on!(on_signin_cancel, |a| a.twitch_cancel());
     on!(on_setup_pick, |a, i| a.setup_pick(i));
     on!(on_setup_action, |a, id| a.setup_action(&id));
     on!(on_setup_confirm, |a, name| a.setup_confirm(&name));

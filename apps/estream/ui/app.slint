@@ -17,7 +17,7 @@ import { MontageDialog } from "montage.slint";
 import { LiveDeck } from "deck.slint";
 import { Sidebar } from "sidebar.slint";
 import { SceneStrip } from "stage.slint";
-import { ChatPanel, ChatTabRow } from "chat.slint";
+import { ChatPanel, ChatTabRow, SignInDialog } from "chat.slint";
 import { GoLiveDialog } from "golive.slint";
 
 export { Theme }
@@ -159,6 +159,17 @@ export component AppWindow inherits Window {
     in property <int> chat-people-total: -1;
     in property <[string]> chat-people;
     in-out property <bool> chat-open;
+    // Signing in to a platform inside Clutch (shown over everything).
+    in property <bool> signin-open;
+    in property <string> signin-title;
+    in property <string> signin-hint;
+    in property <image> signin-frame;
+    in property <string> signin-message;
+    callback signin-pointer(string, float, float, int, float, float);
+    callback signin-key(string, bool, bool, bool, bool);
+    callback signin-resized(float, float);
+    callback signin-browser();
+    callback signin-cancel();
     callback chat-select(int);
     callback chat-pointer(string, float, float, int, float, float);
     callback chat-key(string, bool, bool, bool, bool);
@@ -674,6 +685,18 @@ export component AppWindow inherits Window {
             root.settings-open = false;
             main-keys.focus();
         }
+    }
+
+    if root.signin-open: SignInDialog {
+        title: root.signin-title;
+        hint: root.signin-hint;
+        frame: root.signin-frame;
+        message: root.signin-message;
+        pointer(k, x, y, b, dx, dy) => { root.signin-pointer(k, x, y, b, dx, dy); }
+        key(t, d, c, s, a) => { root.signin-key(t, d, c, s, a); }
+        resized(w, h) => { root.signin-resized(w, h); }
+        open-browser => { root.signin-browser(); }
+        dismiss => { root.signin-cancel(); }
     }
 
     if root.stats-open: StatsDialog {

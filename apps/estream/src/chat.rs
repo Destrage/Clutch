@@ -149,59 +149,155 @@ impl ChatUi {
         self.tabs.get_mut(self.selected)?.page.as_mut()
     }
 
-    pub fn pointer(&mut self, kind: &str, x: f32, y: f32, button: i32, dx: f32, dy: f32) {
-        match kind {
-            "down" if button == 0 => self.held = true,
-            "up" if button == 0 => self.held = false,
-            "leave" => self.held = false,
-            _ => {}
+    /// Reloads the open chat pages of a platform (after signing in to it).
+    pub fn reload_service(&self, service: Service) {
+        for tab in &self.tabs {
+            if tab.service == service
+                && let Some(page) = &tab.page
+            {
+                page.reload();
+            }
         }
-        let held = self.held;
+    }
+
+    pub fn pointer(&mut self, kind: &str, x: f32, y: f32, button: i32, dx: f32, dy: f32) {
+        let mut held = self.held;
+        hold(&mut held, kind, button);
+        self.held = held;
         if let Some(page) = self.page() {
-            page.mouse(Pointer {
-                kind,
-                x: x.round() as i32,
-                y: y.round() as i32,
-                button: button.clamp(0, 2) as u8,
-                clicks: 1,
-                dx: dx.round() as i32,
-                dy: dy.round() as i32,
-                mods: if held { mods::LEFT_BUTTON } else { 0 },
-            });
+            send_pointer(page, held, kind, x, y, button, dx, dy);
         }
     }
 
     /// A key from the UI: `text` as Slint reports it.
     pub fn key(&mut self, text: &str, down: bool, ctrl: bool, shift: bool, alt: bool) {
-        let Some(page) = self.page() else { return };
-        let mut flags = 0;
-        if ctrl {
-            flags |= mods::CONTROL;
+        if let Some(page) = self.page() {
+            send_key(page, text, down, ctrl, shift, alt);
         }
-        if shift {
-            flags |= mods::SHIFT;
+    }
+}
+
+/// A page shown in a dialog (signing in to a platform): its input and the size it is drawn at.
+pub struct WebDialog {
+    page: PanelPage,
+    url: String,
+    held: bool,
+    size: (u32, u32),
+    shown: bool,
+}
+
+impl WebDialog {
+    pub fn new(id: &str, url: &str) -> Self {
+        Self {
+            page: PanelPage::new(id.to_owned()),
+            url: url.to_owned(),
+            held: false,
+            size: (0, 0),
+            shown: false,
         }
-        if alt {
-            flags |= mods::ALT;
+    }
+
+    /// The dialog's page area changed size: draw the page at exactly that size.
+    pub fn resized(&mut self, width: f32, height: f32) {
+        let size = (
+            width.max(0.0).round() as u32,
+            height.max(0.0).round() as u32,
+        );
+        if size != self.size && size.0 > 0 && size.1 > 0 {
+            self.size = size;
+            self.page.show(&self.url, size.0, size.1);
         }
-        let (code, ch) = key_code(text);
-        if code != 0 {
-            page.key(
-                if down { "down" } else { "up" },
-                code,
-                ch.unwrap_or(0),
-                flags,
-            );
-        }
-        // Text goes in as characters (not with Ctrl/Alt shortcuts).
-        if down
-            && !ctrl
-            && !alt
-            && let Some(c) = ch
-            && (c >= 0x20 || c == 0x0d)
-        {
-            page.key("char", code, c, flags);
-        }
+    }
+
+    pub fn pointer(&mut self, kind: &str, x: f32, y: f32, button: i32, dx: f32, dy: f32) {
+        hold(&mut self.held, kind, button);
+        send_pointer(&self.page, self.held, kind, x, y, button, dx, dy);
+    }
+
+    pub fn key(&mut self, text: &str, down: bool, ctrl: bool, shift: bool, alt: bool) {
+        send_key(&self.page, text, down, ctrl, shift, alt);
+    }
+
+    /// The newest frame (if one arrived), and what to show instead of the page ("" for none).
+    pub fn frame(&mut self) -> (Option<slint::Image>, String) {
+        let image = self.page.latest().map(|(width, height, rgba)| {
+            let buffer =
+                slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(rgba, width, height);
+            slint::Image::from_rgba8(buffer)
+        });
+        self.shown |= image.is_some();
+        let message = match self.page.error() {
+            Some(e) => format!("The page didn't load: {e}"),
+            None if !self.shown => "Loading…".to_owned(),
+            None => String::new(),
+        };
+        (image, message)
+    }
+}
+
+/// Tracks whether the left button is held (drags select text).
+pub fn hold(held: &mut bool, kind: &str, button: i32) {
+    match kind {
+        "down" if button == 0 => *held = true,
+        "up" if button == 0 => *held = false,
+        "leave" => *held = false,
+        _ => {}
+    }
+}
+
+/// A pointer event from the UI, in page pixels.
+#[allow(clippy::too_many_arguments)]
+pub fn send_pointer(
+    page: &PanelPage,
+    held: bool,
+    kind: &str,
+    x: f32,
+    y: f32,
+    button: i32,
+    dx: f32,
+    dy: f32,
+) {
+    page.mouse(Pointer {
+        kind,
+        x: x.round() as i32,
+        y: y.round() as i32,
+        button: button.clamp(0, 2) as u8,
+        clicks: 1,
+        dx: dx.round() as i32,
+        dy: dy.round() as i32,
+        mods: if held { mods::LEFT_BUTTON } else { 0 },
+    });
+}
+
+/// A key from the UI: `text` as Slint reports it.
+pub fn send_key(page: &PanelPage, text: &str, down: bool, ctrl: bool, shift: bool, alt: bool) {
+    let mut flags = 0;
+    if ctrl {
+        flags |= mods::CONTROL;
+    }
+    if shift {
+        flags |= mods::SHIFT;
+    }
+    if alt {
+        flags |= mods::ALT;
+    }
+    let (code, ch) = key_code(text);
+    if code != 0 {
+        page.key(
+            if down { "down" } else { "up" },
+            code,
+            ch.unwrap_or(0),
+            flags,
+        );
+    }
+    // Text goes in as characters (not with Ctrl/Alt shortcuts).
+    if down
+        && !ctrl
+        && !alt
+        && let Some(c) = ch
+        && (c >= 0x20 || c == 0x0d)
+    {
+        page.key("char", code, c, flags);
     }
 }
 
