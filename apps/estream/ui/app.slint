@@ -15,6 +15,7 @@ import { StatsDialog } from "stats.slint";
 import { ClipsDialog } from "clips.slint";
 import { MontageDialog } from "montage.slint";
 import { LiveDeck } from "deck.slint";
+import { Sidebar } from "sidebar.slint";
 import { GoLiveDialog } from "golive.slint";
 
 export { Theme }
@@ -146,6 +147,21 @@ export component AppWindow inherits Window {
     in property <[LiveRow]> live-rows;
     // The Live deck shows while a stream runs, unless the user chose to edit the layout.
     in-out property <bool> deck-edit;
+    /// The section shown beside the sidebar.
+    property <string> page: root.clips-open ? "clips" : root.montage-open ? "montages" : "studio";
+    property <length> sidebar-width: 76px;
+    /// Leaves Clips or Montages (whichever is open) for the studio.
+    function close-pages() {
+        if (root.clips-open) {
+            root.clips-action("close", 0, 0);
+            root.clips-open = false;
+        }
+        if (root.montage-open) {
+            root.montage-action("close", 0, 0);
+            root.montage-open = false;
+        }
+        main-keys.focus();
+    }
     property <bool> deck-visible: root.stream-state != 0 && !root.deck-edit && root.startup == "ready";
     changed stream-state => { if (root.stream-state == 0) { root.deck-edit = false; } }
     /// The clip hotkey (e.g. "F8"), shown on the deck's clip button.
@@ -285,9 +301,21 @@ export component AppWindow inherits Window {
             return EventResult.reject;
         }
 
+        HorizontalLayout {
+        width: parent.width;
+        height: parent.height;
+        Sidebar {
+            page: root.page;
+            open(p) => {
+                if (p == root.page) { return; }
+                root.close-pages();
+                if (p == "clips") { root.action("clips.open"); }
+                if (p == "montages") { root.action("montage.open"); }
+            }
+            open-settings => { root.action("settings"); }
+        }
         VerticalLayout {
-            width: parent.width;
-            height: parent.height;
+            horizontal-stretch: 1;
             TopBar {
                 collection-name: root.collection-name;
                 canvas-info: root.canvas-info;
@@ -498,6 +526,7 @@ export component AppWindow inherits Window {
                 open-stats => { root.action("stats"); }
             }
         }
+        }
 
         // Covers the studio while live (the studio stays as it is underneath).
         if root.deck-visible: LiveDeck {
@@ -615,6 +644,9 @@ export component AppWindow inherits Window {
     }
 
     if root.montage-open: MontageDialog {
+        as-page: true;
+        x: root.sidebar-width;
+        width: root.width - root.sidebar-width;
         form: root.montage-form;
         action(f, i, v) => { root.montage-action(f, i, v); }
         text(f, s) => { root.montage-text(f, s); }
@@ -627,6 +659,9 @@ export component AppWindow inherits Window {
     }
 
     if root.clips-open: ClipsDialog {
+        as-page: true;
+        x: root.sidebar-width;
+        width: root.width - root.sidebar-width;
         form: root.clips-form;
         action(f, i, v) => { root.clips-action(f, i, v); }
         text(f, s) => { root.clips-text(f, s); }

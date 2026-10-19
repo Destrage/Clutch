@@ -9,29 +9,32 @@ export component Modal inherits Rectangle {
     in property <length> card-width: 520px;
     in property <length> card-top: -1px;
     in property <bool> dismissable: true;
+    /// Shown as a full page (beside the sidebar) instead of a card over the studio.
+    in property <bool> as-page: false;
     out property <length> inner-width: card.width;
     callback dismiss();
 
-    background: Theme.scrim;
+    background: root.as-page ? Theme.bg : Theme.scrim;
     TouchArea {
         clicked => { if (root.dismissable) { root.dismiss(); } }
     }
     card := Rectangle {
-        x: (parent.width - self.width) / 2;
-        y: root.card-top >= 0 ? root.card-top : (parent.height - self.height) / 2;
-        width: min(root.card-width, parent.width - 40px);
-        height: content.preferred-height;
-        background: Theme.surface;
-        border-radius: Theme.radius-l;
-        border-width: 1px;
+        x: root.as-page ? 0px : (parent.width - self.width) / 2;
+        y: root.as-page ? 0px : root.card-top >= 0 ? root.card-top : (parent.height - self.height) / 2;
+        width: root.as-page ? parent.width : min(root.card-width, parent.width - 40px);
+        height: root.as-page ? parent.height : content.preferred-height;
+        background: root.as-page ? Theme.bg : Theme.surface;
+        border-radius: root.as-page ? 0px : Theme.radius-l;
+        border-width: root.as-page ? 0px : 1px;
         border-color: Theme.border-strong;
-        drop-shadow-blur: 40px;
+        drop-shadow-blur: root.as-page ? 0px : 40px;
         drop-shadow-offset-y: 12px;
         drop-shadow-color: #00000080;
         clip: true;
         accessible-role: groupbox;
         TouchArea { }
         content := VerticalLayout {
+            alignment: start;
             @children
         }
     }

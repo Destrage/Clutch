@@ -5,8 +5,8 @@
 - [x] 1.2 Bundle Jost and Figtree (OFL, licence files) and use them
 
 ## 2. Shell
-- [ ] 2.1 Sidebar (Studio, Clips, Montages, Chat, setup switcher, Settings), collapsible
-- [ ] 2.2 Clips and Montages as pages instead of dialogs
+- [x] 2.1 Sidebar (Studio, Clips, Montages, Chat, setup switcher, Settings), collapsible
+- [x] 2.2 Clips and Montages as pages instead of dialogs
 
 ## 3. Live deck
 - [x] 3.1 Live top bar: time, viewers placeholder, health, End stream, Edit layout

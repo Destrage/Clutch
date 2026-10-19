@@ -623,12 +623,12 @@ export component MontageDialog inherits Modal {
             horizontal-stretch: 1;
             overflow: elide;
         }
-        Button { text: "Done"; kind: "primary"; clicked => { root.dismiss(); } }
+        if !root.as-page: Button { text: "Done"; kind: "primary"; clicked => { root.dismiss(); } }
     }
     VerticalLayout {
         padding: 18px;
         padding-top: 8px;
-        height: 720px;
+        height: root.as-page ? max(600px, root.height - 70px) : 720px;
         if root.form.page == "home": HomePage {
             form: root.form;
             action(f, i, v) => { root.action(f, i, v); }

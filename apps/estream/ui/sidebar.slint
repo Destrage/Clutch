@@ -1,0 +1,98 @@
+// The app's sections down the left edge: Studio, Clips, Montages, with Settings at the bottom.
+
+import { Theme } from "theme.slint";
+import { Icons } from "icons.slint";
+import { Icon, Hint } from "widgets.slint";
+
+component NavItem inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> current;
+    /// A small count on the icon (0 = none).
+    in property <int> badge;
+    callback clicked;
+    width: 64px;
+    height: 58px;
+    border-radius: Theme.radius-m;
+    background: root.current ? Theme.surface-2 : ta.has-hover ? Theme.hover : transparent;
+    accessible-role: tab;
+    accessible-label: root.label;
+    accessible-checked: root.current;
+    VerticalLayout {
+        alignment: center;
+        spacing: 4px;
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: 22px;
+                height: 22px;
+                Icon { source: root.icon; size: 20px; tint: root.current ? Theme.accent : Theme.text-muted; }
+                if root.badge > 0: Rectangle {
+                    x: 14px;
+                    y: -5px;
+                    width: max(16px, count.preferred-width + 8px);
+                    height: 16px;
+                    border-radius: 8px;
+                    background: Theme.accent;
+                    count := Text { text: root.badge; color: Theme.on-accent; font-size: 10px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+                }
+            }
+        }
+        Text {
+            text: root.label;
+            color: root.current ? Theme.text : Theme.text-muted;
+            font-size: Theme.font-xs;
+            font-weight: root.current ? 600 : 500;
+            horizontal-alignment: center;
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component Sidebar inherits Rectangle {
+    /// "studio" | "clips" | "montages"
+    in property <string> page;
+    /// New clips since the Clips page was last opened.
+    in property <int> new-clips;
+    callback open(string);
+    callback open-settings();
+
+    width: 76px;
+    background: Theme.bg;
+    accessible-role: tab-list;
+    accessible-label: "Sections";
+
+    // A hairline between the sidebar and the page.
+    Rectangle {
+        x: parent.width - 1px;
+        width: 1px;
+        background: Theme.border;
+    }
+    VerticalLayout {
+        padding-top: 10px;
+        padding-bottom: 10px;
+        spacing: 4px;
+        alignment: start;
+        HorizontalLayout {
+            alignment: center;
+            NavItem { icon: Icons.monitor; label: "Studio"; current: root.page == "studio"; clicked => { root.open("studio"); } }
+        }
+        HorizontalLayout {
+            alignment: center;
+            NavItem { icon: Icons.film; label: "Clips"; badge: root.new-clips; current: root.page == "clips"; clicked => { root.open("clips"); } }
+        }
+        HorizontalLayout {
+            alignment: center;
+            NavItem { icon: Icons.sparkles; label: "Montages"; current: root.page == "montages"; clicked => { root.open("montages"); } }
+        }
+    }
+    HorizontalLayout {
+        y: parent.height - self.height - 10px;
+        height: 58px;
+        alignment: center;
+        NavItem { icon: Icons.settings; label: "Settings"; clicked => { root.open-settings(); } }
+    }
+}
