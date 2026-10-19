@@ -382,6 +382,9 @@ impl VideoCore {
                                     "source type '{kind}' is not installed"
                                 )),
                             ),
+                            Err(crate::source::SourceError::Unavailable(reason)) => {
+                                (None, SourceStatus::Unavailable(reason))
+                            }
                             Err(e) => (None, SourceStatus::Error(e.to_string())),
                         };
                     if !matches!(status, SourceStatus::Active) {

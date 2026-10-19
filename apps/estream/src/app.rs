@@ -7809,6 +7809,7 @@ fn source_types(registry: &estream_engine::SourceRegistry) -> Vec<SourceType> {
                 .iter()
                 .filter(|t| !order.contains(&t.kind.as_str())),
         )
+        .filter(|t| t.is_available())
         .map(|t| SourceType {
             kind: t.kind.clone().into(),
             title: t.name.clone().into(),

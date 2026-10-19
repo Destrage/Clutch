@@ -27,7 +27,8 @@ pub use engine::{Engine, EngineConfig, EngineError, Event, Origin, Subscription,
 pub use feed::VideoFrame;
 pub use properties::{PropKind, Property, PropertySchema, SelectOption};
 pub use source::{
-    SourceContext, SourceError, SourceFrame, SourceRegistry, SourceStatus, SourceType, VideoSource,
+    NOT_ON_THIS_SYSTEM, SourceContext, SourceError, SourceFrame, SourceRegistry, SourceStatus,
+    SourceType, VideoSource,
 };
 pub use video::{CanvasFrame, CanvasOutput, SourceInfo, VideoCore};
 

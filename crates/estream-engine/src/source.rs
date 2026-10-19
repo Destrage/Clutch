@@ -17,7 +17,13 @@ pub enum SourceError {
     UnknownKind(String),
     #[error("invalid settings: {0}")]
     Settings(String),
+    /// The type exists, but not on this system (e.g. game capture on Linux).
+    #[error("{0}")]
+    Unavailable(String),
 }
+
+/// Status text of a source whose type another system has but this one doesn't.
+pub const NOT_ON_THIS_SYSTEM: &str = "Not available on this system";
 
 /// GPU resources available to sources.
 pub struct SourceContext<'a> {
@@ -67,6 +73,8 @@ pub struct SourceType {
     validation: Option<Arc<SchemaFn>>,
     factory: Option<Arc<Factory>>,
     audio: Option<Arc<AudioFactory>>,
+    /// Why sources of this type can't run here (a placeholder for another system's type).
+    unavailable: Option<String>,
 }
 
 impl SourceType {
@@ -88,6 +96,7 @@ impl SourceType {
             validation: None,
             factory: Some(Arc::new(factory)),
             audio: None,
+            unavailable: None,
         }
     }
 
@@ -107,7 +116,41 @@ impl SourceType {
             validation: None,
             factory: None,
             audio: Some(Arc::new(factory)),
+            unavailable: None,
         }
+    }
+
+    /// A type another system has but this one doesn't. Its sources load, keep their settings
+    /// and show [`NOT_ON_THIS_SYSTEM`]; a video type keeps its place in scenes, an audio-only
+    /// type its channel (silent).
+    pub fn unavailable(kind: &str, name: &str, description: &str, video: bool) -> Self {
+        let reason = NOT_ON_THIS_SYSTEM.to_owned();
+        let mut t = if video {
+            let reason = reason.clone();
+            Self::new(
+                kind,
+                name,
+                description,
+                |_| PropertySchema::new(vec![]),
+                move |_, _| Err(SourceError::Unavailable(reason.clone())),
+            )
+        } else {
+            let reason = reason.clone();
+            Self::audio(
+                kind,
+                name,
+                description,
+                |_| PropertySchema::new(vec![]),
+                move |_| Ok(Box::new(UnavailableAudio(reason.clone()))),
+            )
+        };
+        t.unavailable = Some(reason);
+        t
+    }
+
+    /// `false` for [`SourceType::unavailable`] placeholders.
+    pub fn is_available(&self) -> bool {
+        self.unavailable.is_none()
     }
 
     /// Adds an audio part to a video source type.
@@ -259,6 +302,23 @@ impl SourceRegistry {
     ) -> Option<Result<Box<dyn AudioSource>, String>> {
         let factory = self.get(kind)?.audio.as_ref()?;
         Some(factory(settings))
+    }
+}
+
+/// The silent audio part of an unavailable audio-only type.
+struct UnavailableAudio(String);
+
+impl AudioSource for UnavailableAudio {
+    fn update(&mut self, _: &Value) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn read(&mut self, _: &mut estream_audio::Block, _: Timestamp) -> usize {
+        0
+    }
+
+    fn status(&self) -> SourceStatus {
+        SourceStatus::Unavailable(self.0.clone())
     }
 }
 

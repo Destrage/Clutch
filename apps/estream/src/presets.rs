@@ -137,7 +137,7 @@ pub fn summary(purpose: Purpose, d: &Detected) -> Vec<String> {
     }
     if !camera_first {
         lines.push(format!("Screen: {screen}"));
-        if purpose == Purpose::Gaming {
+        if purpose == Purpose::Gaming && cfg!(windows) {
             lines.push("Your game and its sound, whenever one is fullscreen".into());
         }
         if let Some((_, name)) = &d.camera {
@@ -211,13 +211,16 @@ pub fn build_project(purpose: Purpose, preset: CanvasPreset, d: &Detected) -> Pr
         Purpose::Gaming => {
             project.scenes[0].name = "Gameplay".into();
             screen(&mut project, &mut add);
-            add(
-                &mut project,
-                "Game",
-                "game_capture",
-                serde_json::json!({ "mode": "auto", "cursor": false }),
-                fit(BoundsMode::Fit),
-            );
+            // Elsewhere the screen capture shows the game.
+            if cfg!(windows) {
+                add(
+                    &mut project,
+                    "Game",
+                    "game_capture",
+                    serde_json::json!({ "mode": "auto", "cursor": false }),
+                    fit(BoundsMode::Fit),
+                );
+            }
             if let Some((n, k, s, t)) = camera(corner()) {
                 add(&mut project, n, k, s, t);
             }
@@ -304,7 +307,11 @@ mod tests {
     fn purposes_build_ready_scenes() {
         let d = detected(true);
         let g = build_project(Purpose::Gaming, Purpose::Gaming.preset(), &d);
-        assert_eq!(kinds(&g), ["display_capture", "game_capture", "camera"]);
+        if cfg!(windows) {
+            assert_eq!(kinds(&g), ["display_capture", "game_capture", "camera"]);
+        } else {
+            assert_eq!(kinds(&g), ["display_capture", "camera"]);
+        }
         assert_eq!(g.canvases[0].fps, Rational::fps(60));
         let mic = g.sources.iter().find(|s| s.kind == "audio_input").unwrap();
         assert!(mic.audio.global);

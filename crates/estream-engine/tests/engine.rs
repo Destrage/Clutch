@@ -5,7 +5,8 @@ use estream_core::{Alignment, BoundsMode, EngineClock, ItemTransform, Rational, 
 use estream_engine::frame_clock::{FrameClock, wait_until};
 use estream_engine::graph::RenderGraph;
 use estream_engine::{
-    Command, Engine, EngineConfig, Event, ItemPatch, SourceRegistry, SourceStatus, VideoCore,
+    Command, Engine, EngineConfig, Event, ItemPatch, NOT_ON_THIS_SYSTEM, SourceRegistry,
+    SourceStatus, SourceType, VideoCore,
 };
 use estream_gpu::{GpuContext, GpuOptions, readback};
 use estream_project::{Canvas, Project, Scene, SceneItem, SourceDef, persist};
@@ -275,6 +276,56 @@ fn unknown_source_type_is_unavailable_not_fatal() {
         ),
         Duration::from_secs(2)
     ));
+}
+
+#[test]
+fn other_systems_source_type_loads_as_not_available() {
+    let mut registry = SourceRegistry::with_builtins();
+    registry.register(SourceType::unavailable(
+        "game_capture",
+        "Game capture",
+        "",
+        true,
+    ));
+    registry.register(SourceType::unavailable(
+        "app_audio",
+        "Application audio",
+        "",
+        false,
+    ));
+    let engine = Engine::start(
+        Project::new_default(320, 180, Rational::fps(30)),
+        EngineConfig {
+            registry,
+            ..config()
+        },
+    )
+    .unwrap();
+    let settings = serde_json::json!({ "mode": "auto", "cursor": false });
+    let (source, _) = add_fullscreen(&engine, "game_capture", settings.clone());
+    assert!(wait_for(
+        || engine.source_status(source)
+            == Some(SourceStatus::Unavailable(NOT_ON_THIS_SYSTEM.into())),
+        Duration::from_secs(2)
+    ));
+    // Kept as it was, so the project still works on the system that has it.
+    let snapshot = engine.snapshot();
+    let def = snapshot.source(source).unwrap();
+    assert_eq!(
+        (def.kind.as_str(), &def.settings),
+        ("game_capture", &settings)
+    );
+
+    let audio = engine
+        .registry()
+        .create_audio("app_audio", &settings)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        audio.status(),
+        SourceStatus::Unavailable(NOT_ON_THIS_SYSTEM.into())
+    );
+    assert!(!engine.registry().get("app_audio").unwrap().is_available());
 }
 
 #[test]

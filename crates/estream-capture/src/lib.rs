@@ -8,7 +8,7 @@ pub mod media;
 #[cfg(windows)]
 pub mod windows;
 
-use estream_engine::SourceRegistry;
+use estream_engine::{SourceRegistry, SourceType};
 
 #[derive(Debug, thiserror::Error)]
 pub enum CaptureError {
@@ -21,10 +21,50 @@ pub enum CaptureError {
     Windows(#[from] ::windows::core::Error),
 }
 
-/// Registers every capture/media source type supported on this platform.
+/// Capture types some system has: `(kind, name, description, has video)`. Projects carry
+/// them between systems, so where one isn't supported it still loads, as unavailable.
+const PLATFORM_TYPES: &[(&str, &str, &str, bool)] = &[
+    (
+        "display_capture",
+        "Display capture",
+        "Capture an entire monitor",
+        true,
+    ),
+    (
+        "window_capture",
+        "Window capture",
+        "Capture a single application window",
+        true,
+    ),
+    (
+        "game_capture",
+        "Game capture",
+        "Capture fullscreen and borderless games",
+        true,
+    ),
+    (
+        "camera",
+        "Video capture device",
+        "Webcams and capture cards",
+        true,
+    ),
+    (
+        "app_audio",
+        "Application audio",
+        "Capture one app's audio (games, browsers, music players)",
+        false,
+    ),
+];
+
+/// Registers every capture/media source type supported on this platform, and unavailable
+/// placeholders for the [`PLATFORM_TYPES`] it doesn't support.
 pub fn register_all(registry: &mut SourceRegistry) {
     media::register(registry);
     #[cfg(windows)]
     windows::register(registry);
-    let _ = registry;
+    for &(kind, name, description, video) in PLATFORM_TYPES {
+        if registry.get(kind).is_none() {
+            registry.register(SourceType::unavailable(kind, name, description, video));
+        }
+    }
 }
