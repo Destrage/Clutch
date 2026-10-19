@@ -268,6 +268,21 @@ fn open_url(url: &str) -> std::io::Result<()> {
     std::process::Command::new(opener).arg(url).spawn().map(|_| ())
 }
 
+/// Shown on monitored sounds while Desktop Audio can't leave out Clutch's own playback.
+const DOUBLE_AUDIO: &str = "Desktop Audio sends this to the stream a second time while it leaves out the game's sound. Turn off Hear on my speakers, or mute Desktop Audio.";
+
+/// Whether Desktop Audio is leaving out a game or app, so it also captures Clutch's own playback.
+fn desktop_audio_busy_leaving_out() -> bool {
+    #[cfg(windows)]
+    {
+        estream_capture::windows::capture_audio::desktop_audio_busy_leaving_out()
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 /// The Stream section of the settings form: the destination list and the selected
 /// destination's editor fields (other fields left default).
 fn stream_form(
@@ -2246,7 +2261,11 @@ impl App {
             &source_type.name,
             snapshot.sources.iter().map(|s| s.name.as_str()),
         );
-        let source = SourceDef::new(name, kind, settings);
+        let mut source = SourceDef::new(name, kind, settings);
+        // Media and pages are heard by the streamer too (Desktop Audio leaves that playback out).
+        if matches!(kind, "media" | "browser") {
+            source.audio.monitoring = Monitoring::MonitorAndOutput;
+        }
         let mut item = SceneItem::source(source.id);
         item.transform = transform;
         let item_id = item.id;
@@ -4559,6 +4578,19 @@ impl App {
             tracks: a.tracks as i32,
             global: a.global,
             filters: ModelRc::new(VecModel::from(filters)),
+            problem: if a.monitoring != Monitoring::Off
+                && source.kind != "audio_output"
+                && desktop_audio_busy_leaving_out()
+                && snapshot
+                    .sources
+                    .iter()
+                    .any(|s| s.kind == "audio_output" && !s.audio.muted)
+            {
+                DOUBLE_AUDIO.into()
+            } else {
+                SharedString::new()
+            },
+            name: source.name.clone().into(),
         }
     }
 
@@ -6121,6 +6153,13 @@ impl App {
                 ..Default::default()
             }
         };
+        // While Desktop Audio leaves out a game, it captures what Clutch plays to the speakers.
+        let echo = desktop_audio_busy_leaving_out()
+            && meters.sources.iter().any(|(id, _)| {
+                snapshot
+                    .source(*id)
+                    .is_some_and(|d| d.kind == "audio_output" && !d.audio.muted)
+            });
         let strips: Vec<MixerStrip> = meters
             .sources
             .iter()
@@ -6145,6 +6184,9 @@ impl App {
                 s.monitoring = def.audio.monitoring != Monitoring::Off;
                 s.selected = Some(*id) == current;
                 s.problem = status_problem(infos.get(id)).into();
+                if s.problem.is_empty() && s.monitoring && echo && def.kind != "audio_output" {
+                    s.problem = DOUBLE_AUDIO.into();
+                }
                 Some(s)
             })
             .collect();
@@ -6777,6 +6819,7 @@ impl App {
             }
             Action::Deselect => {
                 self.selection = None;
+                self.selected_source = None;
                 self.refresh();
             }
             Action::ToggleRecording => self.toggle_recording(),

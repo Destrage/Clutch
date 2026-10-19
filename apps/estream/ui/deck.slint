@@ -1,13 +1,14 @@
 // The Live deck: what the studio shows while a stream is running. Big, glanceable controls:
 // stream time and platforms, the program picture with a clip button, scene buttons with
-// F-key shortcuts, and sound faders.
+// F-key shortcuts, and sound knobs (whose names open the sound's settings over the deck).
 
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
-import { SceneRow, MixerStrip, LiveRow } from "types.slint";
-import { Button, Icon, Hint } from "widgets.slint";
+import { SceneRow, MixerStrip, LiveRow, AudioInspect } from "types.slint";
+import { Button, Icon, IconButton, Hint } from "widgets.slint";
 import { ProgramView } from "panels.slint";
 import { ChatPanel, ChatTabRow } from "chat.slint";
+import { SoundKnob, AudioSettings } from "sound.slint";
 
 // One platform's state in the top bar.
 component PlatformChip inherits Rectangle {
@@ -78,88 +79,6 @@ component SceneButton inherits Rectangle {
     }
 }
 
-// A tall fader with a level meter behind it.
-component DeckFader inherits Rectangle {
-    in property <MixerStrip> strip;
-    callback fader(float);
-    callback commit();
-    callback toggle-mute();
-    width: 96px;
-    accessible-role: slider;
-    accessible-label: strip.name + " volume";
-    accessible-value: round(strip.volume-db * 10) / 10 + " dB";
-
-    VerticalLayout {
-        spacing: 8px;
-        alignment: end;
-        track := Rectangle {
-            height: 120px;
-            width: 96px;
-            // The slot, with the live level filling it from the bottom.
-            Rectangle {
-                x: (parent.width - self.width) / 2;
-                width: 10px;
-                height: parent.height;
-                border-radius: 5px;
-                background: Theme.surface-3;
-                Rectangle {
-                    y: parent.height - self.height;
-                    height: parent.height * max(root.strip.level-l, root.strip.level-r);
-                    border-radius: 5px;
-                    background: root.strip.muted ? Theme.text-faint : max(root.strip.level-l, root.strip.level-r) > 0.92 ? Theme.live : Theme.ok;
-                }
-            }
-            // The knob at the fader position.
-            Rectangle {
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) * (1 - root.strip.fader);
-                width: 32px;
-                height: 14px;
-                border-radius: 7px;
-                background: root.strip.muted ? Theme.text-faint : Theme.text;
-                drop-shadow-blur: 6px;
-                drop-shadow-color: #00000060;
-            }
-            TouchArea {
-                mouse-cursor: MouseCursor.ns-resize;
-                moved => {
-                    if (self.pressed) {
-                        root.fader(clamp(1 - self.mouse-y / parent.height, 0, 1));
-                    }
-                }
-                pointer-event(e) => {
-                    if (e.kind == PointerEventKind.down) {
-                        root.fader(clamp(1 - self.mouse-y / parent.height, 0, 1));
-                    } else if (e.kind == PointerEventKind.up) {
-                        root.commit();
-                    }
-                }
-            }
-        }
-        HorizontalLayout {
-            alignment: center;
-            spacing: 6px;
-            Rectangle {
-                width: 28px;
-                height: 28px;
-                border-radius: 14px;
-                background: mute-ta.has-hover ? Theme.hover : transparent;
-                accessible-role: button;
-                accessible-label: root.strip.muted ? "Unmute " + root.strip.name : "Mute " + root.strip.name;
-                Icon { source: root.strip.muted ? Icons.volume-x : Icons.volume; size: 16px; tint: root.strip.muted ? Theme.live : Theme.text-muted; }
-                mute-ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.toggle-mute(); } }
-            }
-        }
-        Text {
-            text: root.strip.name;
-            color: root.strip.muted ? Theme.text-muted : Theme.text;
-            font-size: Theme.font-s;
-            horizontal-alignment: center;
-            overflow: elide;
-        }
-    }
-}
-
 export component LiveDeck inherits Rectangle {
     in property <image> frame;
     in property <float> canvas-w: 1920;
@@ -185,6 +104,17 @@ export component LiveDeck inherits Rectangle {
     callback toggle-record();
     callback end-stream();
     callback edit-layout();
+    // A sound's settings over the deck (opened by clicking its name under the knob).
+    in property <AudioInspect> audio;
+    in-out property <bool> sound-open;
+    callback open-sound(string);
+    callback close-sound();
+    callback audio-set(string, float);
+    callback filter-add(int);
+    callback filter-remove(string);
+    callback filter-toggle(string, bool);
+    callback filter-param(string, string, float);
+    callback filter-move(string, bool);
     // The chat column.
     in property <[ChatTabRow]> chat-tabs;
     in property <int> chat-selected;
@@ -360,7 +290,7 @@ export component LiveDeck inherits Rectangle {
                 }
                 // Sound and recording.
                 Rectangle {
-                    height: 200px;
+                    height: 124px;
                     border-radius: Theme.radius-l;
                     background: Theme.surface;
                     border-width: 1px;
@@ -368,11 +298,19 @@ export component LiveDeck inherits Rectangle {
                     HorizontalLayout {
                         padding: 14px;
                         spacing: 4px;
-                        for strip in root.strips: DeckFader {
-                            strip: strip;
-                            fader(v) => { root.fader(strip.id, v); }
-                            commit => { root.commit(); }
-                            toggle-mute => { root.toggle-mute(strip.id); }
+                        for strip in root.strips: VerticalLayout {
+                            alignment: center;
+                            SoundKnob {
+                                strip: strip;
+                                size: 60px;
+                                fader(v) => { root.fader(strip.id, v); }
+                                commit => { root.commit(); }
+                                toggle-mute => { root.toggle-mute(strip.id); }
+                                open-settings => {
+                                    root.open-sound(strip.id);
+                                    root.sound-open = true;
+                                }
+                            }
                         }
                         Rectangle { horizontal-stretch: 1; }
                         VerticalLayout {
@@ -445,6 +383,70 @@ export component LiveDeck inherits Rectangle {
                                 overflow: elide;
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    // The sound's settings, over the left of the deck.
+    if root.sound-open && root.audio.has: Rectangle {
+        x: 16px;
+        y: 76px;
+        width: min(380px, root.width - 32px);
+        height: root.height - self.y - 156px;
+        background: Theme.surface;
+        border-radius: Theme.radius-l;
+        border-width: 1px;
+        border-color: Theme.border-strong;
+        drop-shadow-blur: 24px;
+        drop-shadow-color: #00000070;
+        clip: true;
+        TouchArea {}
+        VerticalLayout {
+            HorizontalLayout {
+                height: 44px;
+                padding-left: 14px;
+                padding-right: 8px;
+                Text {
+                    text: root.audio.name;
+                    color: Theme.text;
+                    font-size: Theme.font-l;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    IconButton {
+                        icon: Icons.x;
+                        tooltip: "Close (Esc)";
+                        size: 28px;
+                        icon-size: 14px;
+                        clicked => {
+                            root.sound-open = false;
+                            root.close-sound();
+                        }
+                    }
+                }
+            }
+            Rectangle { height: 1px; background: Theme.border; }
+            Flickable {
+                vertical-stretch: 1;
+                content-height: sound-body.preferred-height;
+                sound-body := VerticalLayout {
+                    padding: 14px;
+                    alignment: start;
+                    AudioSettings {
+                        audio: root.audio;
+                        audio-set(k, v) => { root.audio-set(k, v); }
+                        filter-add(i) => { root.filter-add(i); }
+                        filter-remove(id) => { root.filter-remove(id); }
+                        filter-toggle(id, v) => { root.filter-toggle(id, v); }
+                        filter-param(id, k, v) => { root.filter-param(id, k, v); }
+                        filter-move(id, up) => { root.filter-move(id, up); }
+                        commit => { root.commit(); }
                     }
                 }
             }

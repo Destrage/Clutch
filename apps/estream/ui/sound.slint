@@ -1,0 +1,345 @@
+// Sound controls shared by the Stage and the Live deck: a knob per source, and a source's audio
+// settings (volume, hearing it, tracks, filters).
+
+import { Theme } from "theme.slint";
+import { Icons } from "icons.slint";
+import { MixerStrip, AudioInspect } from "types.slint";
+import { Icon, IconButton, NumberField, Toggle, Slider, Select, SectionTitle, Hint } from "widgets.slint";
+
+// A source's sound as a knob. The ring shows the volume (-60 dB to 0 dB) and the live level glows
+// inside. Click mutes, dragging up/down or scrolling sets the volume, double-click goes back to
+// 0 dB, and the name opens the sound's settings.
+export component SoundKnob inherits Rectangle {
+    in property <MixerStrip> strip;
+    in property <length> size: 52px;
+    callback fader(float);
+    callback commit();
+    callback toggle-mute();
+    callback open-settings();
+
+    property <float> level: root.strip.muted ? 0 : max(root.strip.level-l, root.strip.level-r);
+    // Dragging: where it started, and whether the pointer moved far enough to count.
+    property <float> start-fader;
+    property <length> start-y;
+    property <bool> dragging;
+    // The release that ends a drag isn't also a click.
+    property <bool> drag-ended;
+    // A click waits briefly, so a double-click doesn't mute and unmute.
+    property <bool> pending-mute;
+    property <bool> scrolled;
+    // How far to drag for the whole range.
+    property <length> travel: 160px;
+    property <float> f: clamp(root.strip.fader, 0, 1);
+    property <color> tone: root.strip.muted ? Theme.text-faint : root.level > 0.92 ? Theme.live : Theme.accent;
+
+    pure function db-text() -> string {
+        if (root.strip.fader <= 0.005) { return "-∞ dB"; }
+        return round(root.strip.volume-db * 10) / 10 + " dB";
+    }
+
+    width: max(root.size + 20px, 76px);
+    accessible-role: slider;
+    accessible-label: root.strip.name + " volume";
+    accessible-value: root.strip.muted ? "muted" : root.db-text();
+    accessible-action-default => { root.toggle-mute(); }
+    accessible-action-increment => { root.fader(min(1, root.f + 0.05)); root.commit(); }
+    accessible-action-decrement => { root.fader(max(0, root.f - 0.05)); root.commit(); }
+
+    VerticalLayout {
+        spacing: 4px;
+        alignment: start;
+        HorizontalLayout {
+            alignment: center;
+            dial := Rectangle {
+                width: root.size;
+                height: root.size;
+                // The ring: 270°, open at the bottom.
+                Path {
+                    width: 100%;
+                    height: 100%;
+                    viewbox-width: 100;
+                    viewbox-height: 100;
+                    commands: "M 18.9 81.1 A 44 44 0 1 1 81.1 81.1";
+                    stroke: Theme.surface-3;
+                    stroke-width: 4px;
+                    fill: transparent;
+                }
+                // The volume, along the ring.
+                if root.f > 0.005: Path {
+                    property <angle> end: (135 + 270 * root.f) * 1deg;
+                    width: 100%;
+                    height: 100%;
+                    viewbox-width: 100;
+                    viewbox-height: 100;
+                    commands: "M 18.9 81.1 A 44 44 0 " + (root.f > 2 / 3 ? 1 : 0) + " 1 " + (50 + 44 * cos(self.end)) + " " + (50 + 44 * sin(self.end));
+                    stroke: root.tone;
+                    stroke-width: 4px;
+                    fill: transparent;
+                }
+                // The face, glowing with the live level.
+                Rectangle {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: parent.width - 16px;
+                    height: self.width;
+                    border-radius: self.width / 2;
+                    background: ta.has-hover || root.dragging ? Theme.surface-2 : Theme.surface;
+                    border-width: 2px;
+                    border-color: root.strip.muted ? Theme.border : root.level > 0.02 ? Theme.ok.with-alpha(0.35 + 0.65 * root.level) : Theme.border-strong;
+                    drop-shadow-blur: root.level > 0.02 ? 10px * root.level : 0px;
+                    drop-shadow-color: Theme.ok.with-alpha(0.5);
+                    Icon {
+                        source: root.strip.muted ? Icons.volume-x
+                            : root.strip.kind == "audio_input" ? Icons.mic
+                            : root.strip.kind == "game_capture" ? Icons.gamepad
+                            : Icons.volume;
+                        size: root.size * 0.36;
+                        tint: root.strip.muted ? Theme.live : Theme.text;
+                    }
+                }
+                // Something needs attention (unavailable, or heard twice).
+                if root.strip.problem != "": Rectangle {
+                    x: parent.width - 12px;
+                    y: 2px;
+                    width: 10px;
+                    height: 10px;
+                    border-radius: 5px;
+                    background: Theme.warn;
+                }
+                ta := TouchArea {
+                    mouse-cursor: root.dragging ? MouseCursor.ns-resize : MouseCursor.pointer;
+                    pointer-event(e) => {
+                        if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                            root.start-fader = root.f;
+                            root.start-y = self.mouse-y;
+                            root.dragging = false;
+                            root.drag-ended = false;
+                        } else if (e.kind == PointerEventKind.up && root.dragging) {
+                            root.dragging = false;
+                            root.drag-ended = true;
+                            root.commit();
+                        }
+                    }
+                    moved => {
+                        if (self.pressed) {
+                            if (!root.dragging && abs(self.mouse-y - root.start-y) > 3px) {
+                                root.dragging = true;
+                                root.pending-mute = false;
+                                Hint.text = "";
+                            }
+                            if (root.dragging) {
+                                root.fader(clamp(root.start-fader + (root.start-y - self.mouse-y) / root.travel, 0, 1));
+                            }
+                        }
+                    }
+                    clicked => {
+                        if (!root.drag-ended) {
+                            root.pending-mute = true;
+                        }
+                    }
+                    double-clicked => {
+                        root.pending-mute = false;
+                        root.fader(1);
+                        root.commit();
+                    }
+                    scroll-event(e) => {
+                        root.fader(clamp(root.f + (e.delta-y > 0 ? 0.03 : -0.03), 0, 1));
+                        root.scrolled = true;
+                        return EventResult.accept;
+                    }
+                    changed has-hover => {
+                        if (self.has-hover && !root.dragging) {
+                            Hint.text = root.strip.problem != "" ? root.strip.problem
+                                : root.strip.name + " · " + root.db-text() + " · click to " + (root.strip.muted ? "unmute" : "mute") + ", drag for volume";
+                            Hint.x = root.absolute-position.x + root.width / 2;
+                            Hint.y = root.absolute-position.y - 28px;
+                        } else {
+                            Hint.text = "";
+                        }
+                    }
+                }
+            }
+        }
+        // The name opens the settings; while dragging it shows the volume.
+        Rectangle {
+            height: name.preferred-height + 4px;
+            border-radius: Theme.radius-s;
+            background: name-ta.has-hover ? Theme.hover : transparent;
+            accessible-role: button;
+            accessible-label: root.strip.name + " settings";
+            accessible-action-default => { root.open-settings(); }
+            name := Text {
+                width: parent.width - 4px;
+                text: root.dragging || root.scrolled ? root.db-text() : root.strip.name;
+                color: root.strip.muted ? Theme.text-muted : Theme.text;
+                font-size: Theme.font-xs;
+                horizontal-alignment: center;
+                overflow: elide;
+            }
+            name-ta := TouchArea {
+                mouse-cursor: MouseCursor.pointer;
+                clicked => { root.open-settings(); }
+            }
+        }
+    }
+
+    Timer {
+        interval: 250ms;
+        running: root.pending-mute;
+        triggered => {
+            root.pending-mute = false;
+            root.toggle-mute();
+        }
+    }
+    // Scrolling ends as one undo step, shortly after the last turn.
+    Timer {
+        interval: 600ms;
+        running: root.scrolled;
+        triggered => {
+            root.scrolled = false;
+            root.commit();
+        }
+    }
+}
+
+// A source's audio settings: volume, hearing it, balance, tracks and filters.
+export component AudioSettings inherits VerticalLayout {
+    in property <AudioInspect> audio;
+    callback audio-set(string, float);
+    callback filter-add(int);
+    callback filter-remove(string);
+    callback filter-toggle(string, bool);
+    callback filter-param(string, string, float);
+    callback filter-move(string, bool);
+    callback commit();
+
+    spacing: 10px;
+    SectionTitle { text: "AUDIO"; }
+    HorizontalLayout {
+        spacing: 8px;
+        NumberField { label: "dB"; value: root.audio.volume-db; step: 0.5; decimals: 1; minimum: -100; maximum: 26; changed(v) => { root.audio-set("volume", v); } committed => { root.commit(); } }
+        Toggle { label: "Mute"; checked: root.audio.muted; toggled(v) => { root.audio-set("muted", v ? 1 : 0); } }
+    }
+    // Hearing it locally: off, on (and on the stream), or only for the streamer.
+    HorizontalLayout {
+        spacing: 16px;
+        Toggle {
+            label: "Hear on my speakers";
+            checked: root.audio.monitoring != 0;
+            toggled(v) => { root.audio-set("monitoring", v ? 2 : 0); }
+        }
+        if root.audio.monitoring != 0: Toggle {
+            label: "Only me";
+            checked: root.audio.monitoring == 1;
+            toggled(v) => { root.audio-set("monitoring", v ? 1 : 2); }
+        }
+    }
+    if root.audio.monitoring == 1: Text {
+        text: "Only you hear this; it isn't sent to the stream or recordings.";
+        color: Theme.text-faint;
+        font-size: Theme.font-xs;
+        wrap: word-wrap;
+    }
+    if root.audio.problem != "": Rectangle {
+        border-radius: Theme.radius-m;
+        background: Theme.warn.with-alpha(0.12);
+        height: problem-text.preferred-height + 16px;
+        problem-text := Text {
+            x: 8px;
+            width: parent.width - 16px;
+            text: root.audio.problem;
+            color: Theme.text;
+            font-size: Theme.font-xs;
+            wrap: word-wrap;
+            vertical-alignment: center;
+        }
+    }
+    HorizontalLayout {
+        spacing: 10px;
+        Text { text: "Balance"; color: Theme.text-muted; font-size: Theme.font-s; vertical-alignment: center; width: 56px; }
+        Slider { label: "Balance"; value: root.audio.balance; changed(v) => { root.audio-set("balance", v); } committed => { root.commit(); } }
+        Text {
+            text: abs(root.audio.balance - 0.5) < 0.01 ? "C" : root.audio.balance < 0.5 ? "L" + round((0.5 - root.audio.balance) * 200) : "R" + round((root.audio.balance - 0.5) * 200);
+            color: Theme.text-muted; font-size: Theme.font-s; vertical-alignment: center; width: 36px; horizontal-alignment: right;
+        }
+    }
+    HorizontalLayout {
+        spacing: 16px;
+        Toggle { label: "Mono"; checked: root.audio.mono; toggled(v) => { root.audio-set("mono", v ? 1 : 0); } }
+        Toggle { label: "All scenes"; checked: root.audio.global; toggled(v) => { root.audio-set("global", v ? 1 : 0); } }
+    }
+    HorizontalLayout {
+        spacing: 10px;
+        Text { text: "Sync offset"; color: Theme.text-muted; font-size: Theme.font-s; vertical-alignment: center; width: 80px; }
+        NumberField { label: "ms"; value: root.audio.sync-ms; step: 10; minimum: 0; maximum: 2000; changed(v) => { root.audio-set("sync", v); } committed => { root.commit(); } }
+    }
+    HorizontalLayout {
+        spacing: 4px;
+        Text { text: "Tracks"; color: Theme.text-muted; font-size: Theme.font-s; vertical-alignment: center; width: 80px; }
+        for t in [0, 1, 2, 3, 4, 5]: Rectangle {
+            property <bool> on: mod(floor(root.audio.tracks / pow(2, t)), 2) == 1;
+            width: 26px;
+            height: 24px;
+            border-radius: Theme.radius-s;
+            background: on ? Theme.accent : Theme.surface-3;
+            accessible-role: checkbox;
+            accessible-label: "Track " + (t + 1);
+            accessible-checked: on;
+            Text { text: t + 1; color: on ? Theme.on-accent : Theme.text-muted; font-size: Theme.font-s; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+            TouchArea {
+                mouse-cursor: MouseCursor.pointer;
+                clicked => { root.audio-set("tracks", on ? root.audio.tracks - pow(2, t) : root.audio.tracks + pow(2, t)); }
+            }
+        }
+    }
+    HorizontalLayout {
+        SectionTitle { text: "FILTERS"; horizontal-stretch: 1; vertical-alignment: center; }
+        Select {
+            width: 150px;
+            label: "Add filter";
+            options: ["+ Add filter…", "Noise suppression", "Noise gate", "Compressor", "Limiter", "Gain"];
+            current-index: 0;
+            selected(i) => { if (i > 0) { root.filter-add(i - 1); } }
+        }
+    }
+    if root.audio.filters.length == 0: Text {
+        text: "No filters. Noise suppression and a limiter are a good start for microphones.";
+        color: Theme.text-faint;
+        font-size: Theme.font-xs;
+        wrap: word-wrap;
+    }
+    for filter in root.audio.filters: Rectangle {
+        border-radius: Theme.radius-m;
+        background: Theme.surface-2;
+        border-width: 1px;
+        border-color: Theme.border;
+        height: filter-body.preferred-height;
+        filter-body := VerticalLayout {
+            padding: 8px;
+            spacing: 6px;
+            HorizontalLayout {
+                spacing: 2px;
+                Toggle { checked: filter.enabled; toggled(v) => { root.filter-toggle(filter.id, v); } }
+                Text { text: filter.name; color: filter.enabled ? Theme.text : Theme.text-faint; font-size: Theme.font-s; font-weight: 600; vertical-alignment: center; horizontal-stretch: 1; }
+                IconButton { icon: Icons.chevron-up; tooltip: "Move up"; size: 22px; icon-size: 12px; clicked => { root.filter-move(filter.id, true); } }
+                IconButton { icon: Icons.chevron-down; tooltip: "Move down"; size: 22px; icon-size: 12px; clicked => { root.filter-move(filter.id, false); } }
+                IconButton { icon: Icons.trash; tooltip: "Remove filter"; size: 22px; icon-size: 12px; clicked => { root.filter-remove(filter.id); } }
+            }
+            for param in filter.params: HorizontalLayout {
+                spacing: 8px;
+                Text { text: param.label; color: Theme.text-muted; font-size: Theme.font-xs; vertical-alignment: center; width: 96px; }
+                NumberField {
+                    label: "";
+                    value: param.value;
+                    minimum: param.minimum;
+                    maximum: param.maximum;
+                    step: param.step;
+                    decimals: param.step < 1 ? 1 : 0;
+                    suffix: param.unit;
+                    changed(v) => { root.filter-param(filter.id, param.key, v); }
+                    committed => { root.commit(); }
+                }
+            }
+        }
+    }
+}

@@ -522,6 +522,7 @@ export component AppWindow inherits Window {
                             vfilter-move(id, up) => { root.vfilter-move(id, up); }
                             vfilter-browse(id) => { root.vfilter-browse(id); }
                             vfilter-code(id) => { root.vfilter-code(id); }
+                            close => { root.action("selection.clear"); main-keys.focus(); }
                         }
                     }
                     // The full mixer, on demand (bottom right).
@@ -565,6 +566,9 @@ export component AppWindow inherits Window {
                     rename(id, name) => { root.scene-rename(id, name); main-keys.focus(); }
                     toggle-mute(id) => { root.mixer-mute(id); }
                     toggle-mixer => { root.mixer-open = !root.mixer-open; }
+                    fader(id, v) => { root.mixer-fader(id, v); }
+                    commit => { root.inspect-commit(); }
+                    open-settings(id) => { root.mixer-select(id); main-keys.focus(); }
                     transition-set(k, v) => { root.transition-set(k, v); }
                     edit-shader => { root.action("transition.shader"); }
                 }
@@ -611,6 +615,15 @@ export component AppWindow inherits Window {
             toggle-record => { root.action("record.toggle"); main-keys.focus(); }
             end-stream => { root.action("stream.toggle"); main-keys.focus(); }
             edit-layout => { root.deck-edit = true; main-keys.focus(); }
+            audio: root.audio-inspect;
+            open-sound(id) => { root.mixer-select(id); main-keys.focus(); }
+            close-sound => { root.action("selection.clear"); main-keys.focus(); }
+            audio-set(k, v) => { root.audio-set(k, v); }
+            filter-add(i) => { root.filter-add(i); }
+            filter-remove(id) => { root.filter-remove(id); }
+            filter-toggle(id, v) => { root.filter-toggle(id, v); }
+            filter-param(id, k, v) => { root.filter-param(id, k, v); }
+            filter-move(id, up) => { root.filter-move(id, up); }
             chat-tabs: root.chat-tabs;
             chat-selected: root.chat-selected;
             chat-frame: root.chat-frame;

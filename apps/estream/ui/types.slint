@@ -193,6 +193,10 @@ export struct AudioInspect {
     tracks: int,
     global: bool,
     filters: [FilterRow],
+    /// Why this sound may be heard twice on the stream ("" when fine).
+    problem: string,
+    /// The source's name (shown when the settings open on their own, e.g. over the Live deck).
+    name: string,
 }
 // Recording & app settings shown in the Settings dialog.
 /// A streaming destination in Settings.

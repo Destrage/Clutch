@@ -5,6 +5,7 @@ import {
     Button, IconButton, Icon, TextField, TextArea, NumberField, Toggle, Slider, Select, Panel,
     PanelHeader, SectionTitle, Badge, EmptyState, Hint,
 } from "widgets.slint";
+import { AudioSettings } from "sound.slint";
 
 // The open setup (scenes, sources and audio) as a menu: switch, new, rename, duplicate, delete.
 component SetupMenu inherits Rectangle {
@@ -975,13 +976,41 @@ export component InspectorPanel inherits Panel {
     callback prop-index(string, int);
     callback prop-browse(string);
     callback prop-refresh();
+    /// Close the panel (deselect).
+    callback close();
 
     PanelHeader {
         title: "INSPECTOR";
         icon: Icons.sliders-horizontal;
+        VerticalLayout {
+            alignment: center;
+            IconButton { icon: Icons.x; tooltip: "Close (Esc)"; size: 26px; icon-size: 14px; clicked => { root.close(); } }
+        }
     }
 
-    if !root.sel.has: EmptyState {
+    // A sound that isn't in the current scene (e.g. one heard in all scenes): just its audio.
+    if !root.sel.has && root.audio.has: Flickable {
+        vertical-stretch: 1;
+        content-height: sound-body.preferred-height;
+        sound-body := VerticalLayout {
+            padding: 14px;
+            spacing: 14px;
+            alignment: start;
+            Text { text: root.audio.name; color: Theme.text; font-size: Theme.font-l; font-weight: 600; overflow: elide; }
+            AudioSettings {
+                audio: root.audio;
+                audio-set(k, v) => { root.audio-set(k, v); }
+                filter-add(i) => { root.filter-add(i); }
+                filter-remove(id) => { root.filter-remove(id); }
+                filter-toggle(id, v) => { root.filter-toggle(id, v); }
+                filter-param(id, k, v) => { root.filter-param(id, k, v); }
+                filter-move(id, up) => { root.filter-move(id, up); }
+                commit => { root.commit(); }
+            }
+        }
+    }
+
+    if !root.sel.has && !root.audio.has: EmptyState {
         vertical-stretch: 1;
         icon: Icons.square;
         title: "Nothing selected";
@@ -1143,112 +1172,15 @@ export component InspectorPanel inherits Panel {
             }
 
             // Audio (sources that produce sound)
-            if root.audio.has: VerticalLayout {
-                spacing: 10px;
-                SectionTitle { text: "AUDIO"; }
-                HorizontalLayout {
-                    spacing: 8px;
-                    NumberField { label: "dB"; value: root.audio.volume-db; step: 0.5; decimals: 1; minimum: -100; maximum: 26; changed(v) => { root.audio-set("volume", v); } committed => { root.commit(); } }
-                    Toggle { label: "Mute"; checked: root.audio.muted; toggled(v) => { root.audio-set("muted", v ? 1 : 0); } }
-                }
-                HorizontalLayout {
-                    spacing: 10px;
-                    Text { text: "Balance"; color: Theme.text-muted; font-size: Theme.font-s; vertical-alignment: center; width: 56px; }
-                    Slider { label: "Balance"; value: root.audio.balance; changed(v) => { root.audio-set("balance", v); } committed => { root.commit(); } }
-                    Text {
-                        text: abs(root.audio.balance - 0.5) < 0.01 ? "C" : root.audio.balance < 0.5 ? "L" + round((0.5 - root.audio.balance) * 200) : "R" + round((root.audio.balance - 0.5) * 200);
-                        color: Theme.text-muted; font-size: Theme.font-s; vertical-alignment: center; width: 36px; horizontal-alignment: right;
-                    }
-                }
-                HorizontalLayout {
-                    spacing: 16px;
-                    Toggle { label: "Mono"; checked: root.audio.mono; toggled(v) => { root.audio-set("mono", v ? 1 : 0); } }
-                    Toggle { label: "All scenes"; checked: root.audio.global; toggled(v) => { root.audio-set("global", v ? 1 : 0); } }
-                }
-                HorizontalLayout {
-                    spacing: 10px;
-                    Text { text: "Sync offset"; color: Theme.text-muted; font-size: Theme.font-s; vertical-alignment: center; width: 80px; }
-                    NumberField { label: "ms"; value: root.audio.sync-ms; step: 10; minimum: 0; maximum: 2000; changed(v) => { root.audio-set("sync", v); } committed => { root.commit(); } }
-                }
-                HorizontalLayout {
-                    spacing: 10px;
-                    Text { text: "Monitoring"; color: Theme.text-muted; font-size: Theme.font-s; vertical-alignment: center; width: 80px; }
-                    Select {
-                        label: "Monitoring";
-                        options: ["Off", "Monitor only (mute output)", "Monitor and output"];
-                        current-index: root.audio.monitoring;
-                        selected(i) => { root.audio-set("monitoring", i); }
-                    }
-                }
-                HorizontalLayout {
-                    spacing: 4px;
-                    Text { text: "Tracks"; color: Theme.text-muted; font-size: Theme.font-s; vertical-alignment: center; width: 80px; }
-                    for t in [0, 1, 2, 3, 4, 5]: Rectangle {
-                        property <bool> on: mod(floor(root.audio.tracks / pow(2, t)), 2) == 1;
-                        width: 26px;
-                        height: 24px;
-                        border-radius: Theme.radius-s;
-                        background: on ? Theme.accent : Theme.surface-3;
-                        accessible-role: checkbox;
-                        accessible-label: "Track " + (t + 1);
-                        accessible-checked: on;
-                        Text { text: t + 1; color: on ? Theme.on-accent : Theme.text-muted; font-size: Theme.font-s; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
-                        TouchArea {
-                            mouse-cursor: MouseCursor.pointer;
-                            clicked => { root.audio-set("tracks", on ? root.audio.tracks - pow(2, t) : root.audio.tracks + pow(2, t)); }
-                        }
-                    }
-                }
-                HorizontalLayout {
-                    SectionTitle { text: "FILTERS"; horizontal-stretch: 1; vertical-alignment: center; }
-                    Select {
-                        width: 150px;
-                        label: "Add filter";
-                        options: ["+ Add filter…", "Noise suppression", "Noise gate", "Compressor", "Limiter", "Gain"];
-                        current-index: 0;
-                        selected(i) => { if (i > 0) { root.filter-add(i - 1); } }
-                    }
-                }
-                if root.audio.filters.length == 0: Text {
-                    text: "No filters. Noise suppression and a limiter are a good start for microphones.";
-                    color: Theme.text-faint;
-                    font-size: Theme.font-xs;
-                    wrap: word-wrap;
-                }
-                for filter in root.audio.filters: Rectangle {
-                    border-radius: Theme.radius-m;
-                    background: Theme.surface-2;
-                    border-width: 1px;
-                    border-color: Theme.border;
-                    height: filter-body.preferred-height;
-                    filter-body := VerticalLayout {
-                        padding: 8px;
-                        spacing: 6px;
-                        HorizontalLayout {
-                            spacing: 2px;
-                            Toggle { checked: filter.enabled; toggled(v) => { root.filter-toggle(filter.id, v); } }
-                            Text { text: filter.name; color: filter.enabled ? Theme.text : Theme.text-faint; font-size: Theme.font-s; font-weight: 600; vertical-alignment: center; horizontal-stretch: 1; }
-                            IconButton { icon: Icons.chevron-up; tooltip: "Move up"; size: 22px; icon-size: 12px; clicked => { root.filter-move(filter.id, true); } }
-                            IconButton { icon: Icons.chevron-down; tooltip: "Move down"; size: 22px; icon-size: 12px; clicked => { root.filter-move(filter.id, false); } }
-                            IconButton { icon: Icons.trash; tooltip: "Remove filter"; size: 22px; icon-size: 12px; clicked => { root.filter-remove(filter.id); } }
-                        }
-                        for param in filter.params: HorizontalLayout {
-                            spacing: 8px;
-                            Text { text: param.label; color: Theme.text-muted; font-size: Theme.font-xs; vertical-alignment: center; width: 96px; }
-                            NumberField {
-                                label: "";
-                                value: param.value;
-                                minimum: param.minimum;
-                                maximum: param.maximum;
-                                step: param.step;
-                                decimals: param.step < 1 ? 1 : 0;
-                                suffix: param.unit;
-                                changed(v) => { root.filter-param(filter.id, param.key, v); }
-                                committed => { root.commit(); }
-                            }
-                        }
-                    }
-                }
+            if root.audio.has: AudioSettings {
+                audio: root.audio;
+                audio-set(k, v) => { root.audio-set(k, v); }
+                filter-add(i) => { root.filter-add(i); }
+                filter-remove(id) => { root.filter-remove(id); }
+                filter-toggle(id, v) => { root.filter-toggle(id, v); }
+                filter-param(id, k, v) => { root.filter-param(id, k, v); }
+                filter-move(id, up) => { root.filter-move(id, up); }
+                commit => { root.commit(); }
             }
 
             // Source settings (generic, from the source type's schema)

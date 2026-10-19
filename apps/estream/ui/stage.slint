@@ -1,11 +1,12 @@
-// The Stage: the studio's editing view. Scenes as cards along the bottom, sound as round mute
-// buttons beside them; the layers and settings float over the preview (see app.slint).
+// The Stage: the studio's editing view. Scenes as cards along the bottom, sound as knobs
+// beside them; the layers and settings float over the preview (see app.slint).
 
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
 import { SceneRow, MixerStrip } from "types.slint";
 import { Icon, IconButton, TextField, Hint } from "widgets.slint";
 import { TransitionBar } from "panels.slint";
+import { SoundKnob } from "sound.slint";
 
 component SceneCard inherits Rectangle {
     in property <SceneRow> scene;
@@ -112,75 +113,6 @@ component SceneCard inherits Rectangle {
     }
 }
 
-// A round mute button with a level bar, for one audio source.
-component SoundButton inherits Rectangle {
-    in property <MixerStrip> strip;
-    callback toggle-mute();
-    callback select();
-    property <float> level: max(strip.level-l, strip.level-r);
-    width: 76px;
-    accessible-role: button;
-    accessible-label: (strip.muted ? "Unmute " : "Mute ") + strip.name;
-    VerticalLayout {
-        spacing: 6px;
-        alignment: start;
-        HorizontalLayout {
-            alignment: center;
-            Rectangle {
-                width: 52px;
-                height: 52px;
-                border-radius: 26px;
-                border-width: 2px;
-                border-color: root.strip.muted ? Theme.border : root.level > 0.02 ? Theme.ok : Theme.border-strong;
-                background: ta.has-hover ? Theme.surface-2 : Theme.surface;
-                Icon {
-                    source: root.strip.muted ? Icons.volume-x
-                        : root.strip.kind == "audio_input" ? Icons.mic
-                        : root.strip.kind == "game_capture" ? Icons.gamepad
-                        : Icons.volume;
-                    size: 20px;
-                    tint: root.strip.muted ? Theme.live : Theme.text;
-                }
-                ta := TouchArea {
-                    mouse-cursor: MouseCursor.pointer;
-                    clicked => { root.toggle-mute(); }
-                    changed has-hover => {
-                        if (self.has-hover) {
-                            Hint.text = (root.strip.muted ? "Unmute " : "Mute ") + root.strip.name + " · " + round(root.strip.volume-db * 10) / 10 + " dB";
-                            Hint.x = root.absolute-position.x + root.width / 2;
-                            Hint.y = root.absolute-position.y - 28px;
-                        } else {
-                            Hint.text = "";
-                        }
-                    }
-                }
-            }
-        }
-        HorizontalLayout {
-            alignment: center;
-            Rectangle {
-                width: 52px;
-                height: 5px;
-                border-radius: 2.5px;
-                background: Theme.surface-3;
-                clip: true;
-                Rectangle {
-                    x: 0;
-                    width: parent.width * (root.strip.muted ? 0 : root.level);
-                    background: root.level > 0.92 ? Theme.live : Theme.ok;
-                }
-            }
-        }
-        Text {
-            text: root.strip.name;
-            color: root.strip.muted ? Theme.text-muted : Theme.text;
-            font-size: Theme.font-xs;
-            horizontal-alignment: center;
-            overflow: elide;
-        }
-    }
-}
-
 export component SceneStrip inherits Rectangle {
     in property <[SceneRow]> scenes;
     in property <image> frame;
@@ -199,6 +131,10 @@ export component SceneStrip inherits Rectangle {
     callback remove(string);
     callback rename(string, string);
     callback toggle-mute(string);
+    callback fader(string, float);
+    callback commit();
+    /// Show a sound's settings (its name was clicked).
+    callback open-settings(string);
     callback toggle-mixer();
     callback transition-set(string, float);
     callback edit-shader();
@@ -298,9 +234,12 @@ export component SceneStrip inherits Rectangle {
         HorizontalLayout {
             spacing: 2px;
             alignment: end;
-            for strip in root.strips: SoundButton {
+            for strip in root.strips: SoundKnob {
                 strip: strip;
                 toggle-mute => { root.toggle-mute(strip.id); }
+                fader(v) => { root.fader(strip.id, v); }
+                commit => { root.commit(); }
+                open-settings => { root.open-settings(strip.id); }
             }
             VerticalLayout {
                 alignment: start;

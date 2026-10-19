@@ -234,12 +234,15 @@ impl Drop for Exclusion {
 }
 
 /// Desktop audio. On the default device it leaves out the process a capture (or an
-/// Application audio source) already captures, so that sound isn't heard twice.
+/// Application audio source) already captures, so that sound isn't heard twice. With
+/// none, it leaves out Clutch's own playback (monitoring) for the same reason.
 pub struct DesktopAudio {
     inner: DeviceSource,
     default_device: bool,
     exclusion: Option<Exclusion>,
     next_check: Instant,
+    /// After an exclusion capture fails, wait before trying again.
+    retry_at: Instant,
 }
 
 impl Default for DesktopAudio {
@@ -255,6 +258,7 @@ impl DesktopAudio {
             default_device: true,
             exclusion: None,
             next_check: Instant::now(),
+            retry_at: Instant::now(),
         }
     }
 
@@ -268,7 +272,9 @@ impl DesktopAudio {
         let current = self.exclusion.as_ref().map(|e| e.pid);
         let wanted = if self.default_device {
             match claims::desktop_exclusion() {
-                Some(pid) => pid,
+                // With no game or app to leave out, leave out Clutch itself: the only sound it
+                // plays is monitoring, which must not be captured a second time.
+                Some(pid) => Some(pid.unwrap_or_else(std::process::id)),
                 None => current, // busy: try again next time
             }
         } else {
@@ -278,8 +284,12 @@ impl DesktopAudio {
             .exclusion
             .as_ref()
             .is_some_and(|e| !e.alive.load(Ordering::Acquire));
-        if wanted != current || dead {
-            self.exclusion = wanted.filter(|_| !dead).map(Exclusion::start);
+        if dead {
+            // Unsupported (older Windows) or the process is gone: plain loopback for a while.
+            self.exclusion = None;
+            self.retry_at = now + Duration::from_secs(10);
+        } else if wanted != current && now >= self.retry_at {
+            self.exclusion = wanted.map(Exclusion::start);
         }
     }
 }
@@ -314,6 +324,12 @@ impl AudioSource for DesktopAudio {
     fn status(&self) -> SourceStatus {
         self.inner.status()
     }
+}
+
+/// Whether Desktop Audio is leaving out a game or an app right now, in which case it can't
+/// also leave out Clutch's own playback (monitored sounds are captured a second time).
+pub fn desktop_audio_busy_leaving_out() -> bool {
+    matches!(claims::desktop_exclusion(), Some(Some(_)))
 }
 
 /// Desktop audio with the same settings and UI as `plain`, the built-in type.
