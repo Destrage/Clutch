@@ -25,5 +25,11 @@ windows = { version = "0.62", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "0.13.13", default-features = false, features = ["async-io", "global_shortcuts"] }
+futures-util = "0.3.34"
+pollster.workspace = true
+x11rb = "0.13.2"
+
 [dev-dependencies]
 serde_json.workspace = true

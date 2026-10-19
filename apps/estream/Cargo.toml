@@ -61,6 +61,8 @@ windows = { version = "0.62", features = [
 trash = "5"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "0.13.13", default-features = false, features = ["async-io"] }
+pollster.workspace = true
 keyring-core = "1.0.1"
 ring = "0.17.14"
 zbus-secret-service-keyring-store = { version = "1.0.1", features = ["rt-async-io-crypto-rust"] }

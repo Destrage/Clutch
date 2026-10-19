@@ -57,6 +57,67 @@ fn set_app_user_model_id() {
     }
 }
 
+/// The desktop entry's name, which identifies Clutch to the desktop.
+#[cfg(target_os = "linux")]
+pub const APP_ID: &str = "io.github.destrage.Clutch";
+
+/// Tells the desktop's portals which app this is, so permissions (global hotkeys, screen
+/// sharing) are kept for Clutch. Must come before any other portal call. The portal only
+/// accepts an id with a desktop entry, so one is kept up to date first.
+#[cfg(target_os = "linux")]
+fn register_portal_app() {
+    if let Err(e) = keep_desktop_entry() {
+        tracing::info!(error = %e, "couldn't write Clutch's desktop entry");
+    }
+    let Ok(id) = ashpd::AppID::try_from(APP_ID) else {
+        return;
+    };
+    if let Err(e) = pollster::block_on(ashpd::register_host_app(id)) {
+        tracing::info!(error = %e, "couldn't register with the desktop portals");
+    }
+}
+
+/// Marks the desktop entry Clutch writes itself (it never touches one it didn't write).
+#[cfg(target_os = "linux")]
+const GENERATED: &str = "X-Clutch-Generated=true";
+
+/// Writes a hidden desktop entry for [`APP_ID`] that starts this executable (the AppImage
+/// when run from one), unless the system or the user already has one.
+#[cfg(target_os = "linux")]
+fn keep_desktop_entry() -> std::io::Result<()> {
+    let file = format!("{APP_ID}.desktop");
+    let home = dirs::data_dir().ok_or_else(|| std::io::Error::other("no data folder"))?;
+    let ours = home.join("applications").join(&file);
+    let system = std::env::var("XDG_DATA_DIRS")
+        .unwrap_or_else(|_| "/usr/local/share:/usr/share".into())
+        .split(':')
+        .any(|d| {
+            std::path::Path::new(d)
+                .join("applications")
+                .join(&file)
+                .exists()
+        });
+    let existing = std::fs::read_to_string(&ours).ok();
+    if system || existing.as_ref().is_some_and(|t| !t.contains(GENERATED)) {
+        return Ok(());
+    }
+    let exe = std::env::var_os("APPIMAGE")
+        .map(std::path::PathBuf::from)
+        .map_or_else(std::env::current_exe, Ok)?;
+    let entry = format!(
+        "[Desktop Entry]\nType=Application\nName=Clutch\n\
+         Comment=Streaming, recording and clipping studio\nExec=\"{}\" %U\n\
+         Icon={APP_ID}\nTerminal=false\nCategories=AudioVideo;Video;Recorder;\n\
+         NoDisplay=true\n{GENERATED}\n",
+        exe.display()
+    );
+    if existing.as_deref() != Some(entry.as_str()) {
+        std::fs::create_dir_all(home.join("applications"))?;
+        std::fs::write(&ours, entry)?;
+    }
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     let paths = Paths::new();
     // Clutch was called eStream up to 0.2: take its settings folder over on the first start.
@@ -72,6 +133,8 @@ fn main() -> anyhow::Result<()> {
     #[cfg(windows)]
     set_app_user_model_id();
     estream_capture::set_state_dir(paths.root.clone());
+    #[cfg(target_os = "linux")]
+    register_portal_app();
 
     let mut settings = Settings::load(&paths.settings());
     match (adopted, legacy) {

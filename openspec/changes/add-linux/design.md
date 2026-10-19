@@ -62,11 +62,25 @@ when the app's stream ends) and mixes them on the audio thread. Apps are matched
 feed the existing `StereoConsumer` ring buffers, so the mixer is unchanged.
 
 ### Hotkeys and focus
-A small `GlobalHotkeys` trait in `estream-automation`, with the current Windows `RegisterHotKey`
-listener as one implementation. Linux uses the GlobalShortcuts portal where available (KDE,
-GNOME 48+), else `XGrabKey` on X11; on Wayland without the portal hotkeys work only while Clutch
-has focus and the settings page says so. The focus trigger reads `_NET_ACTIVE_WINDOW` on X11 and
-reports "unavailable" on Wayland, where no portable API exists.
+A small `GlobalHotkeys` trait in `estream-automation` (register, failed, try_press), with the
+Windows `RegisterHotKey` listener as one implementation. Linux uses the GlobalShortcuts portal
+where available (KDE, GNOME 48+): one session for the whole process, shared by macros and the
+clip hotkey so the user is asked once, with the chord text as the stable shortcut id. Binding
+can wait on a desktop dialog, so failures are reported asynchronously. Without the portal,
+X11 sessions use `XGrabKey` (Caps/Num Lock variants included; another client's grab shows as
+a conflict). Elsewhere hotkeys work only while Clutch has focus (the app passes its own key
+presses to the runner and the clip hotkey) and the settings say so. `CLUTCH_HOTKEYS=portal|x11|off`
+overrides the choice.
+
+The portal ties permissions to an app id, which host apps register through
+`org.freedesktop.host.portal.Registry`; it only accepts an id with a desktop entry whose `Exec`
+exists. Clutch (`io.github.destrage.Clutch`) therefore keeps a hidden (`NoDisplay`) entry in
+`~/.local/share/applications` pointing at the running binary or `$APPIMAGE`, marked
+`X-Clutch-Generated` and never overwriting an entry it didn't write.
+
+The focus trigger reads EWMH `_NET_ACTIVE_WINDOW` on X11 through the clip detector's probe
+(which also needs the window's pid and fullscreen state), plugged into the runner by the app;
+on Wayland, where no portable API exists, the macro editor says the trigger is unavailable.
 
 ### Secrets
 `keyring-core` with the zbus Secret Service store (pure Rust, no libdbus). The Secret Service

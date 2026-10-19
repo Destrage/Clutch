@@ -71,6 +71,19 @@ pub fn foreground() -> Option<Foreground> {
     None
 }
 
+/// Why the foreground window can't be known on this system (`None` where it can). On Linux
+/// only X11 sessions say which window is in front (the app plugs an X11 probe into the
+/// runner, see [`crate::Runner::set_focus_probe`]); Wayland keeps it private.
+pub fn unavailable() -> Option<&'static str> {
+    let x11 =
+        cfg!(target_os = "linux") && std::env::var("XDG_SESSION_TYPE").is_ok_and(|t| t == "x11");
+    if cfg!(windows) || x11 {
+        None
+    } else {
+        Some("Not available on this system: it doesn't tell apps which window is in front")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

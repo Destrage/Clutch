@@ -555,7 +555,7 @@ impl App {
             vcam_install: None,
             vcam_error_shown: false,
             wizard_detected: None,
-            runner: Some(estream_automation::Runner::new(true)),
+            runner: Some(new_runner()),
             auto_selected: None,
             auto_recording: None,
             monitor: estream_health::Monitor::new(),
@@ -1756,6 +1756,19 @@ impl App {
         platform.set_trash(crate::shell::TRASH.into());
         platform.set_key_storage(crate::secret::storage_note().into());
         platform.set_key_remembered(crate::secret::persistent());
+        let in_app = self
+            .runner
+            .as_ref()
+            .is_some_and(|r| r.hotkey_reach() == estream_automation::hotkeys::Reach::InApp);
+        platform.set_hotkeys_note(if in_app {
+            "Works while Clutch is in front: this desktop has no global hotkeys".into()
+        } else {
+            SharedString::new()
+        });
+        platform.set_focus_note(match estream_automation::focus::unavailable() {
+            Some(reason) => reason.into(),
+            None => SharedString::new(),
+        });
         let theme = w.global::<Theme>();
         theme.set_dark(dark);
         if let Some((r, g, b)) = crate::settings::parse_hex(&self.settings.accent) {
@@ -6834,6 +6847,20 @@ impl App {
 
     /// Handles a key press that no focused widget consumed. Returns true if used.
     pub fn key(&mut self, text: &str, ctrl: bool, shift: bool, alt: bool) -> bool {
+        // Without system-wide hotkeys, macro and clip hotkeys work while Clutch is in front.
+        if let Some(chord) =
+            estream_automation::hotkeys::chord_from_slint(text, ctrl, alt, shift, false)
+        {
+            let mut hit = self.clipper.press_in_app(&chord);
+            if let Some(runner) = &mut self.runner
+                && runner.hotkey_reach() == estream_automation::hotkeys::Reach::InApp
+            {
+                hit |= runner.press(&chord, std::time::Instant::now());
+            }
+            if hit {
+                return true;
+            }
+        }
         let Some(key) = key_from_text(text) else {
             return false;
         };
@@ -7807,6 +7834,20 @@ fn prop_row(p: &estream_engine::Property, value: &serde_json::Value) -> PropRow 
         }
     }
     row
+}
+
+/// The macro runner. On Linux the window-focus trigger uses the clip detector's X11 probe.
+fn new_runner() -> estream_automation::Runner {
+    #[allow(unused_mut)]
+    let mut runner = estream_automation::Runner::new(true);
+    #[cfg(target_os = "linux")]
+    runner.set_focus_probe(|| {
+        estream_clips::platform::foreground().map(|f| estream_automation::focus::Foreground {
+            program: f.program,
+            title: f.title,
+        })
+    });
+    runner
 }
 
 /// Source types for the "Add source" dialog: everything registered, plus upcoming types.

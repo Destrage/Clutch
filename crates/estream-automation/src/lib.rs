@@ -48,11 +48,9 @@ struct Run {
 
 /// Watches triggers and runs macros.
 pub struct Runner {
-    #[cfg(windows)]
-    hotkeys: Option<hotkeys::HotkeyListener>,
-    /// Hotkey registration id → macro.
-    hotkey_ids: HashMap<u32, MacroId>,
-    conflicts: Vec<Chord>,
+    hotkeys: Option<Box<dyn hotkeys::GlobalHotkeys>>,
+    /// Hotkey registration id → macro, and its keys.
+    hotkey_ids: HashMap<u32, (MacroId, Chord)>,
     /// The automation the triggers were set up for.
     current: Option<Arc<Project>>,
     automation: Automation,
@@ -70,15 +68,9 @@ pub struct Runner {
 impl Runner {
     /// `global_hotkeys`: register hotkeys with the system (off in tests).
     pub fn new(global_hotkeys: bool) -> Self {
-        #[cfg(not(windows))]
-        let _ = global_hotkeys;
         Self {
-            #[cfg(windows)]
-            hotkeys: global_hotkeys
-                .then(hotkeys::HotkeyListener::start)
-                .flatten(),
+            hotkeys: global_hotkeys.then(hotkeys::start).flatten(),
             hotkey_ids: HashMap::new(),
-            conflicts: Vec::new(),
             current: None,
             automation: Automation::default(),
             running: Vec::new(),
@@ -98,9 +90,27 @@ impl Runner {
         self.probe = Box::new(probe);
     }
 
-    /// Hotkeys another program already holds.
-    pub fn conflicts(&self) -> &[Chord] {
-        &self.conflicts
+    /// Hotkeys another program already holds (or the system refused).
+    pub fn conflicts(&self) -> Vec<Chord> {
+        let failed = self
+            .hotkeys
+            .as_ref()
+            .map(|h| h.failed())
+            .unwrap_or_default();
+        failed
+            .iter()
+            .filter_map(|id| self.hotkey_ids.get(id).map(|(_, c)| c.clone()))
+            .collect()
+    }
+
+    /// How far macro hotkeys reach: without system hotkeys, the app passes its own key
+    /// presses to [`Runner::press`].
+    pub fn hotkey_reach(&self) -> hotkeys::Reach {
+        if self.hotkeys.is_some() {
+            hotkeys::Reach::Global
+        } else {
+            hotkeys::Reach::InApp
+        }
     }
 
     /// The last error of a macro's steps, if any.
@@ -141,7 +151,8 @@ impl Runner {
     }
 
     /// Fires the macros bound to `chord` (in-app key presses, tests).
-    pub fn press(&mut self, chord: &Chord, now: Instant) {
+    /// Fires the macros with this hotkey; `false` if none has it.
+    pub fn press(&mut self, chord: &Chord, now: Instant) -> bool {
         let ids: Vec<MacroId> = self
             .automation
             .macros
@@ -153,9 +164,11 @@ impl Runner {
             })
             .map(|m| m.id)
             .collect();
+        let any = !ids.is_empty();
         for id in ids {
             self.start(id, now, false);
         }
+        any
     }
 
     /// Fires the macros waiting for this game event (`game` is the game's name).
@@ -233,32 +246,26 @@ impl Runner {
                     && !chord.is_empty()
                 {
                     let id = list.len() as u32 + 1;
-                    self.hotkey_ids.insert(id, m.id);
-                    list.push((id, chord.clone()));
+                    self.hotkey_ids.insert(id, (m.id, chord.clone()));
+                    list.push(hotkeys::Hotkey {
+                        id,
+                        chord: chord.clone(),
+                        label: m.name.clone(),
+                    });
                 }
             }
         }
-        self.conflicts.clear();
-        #[cfg(windows)]
         if let Some(listener) = &self.hotkeys {
-            let failed = listener.set(list.clone());
-            self.conflicts = list
-                .into_iter()
-                .filter(|(id, _)| failed.contains(id))
-                .map(|(_, c)| c)
-                .collect();
+            listener.register(list);
         }
-        #[cfg(not(windows))]
-        let _ = list;
     }
 
     fn collect_triggers(&mut self, host: &dyn Host, now: Instant) {
         let mut fired: Vec<MacroId> = Vec::new();
 
-        #[cfg(windows)]
         if let Some(listener) = &self.hotkeys {
-            while let Ok(id) = listener.presses.try_recv() {
-                if let Some(m) = self.hotkey_ids.get(&id) {
+            while let Some(id) = listener.try_press() {
+                if let Some((m, _)) = self.hotkey_ids.get(&id) {
                     fired.push(*m);
                 }
             }

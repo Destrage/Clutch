@@ -6,6 +6,10 @@ export global Platform {
     /// Where stream keys are saved, and whether they survive a restart.
     in property <string> key-storage: "Stored encrypted for your Windows account";
     in property <bool> key-remembered: true;
+    /// Set when hotkeys work only while Clutch is in front.
+    in property <string> hotkeys-note;
+    /// Set when the "window focused" trigger can't work on this system.
+    in property <string> focus-note;
 }
 
 export global Theme {

@@ -107,9 +107,13 @@ pub struct Clipper {
     /// What the GSI server was started with (restart when it changes).
     gsi_config: Option<(u16, String, String)>,
     league: Option<LeaguePoller>,
-    #[cfg(windows)]
-    hotkey: Option<estream_automation::hotkeys::HotkeyListener>,
+    hotkey: Option<Box<dyn estream_automation::hotkeys::GlobalHotkeys>>,
     hotkey_chord: Option<estream_project::Chord>,
+    /// Whether the last hotkey registration's outcome was reported (some systems answer
+    /// after asking the user).
+    hotkey_reported: bool,
+    /// Clip hotkey presses Clutch's own window saw (where there are no system hotkeys).
+    in_app_presses: u32,
     saving: Vec<Saving>,
     thumbs_tx: Sender<PathBuf>,
     thumbs_rx: Receiver<PathBuf>,
@@ -164,9 +168,10 @@ impl Clipper {
             gsi: None,
             gsi_config: None,
             league: None,
-            #[cfg(windows)]
-            hotkey: estream_automation::hotkeys::HotkeyListener::start(),
+            hotkey: estream_automation::hotkeys::start(),
             hotkey_chord: None,
+            hotkey_reported: true,
+            in_app_presses: 0,
             saving: Vec::new(),
             thumbs_tx,
             thumbs_rx,
@@ -202,6 +207,16 @@ impl Clipper {
         self.gsi.as_ref().map(|g| g.port)
     }
 
+    /// A key press in Clutch's window: the clip hotkey when the system has no global
+    /// hotkeys. `true` if it was the clip hotkey.
+    pub fn press_in_app(&mut self, chord: &estream_project::Chord) -> bool {
+        let hit = self.hotkey.is_none() && self.hotkey_chord.as_ref() == Some(chord);
+        if hit {
+            self.in_app_presses += 1;
+        }
+        hit
+    }
+
     /// Picks up settings changes (folder, hotkey, integrations, game lists).
     fn configure(
         &mut self,
@@ -223,12 +238,18 @@ impl Clipper {
         let chord = estream_project::Chord::parse(&s.hotkey);
         if chord != self.hotkey_chord {
             self.hotkey_chord = chord.clone();
-            #[cfg(windows)]
             if let Some(listener) = &self.hotkey {
-                let list: Vec<_> = chord.iter().map(|c| (1, c.clone())).collect();
-                if !listener.set(list).is_empty() {
-                    out.push(Notice::HotkeyConflict(s.hotkey.clone()));
-                }
+                listener.register(
+                    chord
+                        .iter()
+                        .map(|c| estream_automation::hotkeys::Hotkey {
+                            id: 1,
+                            chord: c.clone(),
+                            label: "Save a clip".into(),
+                        })
+                        .collect(),
+                );
+                self.hotkey_reported = false;
             }
         }
 
@@ -302,15 +323,17 @@ impl Clipper {
         }
 
         // The clip hotkey.
-        #[cfg(windows)]
-        let presses: Vec<u32> = self
-            .hotkey
-            .as_ref()
-            .map(|l| l.presses.try_iter().collect())
-            .unwrap_or_default();
-        #[cfg(not(windows))]
-        let presses: Vec<u32> = Vec::new();
-        for _ in presses {
+        let mut presses = std::mem::take(&mut self.in_app_presses);
+        if let Some(listener) = &self.hotkey {
+            while listener.try_press().is_some() {
+                presses += 1;
+            }
+            if !self.hotkey_reported && !listener.failed().is_empty() {
+                self.hotkey_reported = true;
+                out.push(Notice::HotkeyConflict(s.hotkey.clone()));
+            }
+        }
+        for _ in 0..presses {
             let pre = Duration::from_secs(s.hotkey_seconds.clamp(5, 600) as u64);
             if let Err(e) = self.request(
                 EventKind::Manual,

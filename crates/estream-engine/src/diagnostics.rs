@@ -25,7 +25,9 @@ pub fn init_logging(dir: &Path) -> std::io::Result<LogGuard> {
     prune_logs(dir, KEEP_LOG_FILES)?;
 
     let (writer, worker) = tracing_appender::non_blocking(file);
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    // zbus warns about every short-lived portal request it can't cache properties for.
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info,zbus::proxy=error"));
     let _ = tracing_subscriber::registry()
         .with(filter)
         .with(fmt::layer().with_writer(writer).with_ansi(false))

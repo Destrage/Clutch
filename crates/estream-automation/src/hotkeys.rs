@@ -1,6 +1,53 @@
-//! Global hotkeys: a thread that owns `RegisterHotKey` registrations and reports presses.
+//! Global hotkeys: keys that work while another app is in front. [`start`] picks the
+//! system's way: `RegisterHotKey` on Windows; on Linux the GlobalShortcuts portal, else an X11
+//! key grab. Where there is none, hotkeys work only while Clutch is in front (the app routes
+//! its own key presses, see [`reach`]).
 
 use estream_project::Chord;
+
+/// A hotkey to register: the caller's id, the keys, and what it does (some systems show it
+/// when asking the user to allow the hotkeys).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Hotkey {
+    pub id: u32,
+    pub chord: Chord,
+    pub label: String,
+}
+
+/// System-wide hotkeys.
+pub trait GlobalHotkeys {
+    /// Registers exactly these hotkeys, replacing the earlier ones.
+    fn register(&self, hotkeys: Vec<Hotkey>);
+    /// Ids that couldn't be registered (another program holds the keys, or the user or system
+    /// refused). Some systems answer a little later, after asking the user.
+    fn failed(&self) -> Vec<u32>;
+    /// The next pressed hotkey's id, if any.
+    fn try_press(&self) -> Option<u32>;
+}
+
+/// Starts this system's global hotkeys; `None` where it has none.
+pub fn start() -> Option<Box<dyn GlobalHotkeys>> {
+    #[cfg(windows)]
+    return HotkeyListener::start().map(|l| Box::new(l) as Box<dyn GlobalHotkeys>);
+    #[cfg(target_os = "linux")]
+    return linux::start();
+    #[allow(unreachable_code)]
+    None
+}
+
+/// How far hotkeys reach on this system, for the settings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reach {
+    /// They work while other apps are in front.
+    Global,
+    /// They work only while Clutch is in front.
+    InApp,
+}
+
+#[cfg(target_os = "linux")]
+mod keysym;
+#[cfg(target_os = "linux")]
+mod linux;
 
 /// Virtual-key code for a key name (see [`Chord`]).
 pub fn key_vk(name: &str) -> Option<u32> {
@@ -71,6 +118,25 @@ pub fn key_vk(name: &str) -> Option<u32> {
 pub use imp::HotkeyListener;
 
 #[cfg(windows)]
+impl GlobalHotkeys for HotkeyListener {
+    fn register(&self, hotkeys: Vec<Hotkey>) {
+        let failed = self.set(hotkeys.into_iter().map(|h| (h.id, h.chord)).collect());
+        *self.failed.lock().unwrap_or_else(|e| e.into_inner()) = failed;
+    }
+
+    fn failed(&self) -> Vec<u32> {
+        self.failed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    fn try_press(&self) -> Option<u32> {
+        self.presses.try_recv().ok()
+    }
+}
+
+#[cfg(windows)]
 mod imp {
     use super::key_vk;
     use crossbeam_channel::{Receiver, Sender};
@@ -98,6 +164,8 @@ mod imp {
         thread: Option<std::thread::JoinHandle<()>>,
         /// Ids of pressed hotkeys.
         pub presses: Receiver<u32>,
+        /// What the last registration couldn't register.
+        pub(super) failed: std::sync::Mutex<Vec<u32>>,
     }
 
     const WM_COMMANDS: u32 = WM_APP + 1;
@@ -117,6 +185,7 @@ mod imp {
                 thread_id,
                 thread: Some(thread),
                 presses,
+                failed: Default::default(),
             })
         }
 

@@ -23,9 +23,9 @@
 - [x] 3.5 Register Linux source types
 
 ## 4. Automation
-- [ ] 4.1 `GlobalHotkeys` trait; current Windows listener behind it
-- [ ] 4.2 GlobalShortcuts portal, X11 `XGrabKey` fallback, in-app only otherwise
-- [ ] 4.3 Focus trigger on X11; "unavailable" on Wayland shown in the macro editor
+- [x] 4.1 `GlobalHotkeys` trait; current Windows listener behind it
+- [x] 4.2 GlobalShortcuts portal, X11 `XGrabKey` fallback, in-app only otherwise
+- [x] 4.3 Focus trigger on X11; "unavailable" on Wayland shown in the macro editor
 
 ## 5. Virtual camera and browser source
 - [ ] 5.1 Virtual camera via `v4l2loopback` (detects the module, explains how to load it)

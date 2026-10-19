@@ -1,6 +1,6 @@
 // Automation: macros (steps) started by triggers (hotkeys, window focus, timers, events).
 
-import { Theme } from "theme.slint";
+import { Theme, Platform } from "theme.slint";
 import { Icons } from "icons.slint";
 import { AutomationForm, MacroRow, TriggerRow, StepRow } from "types.slint";
 import { Button, IconButton, TextField, NumberField, Select, Toggle, SectionTitle, EmptyState } from "widgets.slint";
@@ -43,18 +43,34 @@ component TriggerEditor inherits HorizontalLayout {
             clicked => { root.record(root.index); }
         }
         if entry.conflict: Text {
-            text: "Another program already uses this hotkey";
+            text: "Not available: another program uses it, or it wasn't allowed";
             color: Theme.live;
             font-size: Theme.font-xs;
             vertical-alignment: center;
         }
+        if !entry.conflict && Platform.hotkeys-note != "": Text {
+            text: Platform.hotkeys-note;
+            color: Theme.text-faint;
+            font-size: Theme.font-xs;
+            vertical-alignment: center;
+            wrap: word-wrap;
+            horizontal-stretch: 1;
+        }
         Rectangle { horizontal-stretch: 1; }
     }
-    if entry.kind == "focus": TextField {
+    if entry.kind == "focus" && Platform.focus-note == "": TextField {
         label: "Window";
         placeholder: "Program or window title, e.g. valorant";
         text: entry.text;
         edited(t) => { root.edit-text("trigger-pattern", root.index, t); }
+    }
+    if entry.kind == "focus" && Platform.focus-note != "": Text {
+        text: Platform.focus-note;
+        color: Theme.text-muted;
+        font-size: Theme.font-s;
+        vertical-alignment: center;
+        wrap: word-wrap;
+        horizontal-stretch: 1;
     }
     if entry.kind == "interval": HorizontalLayout {
         horizontal-stretch: 1;

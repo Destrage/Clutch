@@ -1725,6 +1725,7 @@ name = "estream"
 version = "0.3.3"
 dependencies = [
  "anyhow",
+ "ashpd",
  "base64",
  "chrono",
  "crossbeam-channel",
@@ -1746,6 +1747,7 @@ dependencies = [
  "glam",
  "keyring-core",
  "percent-encoding",
+ "pollster 1.0.1",
  "rfd",
  "ring",
  "serde",
@@ -1806,14 +1808,18 @@ dependencies = [
 name = "estream-automation"
 version = "0.3.3"
 dependencies = [
+ "ashpd",
  "crossbeam-channel",
  "estream-api",
  "estream-core",
  "estream-engine",
  "estream-project",
+ "futures-util",
+ "pollster 1.0.1",
  "serde_json",
  "tracing",
  "windows",
+ "x11rb",
 ]
 
 [[package]]
@@ -1865,6 +1871,7 @@ dependencies = [
  "tracing",
  "ureq",
  "windows",
+ "x11rb",
 ]
 
 [[package]]

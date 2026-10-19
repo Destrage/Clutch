@@ -962,7 +962,7 @@ export component SettingsDialog inherits Modal {
             }
             SettingRow {
                 label: "Clip hotkey";
-                hint: "Works in games, e.g. F8 or Ctrl+Shift+C";
+                hint: Platform.hotkeys-note != "" ? Platform.hotkeys-note : "Works in games, e.g. F8 or Ctrl+Shift+C";
                 TextField { text: root.form.clip-hotkey; label: "Clip hotkey"; accepted(t) => { root.set-text("clip-hotkey", t); } }
                 NumberField { width: 110px; label: ""; value: root.form.clip-seconds; minimum: 5; maximum: 600; step: 5; suffix: "s"; changed(v) => { root.set("clip-seconds", v); } }
             }
