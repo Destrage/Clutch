@@ -29,7 +29,7 @@
 
 ## 5. Virtual camera and browser source
 - [x] 5.1 Virtual camera via `v4l2loopback` (detects the module, explains how to load it)
-- [ ] 5.2 `clutch-browser` (CEF) builds and runs on Linux
+- [x] 5.2 `clutch-browser` (CEF) builds and runs on Linux
 
 ## 6. AppImage
 - [ ] 6.1 xtask: AppDir staging (binaries, CEF, desktop entry, icon, AppRun)

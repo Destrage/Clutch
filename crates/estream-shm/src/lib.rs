@@ -340,6 +340,33 @@ fn os_error(call: &str) -> ShmError {
     ShmError::Os(format!("{call}: {}", std::io::Error::last_os_error()))
 }
 
+/// Removes every region whose name starts with `prefix` (written like the names, e.g.
+/// `Local\clutch-browser-1234-`): on Linux a process that crashes leaves its regions behind,
+/// where Windows frees them with the process. Processes that mapped one keep their view.
+pub fn remove_prefixed(prefix: &str) {
+    #[cfg(target_os = "linux")]
+    {
+        let Ok(path) = posix_name(prefix) else { return };
+        let bare = path.to_string_lossy();
+        let bare = bare.trim_start_matches('/');
+        let Ok(dir) = std::fs::read_dir("/dev/shm") else {
+            return;
+        };
+        for entry in dir.flatten() {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            if name.starts_with(bare)
+                && let Ok(c) = std::ffi::CString::new(format!("/{name}"))
+            {
+                // SAFETY: valid NUL-terminated name.
+                unsafe { libc::shm_unlink(c.as_ptr()) };
+            }
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = prefix;
+}
+
 // ---------------------------------------------------------------- video frame
 
 /// Video header: seq (u64, odd while writing), width (u32), height (u32), padded to 64 bytes.
@@ -582,6 +609,20 @@ mod tests {
         assert_eq!(p("Global\\estream-vcam-v1"), "/clutch-estream-vcam-v1");
         assert_eq!(p("a/b c"), "/clutch-a_b_c");
         assert!(posix_name(&"x".repeat(300)).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn leftovers_of_a_crashed_writer_are_removed() {
+        let n = name("leftover");
+        let writer = FrameWriter::create(&n, 4, 2).unwrap();
+        std::mem::forget(writer); // as if its process died
+        assert!(FrameReader::open(&n, 4, 2).is_ok());
+        remove_prefixed(&format!(
+            "Local\\estream-shm-test-{}-left",
+            std::process::id()
+        ));
+        assert!(FrameReader::open(&n, 4, 2).is_err(), "removed");
     }
 
     #[cfg(target_os = "linux")]

@@ -321,9 +321,16 @@ impl BrowserHost {
     /// Kills the helper process (tests use this to simulate a crash).
     pub fn kill_helper_for_test(&self) -> bool {
         HELPER_PID.lock().ok().and_then(|p| *p).is_some_and(|pid| {
-            Command::new("taskkill")
-                .args(["/F", "/PID", &pid.to_string()])
-                .stdout(Stdio::null())
+            let mut kill = if cfg!(windows) {
+                let mut c = Command::new("taskkill");
+                c.args(["/F", "/PID", &pid.to_string()]);
+                c
+            } else {
+                let mut c = Command::new("kill");
+                c.args(["-9", &pid.to_string()]);
+                c
+            };
+            kill.stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status()
                 .is_ok_and(|s| s.success())
@@ -389,6 +396,8 @@ impl BrowserHost {
             }
             // The helper exited (crash, or we closed it when no pages were left).
             let _ = child.wait();
+            // A crashed helper can't remove its shared memory (Linux keeps it until removed).
+            estream_shm::remove_prefixed(&format!("Local\\clutch-browser-{}-", child.id()));
             let wanted = {
                 let mut state = self.lock();
                 state.stdin = None;
