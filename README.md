@@ -10,11 +10,11 @@ Stream, record and clip your best moments, then cut them into beat-synced montag
 - studio mode with transitions, including stingers and custom shaders;
 - video filters;
 - multiple canvases (for example horizontal and vertical at the same time);
-- a virtual camera for Zoom, Teams, Discord, Meet and other apps (Windows 11);
+- a virtual camera for Zoom, Teams, Discord, Meet and other apps (Windows 11, or Linux with v4l2loopback);
 - automation: macros started by global hotkeys, a window coming to the front, timers, scenes or outputs;
 - stats and health: live numbers with 5 minutes of history, and plain-language alerts (rendering lag, encoder overload, network trouble, CPU/GPU load, low disk) with advice;
 
-Windows 10/11 (x64) is the supported platform today.
+Clutch runs on Windows 10/11 (x64) and on Linux (x86_64, Wayland or X11). See [Linux](#linux) for what differs there.
 
 ## Getting started
 
@@ -22,6 +22,8 @@ Windows 10/11 (x64) is the supported platform today.
 2. **Go live.** Click **Go Live**, pick Twitch, YouTube, Kick or Facebook Live, and paste your stream key. "Where do I find it?" opens the platform's key page. Clutch recognizes the platform from the key, catches a pasted server address, and picks the server, the encoder and the platform's recommended bitrate. Use **More options** for custom servers, SRT/RIST/WHIP, or your own encoder settings. To stream to another platform as well, use **Add platform** in the menu next to Go Live.
 
 ## Requirements
+
+These are for building on Windows; for Linux see [Build from source on Linux](#build-from-source-on-linux).
 
 | Tool | Why | Install |
 |---|---|---|
@@ -98,6 +100,76 @@ $env:CLUTCH_HOME = "D:\clutch-test"; .\target\release\clutch.exe
 
 Stream keys are encrypted with Windows DPAPI and never written to project files.
 
+On Linux the folder is `~/.config/Clutch`, and `CLUTCH_HOME` works the same way.
+
+## Linux
+
+### Install
+
+Download `Clutch-<version>-x86_64.AppImage`, make it executable and run it:
+
+```sh
+chmod +x Clutch-*-x86_64.AppImage
+./Clutch-*-x86_64.AppImage
+```
+
+It contains FFmpeg and the browser source's Chromium runtime. Everything else comes from your desktop:
+
+| What | Needed for | Usually |
+|---|---|---|
+| PipeWire | audio, desktop and app audio, screen capture | the default on current distributions |
+| xdg-desktop-portal with your desktop's backend (GNOME, KDE, wlroots) | screen and window capture, global hotkeys | installed with the desktop |
+| a Secret Service (GNOME Keyring, KWallet) | remembering stream keys | installed with GNOME and KDE |
+| a Vulkan or OpenGL driver | the preview and compositing | installed with the desktop |
+| `v4l2loopback` | the virtual camera | `sudo apt install v4l2loopback-dkms` |
+
+On first start Clutch writes a hidden desktop entry (`~/.local/share/applications/io.github.destrage.Clutch.desktop`, not shown in menus) pointing at the AppImage. Desktops only give permissions such as global hotkeys to an app they can find an entry for. Clutch never changes an entry it didn't write.
+
+### Build from source on Linux
+
+Install the Rust toolchain from <https://rustup.rs> and these packages:
+
+```sh
+# Ubuntu, Debian
+sudo apt install build-essential pkg-config clang libclang-dev cmake ninja-build \
+  libasound2-dev libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev \
+  libxi-dev libfontconfig-dev libssl-dev libdbus-1-dev libudev-dev libpipewire-0.3-dev
+
+# Fedora
+sudo dnf install gcc gcc-c++ pkgconf-pkg-config clang clang-devel cmake ninja-build \
+  alsa-lib-devel libxkbcommon-devel wayland-devel libX11-devel libXcursor-devel libXrandr-devel \
+  libXi-devel fontconfig-devel openssl-devel dbus-devel systemd-devel pipewire-devel
+
+# Arch
+sudo pacman -S base-devel clang cmake ninja alsa-lib libxkbcommon wayland libx11 libxcursor \
+  libxrandr libxi fontconfig openssl dbus systemd-libs pipewire
+```
+
+Then put the **linux64 LGPL shared** build of FFmpeg 9 (for example `ffmpeg-n9.*-linux64-lgpl-shared` from <https://github.com/BtbN/FFmpeg-Builds/releases>) in `third_party/ffmpeg`, so that `third_party/ffmpeg/lib` holds the `.so` files. Don't install your distribution's `libav*-dev` packages: their headers can take precedence over the bundled ones, and the build warns if they do. CEF downloads by itself, as on Windows.
+
+```sh
+cargo build --release -p estream -p estream-browser
+./target/release/clutch
+```
+
+The FFmpeg and CEF libraries are copied next to the binaries, which find them there. `cargo xtask package` builds the AppImage into `target/package/`; it downloads `appimagetool` once into `third_party/appimage`.
+
+### What differs on Linux
+
+- **Screen and window capture** go through your desktop's picker. Clutch remembers the choice, so the picker only shows the first time; **Choose again…** in the source's settings opens it again.
+- **Game capture** isn't available; use window or display capture. Projects made on Windows keep their game capture sources, shown as not available.
+- **App audio** lists the apps that are currently playing sound and reattaches when the app plays again.
+- **Global hotkeys** go through your desktop's shortcut settings (KDE, GNOME 48 and later) and may be changed there; your desktop may ask once. On X11 desktops without that, Clutch grabs the keys itself. Elsewhere hotkeys work while Clutch is in front, and the settings say so. Set `CLUTCH_HOTKEYS` to `portal`, `x11` or `off` to choose.
+- **The "window comes to the front" trigger** works on X11. Wayland doesn't tell apps which window is in front, so there the trigger is shown as unavailable.
+- **The virtual camera** writes to a `v4l2loopback` device. Load the module with a label so call apps show a recognisable name:
+
+  ```sh
+  sudo modprobe v4l2loopback card_label="Clutch" exclusive_caps=1
+  ```
+
+  To load it at every start, put `v4l2loopback` in `/etc/modules-load.d/v4l2loopback.conf` and `options v4l2loopback card_label="Clutch" exclusive_caps=1` in `/etc/modprobe.d/v4l2loopback.conf`.
+- **Stream keys** are kept with your desktop's keyring (Secret Service). Without one, a key lasts until Clutch closes, and the Go Live box says so.
+
 ## Remote control
 
 Turn it on in **Settings → Remote control**. Then point Stream Deck, Touch Portal, Streamer.bot or any obs-websocket v5 client at the address shown there (port 4455 by default), using the password from the same section.
@@ -129,7 +201,7 @@ Macros are saved with the scene collection, and every change they make can be un
 
 ## Virtual camera
 
-Click the camera button in the top bar, then pick **Clutch Virtual Camera** in your call app. Windows lists it as "Clutch Virtual Camera (Windows Virtual Camera)". It needs Windows 11.
+Click the camera button in the top bar, then pick **Clutch Virtual Camera** in your call app. Windows lists it as "Clutch Virtual Camera (Windows Virtual Camera)". It needs Windows 11. On Linux it uses `v4l2loopback`; see [Linux](#what-differs-on-linux).
 
 - **First start:** Windows asks once for permission to install the camera component, so expect a UAC prompt. Clutch copies the component to `%ProgramData%\Clutch\VirtualCamera` and registers it there.
 - **Choosing what it shows:** pick the canvas in **Settings → Virtual camera**.

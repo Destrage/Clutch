@@ -37,7 +37,7 @@
       `$ORIGIN`, so no `linuxdeploy`; the LGPL FFmpeg comes from `third_party/ffmpeg` as for
       every build)
 - [ ] 6.3 CI: build the AppImage on ubuntu-22.04 and upload it as an artifact
-- [ ] 6.4 README: Linux install (AppImage), build from source (apt/dnf/pacman packages), runtime
+- [x] 6.4 README: Linux install (AppImage), build from source (apt/dnf/pacman packages), runtime
       requirements (PipeWire, portals, v4l2loopback)
 
 ## 7. Verify
