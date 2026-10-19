@@ -1,0 +1,309 @@
+// The Stage: the studio's editing view. Scenes as cards along the bottom, sound as round mute
+// buttons beside them; the layers and settings float over the preview (see app.slint).
+
+import { Theme } from "theme.slint";
+import { Icons } from "icons.slint";
+import { SceneRow, MixerStrip } from "types.slint";
+import { Icon, IconButton, TextField, Hint } from "widgets.slint";
+import { TransitionBar } from "panels.slint";
+
+component SceneCard inherits Rectangle {
+    in property <SceneRow> scene;
+    /// The live picture, shown on the active scene's card.
+    in property <image> frame;
+    in property <bool> studio-mode;
+    in property <bool> can-delete;
+    in-out property <string> renaming;
+    callback activate();
+    callback rename(string);
+    callback duplicate();
+    callback remove();
+
+    width: 168px;
+    accessible-role: button;
+    accessible-label: scene.name;
+    accessible-item-selected: scene.active;
+
+    VerticalLayout {
+        spacing: 6px;
+        thumb := Rectangle {
+            height: 94px;
+            border-radius: Theme.radius-m;
+            border-width: 2px;
+            border-color: root.scene.active ? Theme.accent : ta.has-hover ? Theme.border-strong : Theme.border;
+            background: Theme.surface-2;
+            clip: true;
+            if root.scene.active: Image {
+                x: 2px;
+                y: 2px;
+                width: parent.width - 4px;
+                height: parent.height - 4px;
+                source: root.frame;
+                image-fit: contain;
+            }
+            if !root.scene.active: Text {
+                text: root.scene.items == 1 ? "1 item" : root.scene.items + " items";
+                color: Theme.text-faint;
+                font-size: Theme.font-s;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            ta := TouchArea {
+                mouse-cursor: MouseCursor.pointer;
+                clicked => { root.activate(); }
+                double-clicked => { root.renaming = root.scene.id; }
+            }
+            if root.studio-mode && root.scene.live: Rectangle {
+                x: 6px;
+                y: 6px;
+                width: live.preferred-width + 10px;
+                height: 16px;
+                border-radius: 4px;
+                background: Theme.live;
+                live := Text { text: "LIVE"; color: Theme.on-accent; font-size: 10px; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
+            }
+            // Scene actions on hover.
+            Rectangle {
+                visible: ta.has-hover || actions-ta.has-hover;
+                x: parent.width - self.width - 4px;
+                y: 4px;
+                width: row.preferred-width;
+                height: 26px;
+                border-radius: 6px;
+                background: Theme.surface.with-alpha(0.92);
+                actions-ta := TouchArea { }
+                row := HorizontalLayout {
+                    IconButton { icon: Icons.pencil; tooltip: "Rename"; size: 26px; icon-size: 13px; clicked => { root.renaming = root.scene.id; } }
+                    IconButton { icon: Icons.copy; tooltip: "Duplicate scene"; size: 26px; icon-size: 13px; clicked => { root.duplicate(); } }
+                    IconButton { icon: Icons.trash; tooltip: "Delete scene"; size: 26px; icon-size: 13px; enabled: root.can-delete; clicked => { root.remove(); } }
+                }
+            }
+        }
+        if root.renaming == root.scene.id: TextField {
+            text: root.scene.name;
+            label: "Scene name";
+            init => { self.focus(); }
+            accepted(t) => {
+                root.rename(t);
+                root.renaming = "";
+            }
+            changed has-focus => {
+                if (!self.has-focus && root.renaming == root.scene.id) {
+                    root.rename(self.text);
+                    root.renaming = "";
+                }
+            }
+        }
+        if root.renaming != root.scene.id: Text {
+            text: root.scene.name;
+            color: root.scene.active ? Theme.text : Theme.text-muted;
+            font-size: Theme.font-m;
+            font-weight: root.scene.active ? 600 : 500;
+            overflow: elide;
+        }
+    }
+}
+
+// A round mute button with a level bar, for one audio source.
+component SoundButton inherits Rectangle {
+    in property <MixerStrip> strip;
+    callback toggle-mute();
+    callback select();
+    property <float> level: max(strip.level-l, strip.level-r);
+    width: 76px;
+    accessible-role: button;
+    accessible-label: (strip.muted ? "Unmute " : "Mute ") + strip.name;
+    VerticalLayout {
+        spacing: 6px;
+        alignment: start;
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: 52px;
+                height: 52px;
+                border-radius: 26px;
+                border-width: 2px;
+                border-color: root.strip.muted ? Theme.border : root.level > 0.02 ? Theme.ok : Theme.border-strong;
+                background: ta.has-hover ? Theme.surface-2 : Theme.surface;
+                Icon {
+                    source: root.strip.muted ? Icons.volume-x
+                        : root.strip.kind == "audio_input" ? Icons.mic
+                        : root.strip.kind == "game_capture" ? Icons.gamepad
+                        : Icons.volume;
+                    size: 20px;
+                    tint: root.strip.muted ? Theme.live : Theme.text;
+                }
+                ta := TouchArea {
+                    mouse-cursor: MouseCursor.pointer;
+                    clicked => { root.toggle-mute(); }
+                    changed has-hover => {
+                        if (self.has-hover) {
+                            Hint.text = (root.strip.muted ? "Unmute " : "Mute ") + root.strip.name + " · " + round(root.strip.volume-db * 10) / 10 + " dB";
+                            Hint.x = root.absolute-position.x + root.width / 2;
+                            Hint.y = root.absolute-position.y - 28px;
+                        } else {
+                            Hint.text = "";
+                        }
+                    }
+                }
+            }
+        }
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: 52px;
+                height: 5px;
+                border-radius: 2.5px;
+                background: Theme.surface-3;
+                clip: true;
+                Rectangle {
+                    x: 0;
+                    width: parent.width * (root.strip.muted ? 0 : root.level);
+                    background: root.level > 0.92 ? Theme.live : Theme.ok;
+                }
+            }
+        }
+        Text {
+            text: root.strip.name;
+            color: root.strip.muted ? Theme.text-muted : Theme.text;
+            font-size: Theme.font-xs;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+    }
+}
+
+export component SceneStrip inherits Rectangle {
+    in property <[SceneRow]> scenes;
+    in property <image> frame;
+    in property <bool> studio-mode;
+    in property <[MixerStrip]> strips;
+    in-out property <string> renaming;
+    in property <bool> mixer-open;
+    in property <int> transition-kind;
+    in property <int> transition-direction;
+    in property <float> transition-duration;
+    in property <string> transition-file;
+    in property <float> transition-point;
+    callback activate(string);
+    callback add();
+    callback duplicate(string);
+    callback remove(string);
+    callback rename(string, string);
+    callback toggle-mute(string);
+    callback toggle-mixer();
+    callback transition-set(string, float);
+    callback edit-shader();
+
+    property <string> transition-name: ["Cut", "Fade", "Fade to black", "Slide", "Swipe", "Wipe", "Custom shader", "Stinger"][root.transition-kind];
+
+    height: 160px;
+    HorizontalLayout {
+        padding-top: 12px;
+        spacing: 16px;
+        Flickable {
+            horizontal-stretch: 1;
+            content-width: cards.preferred-width;
+            cards := HorizontalLayout {
+                spacing: 12px;
+                alignment: start;
+                for scene in root.scenes: SceneCard {
+                    scene: scene;
+                    frame: root.frame;
+                    studio-mode: root.studio-mode;
+                    can-delete: root.scenes.length > 1;
+                    renaming <=> root.renaming;
+                    activate => { root.activate(scene.id); }
+                    rename(t) => { root.rename(scene.id, t); }
+                    duplicate => { root.duplicate(scene.id); }
+                    remove => { root.remove(scene.id); }
+                }
+                // New scene, then the transition used between scenes.
+                VerticalLayout {
+                    spacing: 6px;
+                    width: 120px;
+                    alignment: start;
+                    Rectangle {
+                        height: 94px;
+                        border-radius: Theme.radius-m;
+                        border-width: 2px;
+                        border-color: add-ta.has-hover ? Theme.border-strong : Theme.border;
+                        accessible-role: button;
+                        accessible-label: "New scene";
+                        Icon { source: Icons.plus; size: 20px; }
+                        add-ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.add(); } }
+                    }
+                    Text { text: "New scene"; color: Theme.text-muted; font-size: Theme.font-m; }
+                }
+                VerticalLayout {
+                    spacing: 6px;
+                    width: 120px;
+                    alignment: start;
+                    Rectangle {
+                        height: 94px;
+                        border-radius: Theme.radius-m;
+                        background: tr-ta.has-hover ? Theme.surface-2 : transparent;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        accessible-role: button;
+                        accessible-label: "Transition: " + root.transition-name;
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 4px;
+                            Text { text: root.transition-name; color: Theme.text; font-size: Theme.font-m; font-weight: 600; horizontal-alignment: center; }
+                            if root.transition-kind != 0: Text { text: round(root.transition-duration) + " ms"; color: Theme.text-muted; font-size: Theme.font-s; horizontal-alignment: center; }
+                        }
+                        tr-ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { tr-popup.show(); } }
+                        tr-popup := PopupWindow {
+                            x: 0;
+                            y: -self.height - 8px;
+                            width: 280px;
+                            close-policy: close-on-click-outside;
+                            Rectangle {
+                                background: Theme.surface-3;
+                                border-radius: Theme.radius-m;
+                                border-width: 1px;
+                                border-color: Theme.border-strong;
+                                drop-shadow-blur: 16px;
+                                drop-shadow-color: #00000060;
+                                clip: true;
+                                TransitionBar {
+                                    border-width: 0px;
+                                    background: transparent;
+                                    kind: root.transition-kind;
+                                    direction: root.transition-direction;
+                                    duration: root.transition-duration;
+                                    file: root.transition-file;
+                                    point: root.transition-point;
+                                    set(k, v) => { root.transition-set(k, v); }
+                                    edit-shader => { root.edit-shader(); }
+                                }
+                            }
+                        }
+                    }
+                    Text { text: "Transition"; color: Theme.text-muted; font-size: Theme.font-m; }
+                }
+            }
+        }
+        Rectangle { width: 1px; background: Theme.border; }
+        // Sound.
+        HorizontalLayout {
+            spacing: 2px;
+            alignment: end;
+            for strip in root.strips: SoundButton {
+                strip: strip;
+                toggle-mute => { root.toggle-mute(strip.id); }
+            }
+            VerticalLayout {
+                alignment: start;
+                padding-top: 12px;
+                IconButton {
+                    icon: Icons.sliders-horizontal;
+                    tooltip: "Mixer: volume, filters and tracks";
+                    toggled: root.mixer-open;
+                    clicked => { root.toggle-mixer(); }
+                }
+            }
+        }
+    }
+}

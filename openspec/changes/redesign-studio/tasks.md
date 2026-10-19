@@ -14,9 +14,9 @@
 - [x] 3.3 Switch to the deck when live and back when the stream ends
 
 ## 4. Stage
-- [ ] 4.1 Full preview with floating layers and contextual settings
-- [ ] 4.2 Scene strip with thumbnails
-- [ ] 4.3 Round sound buttons with levels; full mixer on demand
+- [x] 4.1 Full preview with floating layers and contextual settings (plain-word quick options still to come)
+- [ ] 4.2 Scene strip with thumbnails (strip done, live picture on the active card; other scenes need GPU snapshots)
+- [x] 4.3 Round sound buttons with levels; full mixer on demand
 
 ## 5. Check
 - [ ] 5.1 Tests, clippy; in-app check of every page, dark and light, and a live session

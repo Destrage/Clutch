@@ -16,6 +16,7 @@ import { ClipsDialog } from "clips.slint";
 import { MontageDialog } from "montage.slint";
 import { LiveDeck } from "deck.slint";
 import { Sidebar } from "sidebar.slint";
+import { SceneStrip } from "stage.slint";
 import { GoLiveDialog } from "golive.slint";
 
 export { Theme }
@@ -208,6 +209,9 @@ export component AppWindow inherits Window {
     in-out property <length> inspector-width: 300px;
     in-out property <length> bottom-height: 230px;
     in-out property <length> sources-width: 420px;
+    /// Stage: the floating layers list and the mixer.
+    in-out property <bool> layers-open: true;
+    in-out property <bool> mixer-open;
 
     property <bool> space-down;
 
@@ -352,97 +356,76 @@ export component AppWindow inherits Window {
                 studio-mode: root.studio-mode;
                 toggle-studio => { root.action("studio.toggle"); }
             }
-            HorizontalLayout {
-                padding-left: 10px;
-                padding-right: 10px;
+            // The Stage: the preview fills the page; layers and settings float over it.
+            VerticalLayout {
                 vertical-stretch: 1;
-
-                ScenesPanel {
-                    width: root.scenes-width;
-                    scenes: root.scenes;
-                    renaming <=> root.renaming-scene;
-                    activate(id) => { root.scene-activate(id); main-keys.focus(); }
-                    add => { root.scene-add(); }
-                    duplicate(id) => { root.scene-duplicate(id); }
-                    remove(id) => { root.scene-remove(id); }
-                    rename(id, name) => { root.scene-rename(id, name); main-keys.focus(); }
-                    studio-mode: root.studio-mode;
-                    transition-kind: root.transition-kind;
-                    transition-direction: root.transition-direction;
-                    transition-duration: root.transition-duration;
-                    transition-file: root.transition-file;
-                    transition-point: root.transition-point;
-                    transition-set(k, v) => { root.transition-set(k, v); }
-                    edit-shader => { root.action("transition.shader"); }
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 8px;
+                CanvasTabs {
+                    tabs: root.canvas-tabs;
+                    presets: root.canvas-presets;
+                    renaming <=> root.renaming-canvas;
+                    select(id) => { root.canvas-select(id); main-keys.focus(); }
+                    add(i) => { root.canvas-add(i); }
+                    remove(id) => { root.canvas-remove(id); }
+                    rename(id, name) => { root.canvas-rename(id, name); main-keys.focus(); }
                 }
-                VSplitter { size <=> root.scenes-width; minimum: 160px; maximum: 420px; }
-
-                VerticalLayout {
-                    horizontal-stretch: 1;
-                    spacing: 6px;
-                    CanvasTabs {
-                        tabs: root.canvas-tabs;
-                        presets: root.canvas-presets;
-                        renaming <=> root.renaming-canvas;
-                        select(id) => { root.canvas-select(id); main-keys.focus(); }
-                        add(i) => { root.canvas-add(i); }
-                        remove(id) => { root.canvas-remove(id); }
-                        rename(id, name) => { root.canvas-rename(id, name); main-keys.focus(); }
-                    }
-                    Rectangle {
-                        vertical-stretch: 1;
-                        border-radius: Theme.radius-l;
-                        border-width: 1px;
-                        border-color: Theme.border;
-                        clip: true;
-                        HorizontalLayout {
-                            preview := Preview {
-                                horizontal-stretch: 1;
-                                frame: root.preview-frame;
-                                canvas-w: root.canvas-w;
-                                canvas-h: root.canvas-h;
-                                selection: root.selection-box;
-                                hover: root.hover-box;
-                                guides: root.guides;
-                                cursor: root.cursor;
-                                space-down: root.space-down;
-                                pointer(kind, x, y, px, shift, alt, ctrl) => {
-                                    if (kind == "down") { main-keys.focus(); }
-                                    root.preview-pointer(kind, x, y, px, shift, alt, ctrl);
-                                }
-                            }
-                            if root.studio-mode: TransitionColumn {
-                                label: root.transition-label;
-                                busy: root.transition-busy;
-                                go(mode) => { root.studio-go(mode); main-keys.focus(); }
-                            }
-                            if root.studio-mode: ProgramView {
-                                horizontal-stretch: 1;
-                                frame: root.program-frame;
-                                canvas-w: root.canvas-w;
-                                canvas-h: root.canvas-h;
-                            }
-                        }
-                        if root.studio-mode: Rectangle {
-                            x: 12px;
-                            y: 10px;
-                            width: preview-label.preferred-width + 14px;
-                            height: 20px;
-                            border-radius: 10px;
-                            background: Theme.ok;
-                            preview-label := Text { text: "PREVIEW"; color: Theme.on-accent; font-size: Theme.font-xs; font-weight: 700; }
-                        }
-                    }
-                    HSplitter {
-                        size <=> root.bottom-height;
-                        invert: true;
-                        minimum: 140px;
-                        maximum: 520px;
-                    }
+                stage := Rectangle {
+                    vertical-stretch: 1;
+                    border-radius: Theme.radius-l;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    clip: true;
                     HorizontalLayout {
-                        height: root.bottom-height;
+                        preview := Preview {
+                            horizontal-stretch: 1;
+                            frame: root.preview-frame;
+                            canvas-w: root.canvas-w;
+                            canvas-h: root.canvas-h;
+                            selection: root.selection-box;
+                            hover: root.hover-box;
+                            guides: root.guides;
+                            cursor: root.cursor;
+                            space-down: root.space-down;
+                            pointer(kind, x, y, px, shift, alt, ctrl) => {
+                                if (kind == "down") { main-keys.focus(); }
+                                root.preview-pointer(kind, x, y, px, shift, alt, ctrl);
+                            }
+                        }
+                        if root.studio-mode: TransitionColumn {
+                            label: root.transition-label;
+                            busy: root.transition-busy;
+                            go(mode) => { root.studio-go(mode); main-keys.focus(); }
+                        }
+                        if root.studio-mode: ProgramView {
+                            horizontal-stretch: 1;
+                            frame: root.program-frame;
+                            canvas-w: root.canvas-w;
+                            canvas-h: root.canvas-h;
+                        }
+                    }
+                    if root.studio-mode: Rectangle {
+                        x: parent.width - self.width - 12px;
+                        y: 10px;
+                        width: preview-label.preferred-width + 14px;
+                        height: 20px;
+                        border-radius: 10px;
+                        background: Theme.ok;
+                        preview-label := Text { text: "PREVIEW"; color: Theme.on-accent; font-size: Theme.font-xs; font-weight: 700; }
+                    }
+                    // What is in the scene (top left).
+                    if root.layers-open: Rectangle {
+                        x: 12px;
+                        y: 12px;
+                        width: 270px;
+                        height: min(parent.height - 24px, 120px + root.layers.length * 34px);
+                        border-radius: Theme.radius-l;
+                        drop-shadow-blur: 18px;
+                        drop-shadow-color: #00000050;
                         SourcesPanel {
-                            width: root.sources-width;
+                            width: parent.width;
+                            height: parent.height;
                             layers: root.layers;
                             select(id) => { root.layer-select(id); main-keys.focus(); }
                             toggle-visible(id) => { root.layer-toggle-visible(id); }
@@ -453,9 +436,73 @@ export component AppWindow inherits Window {
                             move-down => { root.action("item.down"); }
                             group => { root.action("item.group"); }
                         }
-                        VSplitter { size <=> root.sources-width; minimum: 260px; maximum: 900px; }
+                    }
+                    // The selected item's settings (top right), only while something is selected.
+                    if root.inspect.has || root.audio-inspect.has: Rectangle {
+                        x: parent.width - self.width - 12px;
+                        y: root.studio-mode ? 40px : 12px;
+                        width: root.inspector-width;
+                        height: parent.height - self.y - 12px;
+                        border-radius: Theme.radius-l;
+                        drop-shadow-blur: 18px;
+                        drop-shadow-color: #00000050;
+                        InspectorPanel {
+                            width: parent.width;
+                            height: parent.height;
+                            sel: root.inspect;
+                            canvas-info: root.canvas-info;
+                            gpu-info: root.gpu-info;
+                            edit(field, v) => { root.inspect-edit(field, v); }
+                            edit-text(field, v) => { root.inspect-text(field, v); }
+                            edit-color(c) => { root.inspect-color(c); }
+                            select-option(field, i) => { root.inspect-option(field, i); }
+                            toggle(field, v) => { root.inspect-toggle(field, v); }
+                            commit => { root.inspect-commit(); }
+                            action(id) => { root.action(id); }
+                            props: root.props;
+                            prop-flag(k, v) => { root.prop-flag(k, v); }
+                            prop-number(k, v) => { root.prop-number(k, v); }
+                            prop-text(k, v) => { root.prop-text(k, v); }
+                            prop-color(k, v) => { root.prop-color(k, v); }
+                            prop-index(k, i) => { root.prop-index(k, i); }
+                            prop-browse(k) => { root.prop-browse(k); }
+                            prop-refresh => { root.prop-refresh(); }
+                            audio: root.audio-inspect;
+                            audio-set(k, v) => { root.audio-set(k, v); }
+                            filter-add(i) => { root.filter-add(i); }
+                            filter-remove(id) => { root.filter-remove(id); }
+                            filter-toggle(id, v) => { root.filter-toggle(id, v); }
+                            filter-param(id, k, v) => { root.filter-param(id, k, v); }
+                            filter-move(id, up) => { root.filter-move(id, up); }
+                            video-filters: root.video-filters;
+                            media: root.media-inspect;
+                            media-control(c) => { root.media-control(c); }
+                            media-seek(f) => { root.media-seek(f); }
+                            browser: root.browser-selected;
+                            browser-status: root.browser-status;
+                            browser-reload => { root.browser-reload(); }
+                            video-filter-kinds: root.video-filter-kinds;
+                            vfilter-add(i) => { root.vfilter-add(i); }
+                            vfilter-remove(id) => { root.vfilter-remove(id); }
+                            vfilter-toggle(id, v) => { root.vfilter-toggle(id, v); }
+                            vfilter-param(id, k, v) => { root.vfilter-param(id, k, v); }
+                            vfilter-move(id, up) => { root.vfilter-move(id, up); }
+                            vfilter-browse(id) => { root.vfilter-browse(id); }
+                            vfilter-code(id) => { root.vfilter-code(id); }
+                        }
+                    }
+                    // The full mixer, on demand (bottom right).
+                    if root.mixer-open: Rectangle {
+                        x: parent.width - self.width - 12px;
+                        y: parent.height - self.height - 12px;
+                        width: min(parent.width - 24px, 560px);
+                        height: min(parent.height - 24px, 300px);
+                        border-radius: Theme.radius-l;
+                        drop-shadow-blur: 18px;
+                        drop-shadow-color: #00000050;
                         MixerPanel {
-                            horizontal-stretch: 1;
+                            width: parent.width;
+                            height: parent.height;
                             strips: root.mixer-strips;
                             master: root.mixer-master;
                             select(id) => { root.mixer-select(id); main-keys.focus(); }
@@ -466,50 +513,27 @@ export component AppWindow inherits Window {
                         }
                     }
                 }
-
-                VSplitter { size <=> root.inspector-width; invert: true; minimum: 260px; maximum: 520px; }
-                InspectorPanel {
-                    width: root.inspector-width;
-                    sel: root.inspect;
-                    canvas-info: root.canvas-info;
-                    gpu-info: root.gpu-info;
-                    edit(field, v) => { root.inspect-edit(field, v); }
-                    edit-text(field, v) => { root.inspect-text(field, v); }
-                    edit-color(c) => { root.inspect-color(c); }
-                    select-option(field, i) => { root.inspect-option(field, i); }
-                    toggle(field, v) => { root.inspect-toggle(field, v); }
-                    commit => { root.inspect-commit(); }
-                    action(id) => { root.action(id); }
-                    props: root.props;
-                    prop-flag(k, v) => { root.prop-flag(k, v); }
-                    prop-number(k, v) => { root.prop-number(k, v); }
-                    prop-text(k, v) => { root.prop-text(k, v); }
-                    prop-color(k, v) => { root.prop-color(k, v); }
-                    prop-index(k, i) => { root.prop-index(k, i); }
-                    prop-browse(k) => { root.prop-browse(k); }
-                    prop-refresh => { root.prop-refresh(); }
-                    audio: root.audio-inspect;
-                    audio-set(k, v) => { root.audio-set(k, v); }
-                    filter-add(i) => { root.filter-add(i); }
-                    filter-remove(id) => { root.filter-remove(id); }
-                    filter-toggle(id, v) => { root.filter-toggle(id, v); }
-                    filter-param(id, k, v) => { root.filter-param(id, k, v); }
-                    filter-move(id, up) => { root.filter-move(id, up); }
-                    video-filters: root.video-filters;
-                    media: root.media-inspect;
-                    media-control(c) => { root.media-control(c); }
-                    media-seek(f) => { root.media-seek(f); }
-                    browser: root.browser-selected;
-                    browser-status: root.browser-status;
-                    browser-reload => { root.browser-reload(); }
-                    video-filter-kinds: root.video-filter-kinds;
-                    vfilter-add(i) => { root.vfilter-add(i); }
-                    vfilter-remove(id) => { root.vfilter-remove(id); }
-                    vfilter-toggle(id, v) => { root.vfilter-toggle(id, v); }
-                    vfilter-param(id, k, v) => { root.vfilter-param(id, k, v); }
-                    vfilter-move(id, up) => { root.vfilter-move(id, up); }
-                    vfilter-browse(id) => { root.vfilter-browse(id); }
-                    vfilter-code(id) => { root.vfilter-code(id); }
+                SceneStrip {
+                    scenes: root.scenes;
+                    frame: root.preview-frame;
+                    studio-mode: root.studio-mode;
+                    strips: root.mixer-strips;
+                    renaming <=> root.renaming-scene;
+                    mixer-open: root.mixer-open;
+                    transition-kind: root.transition-kind;
+                    transition-direction: root.transition-direction;
+                    transition-duration: root.transition-duration;
+                    transition-file: root.transition-file;
+                    transition-point: root.transition-point;
+                    activate(id) => { root.scene-activate(id); main-keys.focus(); }
+                    add => { root.scene-add(); }
+                    duplicate(id) => { root.scene-duplicate(id); }
+                    remove(id) => { root.scene-remove(id); }
+                    rename(id, name) => { root.scene-rename(id, name); main-keys.focus(); }
+                    toggle-mute(id) => { root.mixer-mute(id); }
+                    toggle-mixer => { root.mixer-open = !root.mixer-open; }
+                    transition-set(k, v) => { root.transition-set(k, v); }
+                    edit-shader => { root.action("transition.shader"); }
                 }
             }
             StatusBar {
