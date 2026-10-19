@@ -1787,6 +1787,7 @@ name = "estream-clips"
 version = "0.3.3"
 dependencies = [
  "chrono",
+ "dirs",
  "estream-core",
  "getrandom 0.3.4",
  "serde",

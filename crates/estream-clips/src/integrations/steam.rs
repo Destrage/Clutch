@@ -2,17 +2,35 @@
 
 use std::path::{Path, PathBuf};
 
-/// Steam's own folder: from the registry, or the default install location.
+/// Steam's own folder: the first of [`steam_candidates`] with a `steamapps` folder.
 pub fn steam_root() -> Option<PathBuf> {
-    registry_steam_path()
+    steam_candidates(dirs::home_dir().as_deref())
+        .into_iter()
+        .find(|p| p.join("steamapps").is_dir())
+}
+
+/// Where Steam may live: the registry and default installs on Windows; on Linux the native
+/// install (and its `~/.steam` links), Flatpak and Snap.
+fn steam_candidates(home: Option<&Path>) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = registry_steam_path()
         .map(PathBuf::from)
-        .filter(|p| p.join("steamapps").is_dir())
-        .or_else(|| {
-            [r"C:\Program Files (x86)\Steam", r"C:\Program Files\Steam"]
-                .iter()
-                .map(PathBuf::from)
-                .find(|p| p.join("steamapps").is_dir())
-        })
+        .into_iter()
+        .collect();
+    if cfg!(windows) {
+        out.extend([r"C:\Program Files (x86)\Steam", r"C:\Program Files\Steam"].map(PathBuf::from));
+    } else if let Some(home) = home {
+        out.extend(
+            [
+                ".steam/steam",
+                ".steam/root",
+                ".local/share/Steam",
+                ".var/app/com.valvesoftware.Steam/.local/share/Steam",
+                "snap/steam/common/.local/share/Steam",
+            ]
+            .map(|p| home.join(p)),
+        );
+    }
+    out
 }
 
 #[cfg(windows)]
@@ -162,6 +180,20 @@ mod tests {
             )
         );
         assert_eq!(app_install_dir(&root, 570), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn finds_steam_in_a_linux_home() {
+        let home = temp("home");
+        assert_eq!(steam_candidates(Some(&home)).len(), 5);
+        let flatpak = home.join(".var/app/com.valvesoftware.Steam/.local/share/Steam");
+        let _ = std::fs::create_dir_all(flatpak.join("steamapps"));
+        let found = steam_candidates(Some(&home))
+            .into_iter()
+            .find(|p| p.join("steamapps").is_dir());
+        assert_eq!(found, Some(flatpak));
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

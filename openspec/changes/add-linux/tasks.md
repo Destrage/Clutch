@@ -12,7 +12,7 @@
 - [x] 2.1 `estream-shm`: POSIX `shm_open` + `mmap` with the same API; tests run on Linux
 - [x] 2.2 Secrets: `keyring` backend with the `keyring:` prefix; session-only without one
 - [x] 2.3 `estream-health`: CPU, memory and GPU stats on Linux
-- [ ] 2.4 `estream-clips`: Steam library paths on Linux
+- [x] 2.4 `estream-clips`: Steam library paths on Linux
 - [ ] 2.5 Unknown source kinds load as "Not available on this system" instead of failing
 
 ## 3. Capture
