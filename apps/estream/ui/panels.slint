@@ -1042,6 +1042,27 @@ export component InspectorPanel inherits Panel {
                 Toggle { label: "Locked"; checked: root.sel.locked; toggled(v) => { root.toggle("locked", v); } }
             }
 
+            // Quick placement in plain words; the exact numbers follow below.
+            if !root.sel.no-video: VerticalLayout {
+                spacing: 8px;
+                SectionTitle { text: "PLACE"; }
+                HorizontalLayout {
+                    spacing: 6px;
+                    Button { text: "Full screen"; tooltip: "Fit to the whole canvas"; clicked => { root.action("transform.fit"); } }
+                    Button { text: "Center"; tooltip: "Center on the canvas"; clicked => { root.action("transform.center"); } }
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    Button { text: "Top left"; tooltip: "Small, in the top-left corner"; clicked => { root.action("transform.corner.tl"); } }
+                    Button { text: "Top right"; tooltip: "Small, in the top-right corner"; clicked => { root.action("transform.corner.tr"); } }
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    Button { text: "Bottom left"; tooltip: "Small, in the bottom-left corner (a webcam over gameplay)"; clicked => { root.action("transform.corner.bl"); } }
+                    Button { text: "Bottom right"; tooltip: "Small, in the bottom-right corner (a webcam over gameplay)"; clicked => { root.action("transform.corner.br"); } }
+                }
+            }
+
             // Transform
             if !root.sel.no-video: VerticalLayout {
                 spacing: 8px;

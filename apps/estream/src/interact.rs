@@ -549,6 +549,46 @@ fn best_snap(edges: [f32; 3], lines: &[f32], threshold: f32) -> Option<(f32, f32
     best
 }
 
+/// A canvas corner, for the quick placements.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Corner {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+/// Transform for "put it in a corner": fitted into a box 30% of the canvas, a small margin
+/// from the edges (a webcam over gameplay).
+pub fn in_corner(canvas: Vec2, corner: Corner) -> ItemTransform {
+    let size = canvas * 0.3;
+    let margin = canvas.x.min(canvas.y) * 0.03;
+    let left = matches!(corner, Corner::TopLeft | Corner::BottomLeft);
+    let top = matches!(corner, Corner::TopLeft | Corner::TopRight);
+    let x = if left {
+        margin
+    } else {
+        canvas.x - size.x - margin
+    };
+    let y = if top {
+        margin
+    } else {
+        canvas.y - size.y - margin
+    };
+    ItemTransform {
+        position: Vec2::new(x, y),
+        bounds_mode: BoundsMode::Fit,
+        bounds: size,
+        bounds_alignment: match corner {
+            Corner::TopLeft => estream_core::Alignment::TopLeft,
+            Corner::TopRight => estream_core::Alignment::TopRight,
+            Corner::BottomLeft => estream_core::Alignment::BottomLeft,
+            Corner::BottomRight => estream_core::Alignment::BottomRight,
+        },
+        ..Default::default()
+    }
+}
+
 /// Transform for "fit to canvas" (keeps aspect, centered).
 pub fn fit_to_canvas(canvas: Vec2) -> ItemTransform {
     ItemTransform {
@@ -598,6 +638,20 @@ mod tests {
         let mut item = SceneItem::source(src);
         item.transform.position = pos;
         item
+    }
+
+    #[test]
+    fn corners_fit_a_third_of_the_canvas_inside_the_margin() {
+        let canvas = Vec2::new(1920.0, 1080.0);
+        let br = in_corner(canvas, Corner::BottomRight);
+        approx(br.bounds, Vec2::new(576.0, 324.0));
+        approx(
+            br.position,
+            Vec2::new(1920.0 - 576.0 - 32.4, 1080.0 - 324.0 - 32.4),
+        );
+        let tl = in_corner(canvas, Corner::TopLeft);
+        approx(tl.position, Vec2::new(32.4, 32.4));
+        assert_eq!(tl.bounds_mode, BoundsMode::Fit);
     }
 
     #[test]

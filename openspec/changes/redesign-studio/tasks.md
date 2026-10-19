@@ -14,7 +14,7 @@
 - [x] 3.3 Switch to the deck when live and back when the stream ends
 
 ## 4. Stage
-- [x] 4.1 Full preview with floating layers and contextual settings (plain-word quick options still to come)
+- [x] 4.1 Full preview with floating layers and contextual settings, with plain-word placement first
 - [x] 4.2 Scene strip with thumbnails (live on the active card, the last picture seen on the others)
 - [x] 4.3 Round sound buttons with levels; full mixer on demand
 

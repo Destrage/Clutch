@@ -2,7 +2,7 @@
 //! commands, and turns engine snapshots/events back into UI models.
 
 use crate::actions::{self, Action, Key};
-use crate::interact::{self, Drag, DragKind, Handle, ItemGeom, Modifiers};
+use crate::interact::{self, Corner, Drag, DragKind, Handle, ItemGeom, Modifiers};
 use crate::presets::{self, PRESETS};
 use crate::settings::{PanelLayout, Paths, Settings, ThemeMode, WindowState};
 use crate::ui::{
@@ -1273,7 +1273,13 @@ impl App {
         if let Some((r, g, b)) = crate::settings::parse_hex(&self.settings.accent) {
             // Light accents (like the default ice blue) fade on white: the light theme uses a
             // deeper shade of the same colour, with white text on it.
-            let shade = |c: u8| if dark { c } else { (c as f32 * 0.55).round() as u8 };
+            let shade = |c: u8| {
+                if dark {
+                    c
+                } else {
+                    (c as f32 * 0.55).round() as u8
+                }
+            };
             theme.set_accent(slint::Color::from_rgb_u8(shade(r), shade(g), shade(b)));
         }
     }
@@ -6248,7 +6254,11 @@ impl App {
             Action::FitToCanvas
             | Action::StretchToCanvas
             | Action::CenterOnCanvas
-            | Action::ResetTransform => {
+            | Action::ResetTransform
+            | Action::CornerTopLeft
+            | Action::CornerTopRight
+            | Action::CornerBottomLeft
+            | Action::CornerBottomRight => {
                 let Some((_, item)) = self.selected() else {
                     self.toast("Select a source first".into(), false);
                     return;
@@ -6261,6 +6271,14 @@ impl App {
                             return;
                         };
                         interact::centered(g, item.transform, canvas_size)
+                    }
+                    Action::CornerTopLeft => interact::in_corner(canvas_size, Corner::TopLeft),
+                    Action::CornerTopRight => interact::in_corner(canvas_size, Corner::TopRight),
+                    Action::CornerBottomLeft => {
+                        interact::in_corner(canvas_size, Corner::BottomLeft)
+                    }
+                    Action::CornerBottomRight => {
+                        interact::in_corner(canvas_size, Corner::BottomRight)
                     }
                     _ => estream_core::ItemTransform::default(),
                 };

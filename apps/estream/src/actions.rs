@@ -27,6 +27,10 @@ pub enum Action {
     StretchToCanvas,
     CenterOnCanvas,
     ResetTransform,
+    CornerTopLeft,
+    CornerTopRight,
+    CornerBottomLeft,
+    CornerBottomRight,
     ZoomFit,
     Zoom100,
     ToggleSnapping,
@@ -169,6 +173,10 @@ actions! {
     StretchToCanvas, "transform.stretch", "Stretch to canvas", "Transform", Some(Shortcut::ctrl_shift('s')), true;
     CenterOnCanvas, "transform.center", "Center on canvas", "Transform", Some(Shortcut::ctrl('e')), true;
     ResetTransform, "transform.reset", "Reset transform", "Transform", Some(Shortcut::ctrl('r')), true;
+    CornerTopLeft, "transform.corner.tl", "Put in the top-left corner", "Transform", None, true;
+    CornerTopRight, "transform.corner.tr", "Put in the top-right corner", "Transform", None, true;
+    CornerBottomLeft, "transform.corner.bl", "Put in the bottom-left corner", "Transform", None, true;
+    CornerBottomRight, "transform.corner.br", "Put in the bottom-right corner", "Transform", None, true;
     ZoomFit, "view.fit", "Zoom to fit", "View", Some(Shortcut::ctrl('0')), true;
     Zoom100, "view.100", "Zoom to 100%", "View", Some(Shortcut::ctrl('1')), true;
     ToggleSnapping, "view.snapping", "Toggle snapping", "View", None, true;
