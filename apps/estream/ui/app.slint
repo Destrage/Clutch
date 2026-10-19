@@ -17,6 +17,7 @@ import { MontageDialog } from "montage.slint";
 import { LiveDeck } from "deck.slint";
 import { Sidebar } from "sidebar.slint";
 import { SceneStrip } from "stage.slint";
+import { ChatPanel, ChatTabRow } from "chat.slint";
 import { GoLiveDialog } from "golive.slint";
 
 export { Theme }
@@ -147,12 +148,27 @@ export component AppWindow inherits Window {
     in property <int> stream-health;
     in property <[LiveRow]> live-rows;
     // The Live deck shows while a stream runs, unless the user chose to edit the layout.
+    // Chat panel (the Live deck's right column and the Chat page).
+    in property <[ChatTabRow]> chat-tabs;
+    in property <int> chat-selected;
+    in property <image> chat-frame;
+    in property <string> chat-message;
+    in-out property <bool> chat-open;
+    callback chat-select(int);
+    callback chat-pointer(string, float, float, int, float, float);
+    callback chat-key(string, bool, bool, bool, bool);
+    callback chat-home();
+    callback chat-reload();
+    callback chat-resized(float, float);
+    /// Whether a chat panel is on screen.
+    out property <bool> chat-visible: root.deck-visible || root.chat-open;
     in-out property <bool> deck-edit;
     /// The section shown beside the sidebar.
-    property <string> page: root.clips-open ? "clips" : root.montage-open ? "montages" : "studio";
+    property <string> page: root.chat-open ? "chat" : root.clips-open ? "clips" : root.montage-open ? "montages" : "studio";
     property <length> sidebar-width: 76px;
     /// Leaves Clips or Montages (whichever is open) for the studio.
     function close-pages() {
+        root.chat-open = false;
         if (root.clips-open) {
             root.clips-action("close", 0, 0);
             root.clips-open = false;
@@ -315,6 +331,7 @@ export component AppWindow inherits Window {
                 root.close-pages();
                 if (p == "clips") { root.action("clips.open"); }
                 if (p == "montages") { root.action("montage.open"); }
+                if (p == "chat") { root.chat-open = true; }
             }
             open-settings => { root.action("settings"); }
         }
@@ -577,6 +594,16 @@ export component AppWindow inherits Window {
             toggle-record => { root.action("record.toggle"); main-keys.focus(); }
             end-stream => { root.action("stream.toggle"); main-keys.focus(); }
             edit-layout => { root.deck-edit = true; main-keys.focus(); }
+            chat-tabs: root.chat-tabs;
+            chat-selected: root.chat-selected;
+            chat-frame: root.chat-frame;
+            chat-message: root.chat-message;
+            chat-select(i) => { root.chat-select(i); }
+            chat-pointer(k, x, y, b, dx, dy) => { root.chat-pointer(k, x, y, b, dx, dy); }
+            chat-key(t, d, c, s, a) => { root.chat-key(t, d, c, s, a); }
+            chat-home => { root.chat-home(); }
+            chat-reload => { root.chat-reload(); }
+            chat-resized(w, h) => { root.chat-resized(w, h); }
         }
     }
 
@@ -679,6 +706,35 @@ export component AppWindow inherits Window {
             root.montage-action("close", 0, 0);
             root.montage-open = false;
             main-keys.focus();
+        }
+    }
+
+    // The Chat page (beside the sidebar), for chatting when not live.
+    if root.chat-open && !root.deck-visible: Rectangle {
+        x: root.sidebar-width;
+        width: root.width - root.sidebar-width;
+        background: Theme.bg;
+        VerticalLayout {
+            padding: 20px;
+            spacing: 14px;
+            Text { text: "Chat"; color: Theme.text; font-family: Theme.font-display; font-size: 28px; font-weight: 600; }
+            HorizontalLayout {
+                alignment: start;
+                vertical-stretch: 1;
+                ChatPanel {
+                    width: min(560px, root.width - root.sidebar-width - 40px);
+                    tabs: root.chat-tabs;
+                    selected: root.chat-selected;
+                    frame: root.chat-frame;
+                    message: root.chat-message;
+                    select(i) => { root.chat-select(i); }
+                    pointer(k, x, y, b, dx, dy) => { root.chat-pointer(k, x, y, b, dx, dy); }
+                    key(t, d, c, s, a) => { root.chat-key(t, d, c, s, a); }
+                    home => { root.chat-home(); }
+                    reload => { root.chat-reload(); }
+                    resized(w, h) => { root.chat-resized(w, h); }
+                }
+            }
         }
     }
 

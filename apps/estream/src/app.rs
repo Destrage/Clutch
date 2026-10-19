@@ -136,6 +136,12 @@ pub struct App {
     clip_ask: Option<(String, String)>,
     /// The Clips view.
     clips_ui: crate::clips::ClipsUi,
+    /// The chat tabs and their pages.
+    chat: crate::chat::ChatUi,
+    /// The destinations the chat tabs were made from (rebuilt when they change).
+    chat_sources: Vec<(String, estream_media::Service, String)>,
+    /// The selected chat page has shown a frame.
+    chat_has_frame: bool,
     /// Settings → Clips: the game whose auto-clip rules are shown.
     clip_rule_game: usize,
     /// Montages: the saved ones, the New montage wizard and the editor.
@@ -258,6 +264,7 @@ fn stream_form(
         destinations: ModelRc::new(VecModel::from(rows)),
         dest_selected: selected.map_or(-1, |i| i as i32),
         dest_name: d.name.clone().into(),
+        dest_channel: d.channel.clone().into(),
         stream_services: ModelRc::new(VecModel::from(
             Service::ALL
                 .iter()
@@ -481,6 +488,9 @@ impl App {
             markers: None,
             clip_ask: None,
             clips_ui: crate::clips::ClipsUi::default(),
+            chat: crate::chat::ChatUi::default(),
+            chat_sources: Vec::new(),
+            chat_has_frame: false,
             clip_rule_game: 0,
             montage_ui: crate::montage::MontageUi::default(),
         };
@@ -596,6 +606,100 @@ impl App {
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| "My setup".into())
+    }
+
+    // ---- Chat ----
+
+    /// Rebuilds the chat tabs when the enabled destinations (or their channels) change.
+    fn refresh_chat_tabs(&mut self) {
+        let sources: Vec<(String, estream_media::Service, String)> = self
+            .settings
+            .destinations
+            .iter()
+            .filter(|d| d.enabled)
+            .map(|d| (d.name.clone(), d.stream.service, d.channel.clone()))
+            .collect();
+        if sources == self.chat_sources {
+            return;
+        }
+        self.chat_sources = sources.clone();
+        self.chat.set_destinations(sources);
+        self.chat_has_frame = false;
+        let Some(w) = self.window() else { return };
+        let rows: Vec<crate::ui::ChatTabRow> = self
+            .chat
+            .tabs
+            .iter()
+            .map(|t| crate::ui::ChatTabRow {
+                name: t.name.clone().into(),
+                kind: match t.service {
+                    estream_media::Service::Kick => "kick",
+                    estream_media::Service::Twitch => "twitch",
+                    estream_media::Service::YouTube => "youtube",
+                    _ => "",
+                }
+                .into(),
+            })
+            .collect();
+        w.set_chat_tabs(ModelRc::new(VecModel::from(rows)));
+        w.set_chat_selected(self.chat.selected as i32);
+    }
+
+    pub fn chat_select(&mut self, index: i32) {
+        if index < 0 || index as usize >= self.chat.tabs.len() {
+            return;
+        }
+        self.chat.selected = index as usize;
+        self.chat_has_frame = false;
+        self.chat.show_current();
+        if let Some(w) = self.window() {
+            w.set_chat_selected(index);
+        }
+    }
+
+    pub fn chat_resized(&mut self, width: f32, height: f32) {
+        let size = (
+            width.max(0.0).round() as u32,
+            height.max(0.0).round() as u32,
+        );
+        if size != self.chat.size && size.0 > 0 && size.1 > 0 {
+            self.chat.size = size;
+            self.chat.show_current();
+        }
+    }
+
+    /// While a chat panel is on screen: open the selected tab's page and show its frames.
+    fn tick_chat(&mut self) {
+        let Some(w) = self.window() else { return };
+        self.refresh_chat_tabs();
+        let message = match self.chat.current() {
+            None => String::new(),
+            Some(tab) => match &tab.url {
+                Err(hint) => (*hint).to_owned(),
+                Ok(_) => String::new(),
+            },
+        };
+        if !message.is_empty() {
+            w.set_chat_message(message.into());
+            return;
+        }
+        if self.chat.page().is_none() {
+            self.chat.show_current();
+        }
+        let Some(page) = self.chat.page() else { return };
+        if let Some((width, height, rgba)) = page.latest() {
+            let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                rgba, width, height,
+            );
+            w.set_chat_frame(slint::Image::from_rgba8(buffer));
+            self.chat_has_frame = true;
+        }
+        let message = match self.chat.page().and_then(|p| p.error()) {
+            Some(e) => format!("The chat didn't load: {e}"),
+            None if !self.chat_has_frame => "Loading chat…".to_owned(),
+            None => String::new(),
+        };
+        w.set_chat_message(message.into());
     }
 
     // ---- Setups (scene collections) ----
@@ -1083,6 +1187,9 @@ impl App {
     pub fn tick(&mut self) {
         let Some(w) = self.window() else { return };
         let mut changed = false;
+        if w.get_chat_visible() {
+            self.tick_chat();
+        }
         if let Some(engine) = &self.engine {
             let image = |frame: estream_engine::CanvasFrame<'_>| {
                 slint::Image::try_from(frame.preview.clone())
@@ -3957,6 +4064,7 @@ impl App {
             .and_then(|i| self.settings.destinations.get_mut(i));
         match (field, selected) {
             ("dest-name", Some(d)) if !value.is_empty() => d.name = value.to_owned(),
+            ("dest-channel", Some(d)) => d.channel = value.to_owned(),
             ("stream-server", Some(d)) => d.stream.server = value.to_owned(),
             ("stream-key", Some(d)) => d.set_key(value),
             ("folder", _) if !value.is_empty() => {
@@ -7216,6 +7324,20 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     on!(on_add_source_pick, |a, kind| a.add_source(&kind));
     on!(on_wizard_create, |a| a.wizard_create());
     on!(on_wizard_cancel, |a| a.wizard_cancel());
+    on!(on_chat_select, |a, i| a.chat_select(i));
+    on!(on_chat_pointer, |a, kind, x, y, button, dx, dy| a
+        .chat
+        .pointer(&kind, x, y, button, dx, dy));
+    on!(on_chat_key, |a, text, down, ctrl, shift, alt| a
+        .chat
+        .key(&text, down, ctrl, shift, alt));
+    on!(on_chat_home, |a| if let Some(p) = a.chat.page() {
+        p.home()
+    });
+    on!(on_chat_reload, |a| if let Some(p) = a.chat.page() {
+        p.reload()
+    });
+    on!(on_chat_resized, |a, w, h| a.chat_resized(w, h));
     on!(on_setup_pick, |a, i| a.setup_pick(i));
     on!(on_setup_action, |a, id| a.setup_action(&id));
     on!(on_setup_confirm, |a, name| a.setup_confirm(&name));

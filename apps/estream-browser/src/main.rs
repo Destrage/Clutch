@@ -46,6 +46,43 @@ enum Command {
     Close {
         id: String,
     },
+    /// Pointer input for interactive pages (chat panels). `kind`: move, down, up, wheel, leave.
+    Mouse {
+        id: String,
+        kind: String,
+        x: i32,
+        y: i32,
+        /// 0 left, 1 middle, 2 right.
+        #[serde(default)]
+        button: u8,
+        #[serde(default)]
+        clicks: i32,
+        #[serde(default)]
+        dx: i32,
+        #[serde(default)]
+        dy: i32,
+        #[serde(default)]
+        mods: u32,
+    },
+    /// Keyboard input. `kind`: down, up or char; `code` is the Windows virtual-key code.
+    Key {
+        id: String,
+        kind: String,
+        #[serde(default)]
+        code: i32,
+        #[serde(default)]
+        ch: u32,
+        #[serde(default)]
+        mods: u32,
+    },
+    Focus {
+        id: String,
+        focused: bool,
+    },
+    /// Back to the page's own address (after a sign-in page, for example).
+    Home {
+        id: String,
+    },
 }
 
 /// A page and the shared memory it writes into.
@@ -288,6 +325,32 @@ wrap_life_span_handler! {
     }
 
     impl LifeSpanHandler {
+        // Sign-in and other pop-ups open in the same view (there are no windows to show them).
+        #[allow(clippy::too_many_arguments)]
+        fn on_before_popup(
+            &self,
+            browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            _popup_id: ::std::os::raw::c_int,
+            target_url: Option<&CefString>,
+            _target_frame_name: Option<&CefString>,
+            _target_disposition: WindowOpenDisposition,
+            _user_gesture: ::std::os::raw::c_int,
+            _popup_features: Option<&PopupFeatures>,
+            _window_info: Option<&mut WindowInfo>,
+            _client: Option<&mut Option<Client>>,
+            _settings: Option<&mut BrowserSettings>,
+            _extra_info: Option<&mut Option<DictionaryValue>>,
+            _no_javascript_access: Option<&mut ::std::os::raw::c_int>,
+        ) -> ::std::os::raw::c_int {
+            if let (Some(browser), Some(url)) = (browser, target_url)
+                && let Some(frame) = browser.main_frame()
+            {
+                frame.load_url(Some(url));
+            }
+            1
+        }
+
         fn on_after_created(&self, browser: Option<&mut Browser>) {
             let Some(browser) = browser else { return };
             if let Some(page) = lock().get_mut(self.id.as_str()) {
@@ -430,6 +493,71 @@ fn update(id: String, config: PageConfig) {
     }
 }
 
+fn browser_of(id: &str) -> Option<Browser> {
+    lock().get(id).and_then(|p| p.browser.clone())
+}
+
+/// Pointer input for an interactive page.
+#[allow(clippy::too_many_arguments)]
+fn mouse(
+    id: &str,
+    kind: &str,
+    x: i32,
+    y: i32,
+    button: u8,
+    clicks: i32,
+    dx: i32,
+    dy: i32,
+    mods: u32,
+) {
+    let Some(host) = browser_of(id).and_then(|b| b.host()) else {
+        return;
+    };
+    let event = MouseEvent {
+        x,
+        y,
+        modifiers: mods,
+    };
+    let button = match button {
+        1 => MouseButtonType::MIDDLE,
+        2 => MouseButtonType::RIGHT,
+        _ => MouseButtonType::LEFT,
+    };
+    match kind {
+        "move" => host.send_mouse_move_event(Some(&event), 0),
+        "leave" => host.send_mouse_move_event(Some(&event), 1),
+        "down" | "up" => {
+            if kind == "down" {
+                host.set_focus(1);
+            }
+            host.send_mouse_click_event(Some(&event), button, (kind == "up") as i32, clicks.max(1));
+        }
+        "wheel" => host.send_mouse_wheel_event(Some(&event), dx, dy),
+        _ => {}
+    }
+}
+
+/// Keyboard input for an interactive page.
+fn key(id: &str, kind: &str, code: i32, ch: u32, mods: u32) {
+    let Some(host) = browser_of(id).and_then(|b| b.host()) else {
+        return;
+    };
+    let type_ = match kind {
+        "down" => KeyEventType::RAWKEYDOWN,
+        "up" => KeyEventType::KEYUP,
+        _ => KeyEventType::CHAR,
+    };
+    let event = KeyEvent {
+        type_,
+        modifiers: mods,
+        windows_key_code: if kind == "char" { ch as i32 } else { code },
+        character: ch as u16,
+        unmodified_character: ch as u16,
+        ..Default::default()
+    };
+    host.send_key_event(Some(&event));
+}
+
 fn close(id: &str) {
     let page = lock().remove(id);
     if let Some(host) = page.and_then(|p| p.browser).and_then(|b| b.host()) {
@@ -495,6 +623,38 @@ fn main() {
                 }
             }
             Ok(Command::Close { id }) => close(&id),
+            Ok(Command::Mouse {
+                id,
+                kind,
+                x,
+                y,
+                button,
+                clicks,
+                dx,
+                dy,
+                mods,
+            }) => mouse(&id, &kind, x, y, button, clicks, dx, dy, mods),
+            Ok(Command::Key {
+                id,
+                kind,
+                code,
+                ch,
+                mods,
+            }) => key(&id, &kind, code, ch, mods),
+            Ok(Command::Focus { id, focused }) => {
+                if let Some(host) = browser_of(&id).and_then(|b| b.host()) {
+                    host.set_focus(focused as i32);
+                }
+            }
+            Ok(Command::Home { id }) => {
+                let url = lock().get(&id).map(|p| p.config.url.clone());
+                if let (Some(url), Some(frame)) =
+                    (url, browser_of(&id).and_then(|b| b.main_frame()))
+                {
+                    let url: CefString = url.as_str().into();
+                    frame.load_url(Some(&url));
+                }
+            }
             Err(e) => eprintln!("bad command: {e}"),
         }
     }

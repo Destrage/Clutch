@@ -59,6 +59,54 @@ enum Cmd<'a> {
     Close {
         id: &'a str,
     },
+    Mouse {
+        id: &'a str,
+        kind: &'a str,
+        x: i32,
+        y: i32,
+        button: u8,
+        clicks: i32,
+        dx: i32,
+        dy: i32,
+        mods: u32,
+    },
+    Key {
+        id: &'a str,
+        kind: &'a str,
+        code: i32,
+        ch: u32,
+        mods: u32,
+    },
+    Focus {
+        id: &'a str,
+        focused: bool,
+    },
+    Home {
+        id: &'a str,
+    },
+}
+
+/// Modifier flags for [`BrowserHost::mouse`] and [`BrowserHost::key`] (CEF's event flags).
+pub mod mods {
+    pub const SHIFT: u32 = 1 << 1;
+    pub const CONTROL: u32 = 1 << 2;
+    pub const ALT: u32 = 1 << 3;
+    pub const LEFT_BUTTON: u32 = 1 << 4;
+}
+
+/// A pointer event for an interactive page.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Pointer<'a> {
+    /// move, down, up, wheel or leave.
+    pub kind: &'a str,
+    pub x: i32,
+    pub y: i32,
+    /// 0 left, 1 middle, 2 right.
+    pub button: u8,
+    pub clicks: i32,
+    pub dx: i32,
+    pub dy: i32,
+    pub mods: u32,
 }
 
 #[derive(Deserialize)]
@@ -219,6 +267,41 @@ impl BrowserHost {
 
     pub fn reload(&self, id: &str) {
         self.send(&Cmd::Reload { id });
+    }
+
+    /// Pointer input for an interactive page.
+    pub fn mouse(&self, id: &str, p: Pointer<'_>) {
+        self.send(&Cmd::Mouse {
+            id,
+            kind: p.kind,
+            x: p.x,
+            y: p.y,
+            button: p.button,
+            clicks: p.clicks,
+            dx: p.dx,
+            dy: p.dy,
+            mods: p.mods,
+        });
+    }
+
+    /// Keyboard input: `kind` is down, up (with a Windows virtual-key `code`) or char.
+    pub fn key(&self, id: &str, kind: &str, code: i32, ch: u32, mods: u32) {
+        self.send(&Cmd::Key {
+            id,
+            kind,
+            code,
+            ch,
+            mods,
+        });
+    }
+
+    pub fn focus(&self, id: &str, focused: bool) {
+        self.send(&Cmd::Focus { id, focused });
+    }
+
+    /// Goes back to the page's own address.
+    pub fn home(&self, id: &str) {
+        self.send(&Cmd::Home { id });
     }
 
     /// Page state without waiting (`None` if busy or unknown).
@@ -449,6 +532,96 @@ pub fn source_type() -> SourceType {
 /// Reloads the page of browser source `id` (the refresh action).
 pub fn reload(id: &str) {
     host().reload(id);
+}
+
+// ---------------------------------------------------------------- panels
+
+/// A page shown in the studio's UI (a chat panel) rather than in a scene: the UI reads its
+/// frames as RGBA and sends it pointer and keyboard input.
+pub struct PanelPage {
+    id: String,
+    reader: Option<(String, FrameReader)>,
+    buffer: Vec<u8>,
+}
+
+impl PanelPage {
+    /// `id` must not clash with source ids (use a prefix such as `panel:`).
+    pub fn new(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            reader: None,
+            buffer: Vec::new(),
+        }
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Shows `url` at `width`×`height` (creating the page or updating it).
+    pub fn show(&self, url: &str, width: u32, height: u32) {
+        host().set_page(
+            &self.id,
+            PageConfig {
+                url: url.to_owned(),
+                width: width.max(64),
+                height: height.max(64),
+                fps: 30,
+                css: String::new(),
+            },
+        );
+    }
+
+    pub fn close(&mut self) {
+        host().remove_page(&self.id);
+        self.reader = None;
+    }
+
+    /// The newest frame as `(width, height, rgba)`, if one arrived since the last call.
+    pub fn latest(&mut self) -> Option<(u32, u32, &[u8])> {
+        let (state, _, _) = host().page(&self.id)?;
+        let (name, w, h) = state.video?;
+        if self.reader.as_ref().is_none_or(|(n, _)| *n != name) {
+            self.reader = FrameReader::open(&name, w, h)
+                .ok()
+                .map(|r| (name.clone(), r));
+        }
+        let (_, reader) = self.reader.as_mut()?;
+        reader
+            .read(&mut self.buffer)
+            .then_some((w, h, self.buffer.as_slice()))
+    }
+
+    /// Whether the page failed to load, and why.
+    pub fn error(&self) -> Option<String> {
+        host().page(&self.id).and_then(|(state, _, _)| state.error)
+    }
+
+    pub fn mouse(&self, p: Pointer<'_>) {
+        host().mouse(&self.id, p);
+    }
+
+    pub fn key(&self, kind: &str, code: i32, ch: u32, mods: u32) {
+        host().key(&self.id, kind, code, ch, mods);
+    }
+
+    pub fn focus(&self, focused: bool) {
+        host().focus(&self.id, focused);
+    }
+
+    pub fn home(&self) {
+        host().home(&self.id);
+    }
+
+    pub fn reload(&self) {
+        host().reload(&self.id);
+    }
+}
+
+impl Drop for PanelPage {
+    fn drop(&mut self) {
+        host().remove_page(&self.id);
+    }
 }
 
 // ---------------------------------------------------------------- video side

@@ -552,6 +552,7 @@ component DestinationEditor inherits VerticalLayout {
         name-field.text = root.form.dest-name;
         server-field.text = root.form.stream-server;
         key-field.text = "";
+        channel-field.text = root.form.dest-channel;
     }
     changed server => {
         if (server-field.text != self.server) {
@@ -594,6 +595,16 @@ component DestinationEditor inherits VerticalLayout {
             label: "Stream key";
             placeholder: root.form.stream-key-set ? "Saved — type to replace" : "Paste your stream key";
             edited(t) => { root.set-text("stream-key", t); }
+        }
+    }
+    SettingRow {
+        label: "Channel";
+        hint: "For the chat tab: your channel name on Kick or Twitch, or your live link on YouTube";
+        channel-field := TextField {
+            text: root.form.dest-channel;
+            label: "Channel for chat";
+            placeholder: "Channel name or live link";
+            edited(t) => { root.set-text("dest-channel", t); }
         }
     }
     if root.form.canvas-names.length > 1: SettingRow {

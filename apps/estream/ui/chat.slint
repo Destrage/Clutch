@@ -1,0 +1,154 @@
+// The chat panel: a tab per platform, each showing that platform's own chat page, which takes
+// clicks, scrolling and typing like a browser.
+
+import { Theme } from "theme.slint";
+import { Icons } from "icons.slint";
+import { IconButton, Icon, EmptyState } from "widgets.slint";
+
+export struct ChatTabRow {
+    name: string,
+    /// "kick" | "twitch" | "youtube"
+    kind: string,
+}
+
+export component ChatPanel inherits Rectangle {
+    in property <[ChatTabRow]> tabs;
+    in property <int> selected;
+    in property <image> frame;
+    /// Shown instead of the page (how to set the chat up, or that it is loading).
+    in property <string> message;
+    out property <length> view-width: view.width;
+    out property <length> view-height: view.height;
+    callback select(int);
+    callback pointer(string, float, float, int, float, float);
+    callback key(string, bool, bool, bool, bool);
+    callback home();
+    callback reload();
+    callback open-settings();
+    /// The page area's size, so the chat page is drawn at exactly that size.
+    callback resized(float, float);
+    changed view-width => { root.resized(root.view-width / 1px, root.view-height / 1px); }
+    changed view-height => { root.resized(root.view-width / 1px, root.view-height / 1px); }
+    init => { root.resized(root.view-width / 1px, root.view-height / 1px); }
+
+    pure function dot(kind: string) -> color {
+        return kind == "kick" ? #53fc18 : kind == "twitch" ? #a970ff : kind == "youtube" ? #ff3355 : Theme.text-muted;
+    }
+
+    background: Theme.surface;
+    border-radius: Theme.radius-l;
+    border-width: 1px;
+    border-color: Theme.border;
+    clip: true;
+
+    VerticalLayout {
+        // Tabs, then going back to the chat after a sign-in page, and reloading.
+        HorizontalLayout {
+            height: 48px;
+            padding-left: 8px;
+            padding-right: 6px;
+            spacing: 4px;
+            for entry[i] in root.tabs: VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    height: 34px;
+                    width: tab-row.preferred-width;
+                    border-radius: Theme.radius-m;
+                    background: i == root.selected ? Theme.surface-2 : tab-ta.has-hover ? Theme.hover : transparent;
+                    accessible-role: tab;
+                    accessible-label: entry.name + " chat";
+                    accessible-checked: i == root.selected;
+                    tab-row := HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        spacing: 8px;
+                        VerticalLayout {
+                            alignment: center;
+                            Rectangle { width: 8px; height: 8px; border-radius: 4px; background: root.dot(entry.kind); }
+                        }
+                        Text {
+                            text: entry.name;
+                            color: i == root.selected ? Theme.text : Theme.text-muted;
+                            font-size: Theme.font-m;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
+                    }
+                    tab-ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.select(i); } }
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            if root.tabs.length > 0: VerticalLayout {
+                alignment: center;
+                IconButton { icon: Icons.chevron-up; tooltip: "Back to the chat (after signing in)"; size: 30px; icon-size: 15px; clicked => { root.home(); } }
+            }
+            if root.tabs.length > 0: VerticalLayout {
+                alignment: center;
+                IconButton { icon: Icons.refresh; tooltip: "Reload the chat"; size: 30px; icon-size: 15px; clicked => { root.reload(); } }
+            }
+        }
+        Rectangle { height: 1px; background: Theme.border; }
+
+        view := Rectangle {
+            vertical-stretch: 1;
+            background: Theme.bg;
+            if root.tabs.length == 0: VerticalLayout {
+                alignment: center;
+                padding: 20px;
+                EmptyState {
+                    icon: Icons.globe;
+                    title: "No chat yet";
+                    body: "Add Kick, Twitch or YouTube under Settings → Stream, with your channel name, and its chat appears here.";
+                }
+            }
+            if root.tabs.length > 0 && root.message == "": Image {
+                width: parent.width;
+                height: parent.height;
+                source: root.frame;
+                image-fit: fill;
+            }
+            if root.tabs.length > 0 && root.message != "": VerticalLayout {
+                alignment: center;
+                padding: 20px;
+                spacing: 10px;
+                Text {
+                    text: root.message;
+                    color: Theme.text-muted;
+                    font-size: Theme.font-m;
+                    wrap: word-wrap;
+                    horizontal-alignment: center;
+                }
+            }
+            keys := FocusScope {
+                key-pressed(e) => {
+                    root.key(e.text, true, e.modifiers.control, e.modifiers.shift, e.modifiers.alt);
+                    return EventResult.accept;
+                }
+                key-released(e) => {
+                    root.key(e.text, false, e.modifiers.control, e.modifiers.shift, e.modifiers.alt);
+                    return EventResult.accept;
+                }
+                TouchArea {
+                    mouse-cursor: MouseCursor.default;
+                    moved => { root.pointer("move", self.mouse-x / 1px, self.mouse-y / 1px, -1, 0, 0); }
+                    changed has-hover => {
+                        if (!self.has-hover) { root.pointer("leave", self.mouse-x / 1px, self.mouse-y / 1px, -1, 0, 0); }
+                    }
+                    pointer-event(e) => {
+                        let button = e.button == PointerEventButton.left ? 0 : e.button == PointerEventButton.middle ? 1 : 2;
+                        if (e.kind == PointerEventKind.down) {
+                            keys.focus();
+                            root.pointer("down", self.mouse-x / 1px, self.mouse-y / 1px, button, 0, 0);
+                        } else if (e.kind == PointerEventKind.up) {
+                            root.pointer("up", self.mouse-x / 1px, self.mouse-y / 1px, button, 0, 0);
+                        }
+                    }
+                    scroll-event(e) => {
+                        root.pointer("wheel", self.mouse-x / 1px, self.mouse-y / 1px, -1, e.delta-x / 1px, e.delta-y / 1px);
+                        return EventResult.accept;
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,12 +1,12 @@
 # Tasks: add-chat-panel
 
 ## 1. Interactive browser
-- [ ] 1.1 Helper: mouse, wheel, keyboard and focus commands; pop-ups open in the same view
-- [ ] 1.2 Host: panel pages (not sources) with input, shown in the UI
+- [x] 1.1 Helper: mouse, wheel, keyboard and focus commands; pop-ups open in the same view
+- [x] 1.2 Host: panel pages (not sources) with input, shown in the UI
 
 ## 2. Chat panel
-- [ ] 2.1 "Channel" field per destination; pop-out chat URLs for Kick, Twitch and YouTube
-- [ ] 2.2 Chat panel with a tab per platform; sign-in inside the tab
+- [x] 2.1 "Channel" field per destination; pop-out chat URLs for Kick, Twitch and YouTube
+- [x] 2.2 Chat panel with a tab per platform; sign-in inside the tab
 
 ## 3. Viewer widget
 - [ ] 3.1 `estream-chat` crate: viewer counts (Kick public channel page)

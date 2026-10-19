@@ -4,6 +4,7 @@
 
 mod actions;
 mod app;
+mod chat;
 mod clips;
 mod interact;
 mod montage;

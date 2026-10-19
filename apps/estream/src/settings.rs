@@ -163,6 +163,8 @@ pub struct DestinationConfig {
     /// `stream.key` holds the key in memory only; it is saved encrypted in `key_protected`.
     pub stream: estream_media::StreamSettings,
     pub key_protected: String,
+    /// For the chat tab: the channel name (Kick, Twitch) or the live link (YouTube).
+    pub channel: String,
 }
 
 impl Default for DestinationConfig {
@@ -172,6 +174,7 @@ impl Default for DestinationConfig {
             enabled: true,
             stream: estream_media::StreamSettings::default(),
             key_protected: String::new(),
+            channel: String::new(),
         }
     }
 }
@@ -475,6 +478,7 @@ impl Settings {
             enabled: true,
             stream,
             key_protected: key,
+            channel: String::new(),
         });
     }
 

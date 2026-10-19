@@ -53,7 +53,7 @@ component NavItem inherits Rectangle {
 }
 
 export component Sidebar inherits Rectangle {
-    /// "studio" | "clips" | "montages"
+    /// "studio" | "clips" | "montages" | "chat"
     in property <string> page;
     /// New clips since the Clips page was last opened.
     in property <int> new-clips;
@@ -87,6 +87,10 @@ export component Sidebar inherits Rectangle {
         HorizontalLayout {
             alignment: center;
             NavItem { icon: Icons.sparkles; label: "Montages"; current: root.page == "montages"; clicked => { root.open("montages"); } }
+        }
+        HorizontalLayout {
+            alignment: center;
+            NavItem { icon: Icons.globe; label: "Chat"; current: root.page == "chat"; clicked => { root.open("chat"); } }
         }
     }
     HorizontalLayout {
