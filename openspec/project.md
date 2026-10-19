@@ -175,8 +175,10 @@ Each change below gets its own `openspec/changes/<id>/` when work starts. ✅ = 
 | 3 | ✅ `simplify-first-run-and-go-live` | Purpose-based first run with device detection; two-step Go Live box (platform + key) | Simpler than OBS |
 | 3 | ✅ `add-clips` | Game-aware replay buffer, clip hotkey, auto-clip (game integrations + audio hype), clip library with trim | Beyond OBS (Medal-style clipping) |
 | 3 | ✅ `add-montage-editor` | Highlight scan of recordings, beat-synced auto-montage, single-track timeline editor, export | Beyond OBS |
+| 3 | ✅ `refine-sound-controls` | Sound knobs (click mutes, drag sets volume, name opens settings), closable settings panel | Better UX |
+| 3 | ✅ `add-voice-effects` | Pitch shift, robot, radio, echo, reverb; one-click voice presets; hear yourself | Beyond OBS |
 | 4 – Ecosystem | `add-plugin-system` | WASM plugin host (sources, filters, docks, commands) | Better (sandboxed) |
-| 4 | `add-ai-features` | Noise suppression, background removal, auto captions | Beyond OBS |
+| 4 | `add-ai-features` | Background blur and replacement (virtual background), face masks and avatars for camera privacy, auto captions, AI voice conversion | Beyond OBS |
 | 4 | `add-iso-recording` | Per-source isolated recordings | Beyond OBS |
 | 4 | `add-obs-import` | Import OBS scene collections & profiles | Migration path |
 | 4 | `add-macos-linux` | Platform backends for macOS and Linux | Parity |
