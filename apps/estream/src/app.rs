@@ -268,6 +268,46 @@ fn open_url(url: &str) -> std::io::Result<()> {
     std::process::Command::new(opener).arg(url).spawn().map(|_| ())
 }
 
+/// Filters added by a voice preset have ids starting with this.
+const VOICE_ID: &str = "voice:";
+
+/// Which voice preset a filter chain uses: 0 for none, else its place in the menu.
+fn voice_preset_index(filters: &[AudioFilterDef]) -> i32 {
+    use estream_engine::audio_engine::voice::PRESETS;
+    filters
+        .iter()
+        .find(|f| f.id.starts_with(VOICE_ID))
+        .and_then(|f| f.settings.get("preset")?.as_str())
+        .and_then(|id| PRESETS.iter().position(|(p, _)| *p == id))
+        .map_or(0, |i| i as i32 + 1)
+}
+
+/// Replaces the voice preset's filters (0 removes them). New ones go where the old ones were, or
+/// before a compressor or limiter so those still catch the effect's peaks.
+fn set_voice_preset(filters: &mut Vec<AudioFilterDef>, index: usize) {
+    use estream_engine::audio_engine::voice::{PRESETS, preset_filters};
+    let at = filters
+        .iter()
+        .position(|f| f.id.starts_with(VOICE_ID))
+        .or_else(|| {
+            filters
+                .iter()
+                .position(|f| f.kind == "compressor" || f.kind == "limiter")
+        });
+    filters.retain(|f| !f.id.starts_with(VOICE_ID));
+    let Some((id, _)) = index.checked_sub(1).and_then(|i| PRESETS.get(i)) else {
+        return;
+    };
+    let at = at.unwrap_or(filters.len()).min(filters.len());
+    let added = preset_filters(id).into_iter().map(|(kind, settings)| AudioFilterDef {
+        id: format!("{VOICE_ID}{}", uuid::Uuid::now_v7()),
+        kind: kind.into(),
+        enabled: true,
+        settings,
+    });
+    filters.splice(at..at, added);
+}
+
 /// Shown on monitored sounds while Desktop Audio can't leave out Clutch's own playback.
 const DOUBLE_AUDIO: &str = "Desktop Audio sends this to the stream a second time while it leaves out the game's sound. Turn off Hear on my speakers, or mute Desktop Audio.";
 
@@ -4591,6 +4631,7 @@ impl App {
                 SharedString::new()
             },
             name: source.name.clone().into(),
+            voice: voice_preset_index(&a.filters),
         }
     }
 
@@ -4627,6 +4668,7 @@ impl App {
             "global" => a.global = value > 0.5,
             "sync" => a.sync_offset_ms = value.clamp(0.0, 2000.0).round() as u32,
             "tracks" => a.tracks = (value.round() as i32).clamp(0, 63) as u8,
+            "voice" => set_voice_preset(&mut a.filters, value.round() as usize),
             "monitoring" => {
                 a.monitoring = match value.round() as i32 {
                     1 => Monitoring::MonitorOnly,
@@ -7922,5 +7964,27 @@ mod tests {
         assert_eq!(key_from_text("\u{b}"), Some(Key::Char('k')));
         assert_eq!(key_from_text("K"), Some(Key::Char('k')));
         assert_eq!(key_from_text("ab"), None);
+    }
+
+    #[test]
+    fn voice_presets_sit_before_the_compressor_and_replace_each_other() {
+        let filter = |id: &str, kind: &str| AudioFilterDef {
+            id: id.into(),
+            kind: kind.into(),
+            enabled: true,
+            settings: serde_json::json!({}),
+        };
+        let mut chain = vec![filter("a", "noise_suppression"), filter("b", "compressor")];
+        set_voice_preset(&mut chain, 5); // Cave: reverb + echo
+        let kinds: Vec<&str> = chain.iter().map(|f| f.kind.as_str()).collect();
+        assert_eq!(kinds, ["noise_suppression", "reverb", "echo", "compressor"]);
+        assert_eq!(voice_preset_index(&chain), 5);
+        set_voice_preset(&mut chain, 1); // Deeper replaces it in place
+        let kinds: Vec<&str> = chain.iter().map(|f| f.kind.as_str()).collect();
+        assert_eq!(kinds, ["noise_suppression", "pitch_shift", "compressor"]);
+        assert_eq!(voice_preset_index(&chain), 1);
+        set_voice_preset(&mut chain, 0); // Off
+        assert_eq!(chain.len(), 2);
+        assert_eq!(voice_preset_index(&chain), 0);
     }
 }

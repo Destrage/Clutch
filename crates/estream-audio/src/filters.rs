@@ -88,13 +88,56 @@ pub const KINDS: &[FilterKind] = &[
         name: "Gain",
         params: &[p("gain_db", "Gain", -30.0, 30.0, 0.5, 0.0, "dB")],
     },
+    FilterKind {
+        kind: "pitch_shift",
+        name: "Pitch shift",
+        params: &[
+            p("semitones", "Pitch", -12.0, 12.0, 0.5, -4.0, " st"),
+            p("mix", "Mix", 0.0, 100.0, 1.0, 100.0, "%"),
+        ],
+    },
+    FilterKind {
+        kind: "robot",
+        name: "Robot voice",
+        params: &[
+            p("tone_hz", "Tone", 20.0, 400.0, 1.0, 50.0, "Hz"),
+            p("mix", "Mix", 0.0, 100.0, 1.0, 100.0, "%"),
+        ],
+    },
+    FilterKind {
+        kind: "radio",
+        name: "Radio voice",
+        params: &[
+            p("low_hz", "Low cut", 100.0, 1500.0, 10.0, 400.0, "Hz"),
+            p("high_hz", "High cut", 1000.0, 8000.0, 50.0, 3000.0, "Hz"),
+            p("drive", "Drive", 1.0, 10.0, 0.5, 3.0, "x"),
+        ],
+    },
+    FilterKind {
+        kind: "echo",
+        name: "Echo",
+        params: &[
+            p("delay_ms", "Delay", 10.0, 1000.0, 10.0, 300.0, "ms"),
+            p("feedback", "Repeats", 0.0, 90.0, 1.0, 40.0, "%"),
+            p("mix", "Mix", 0.0, 100.0, 1.0, 35.0, "%"),
+        ],
+    },
+    FilterKind {
+        kind: "reverb",
+        name: "Reverb",
+        params: &[
+            p("room", "Room size", 0.0, 100.0, 1.0, 70.0, "%"),
+            p("damping", "Damping", 0.0, 100.0, 1.0, 50.0, "%"),
+            p("mix", "Mix", 0.0, 100.0, 1.0, 30.0, "%"),
+        ],
+    },
 ];
 
 pub fn kind(kind: &str) -> Option<&'static FilterKind> {
     KINDS.iter().find(|k| k.kind == kind)
 }
 
-fn param(settings: &Value, kind: &str, key: &str) -> f32 {
+pub(crate) fn param(settings: &Value, kind: &str, key: &str) -> f32 {
     let default = self::kind(kind)
         .and_then(|k| k.params.iter().find(|p| p.key == key))
         .map_or(0.0, |p| p.default);
@@ -111,6 +154,11 @@ pub fn create(kind: &str, settings: &Value) -> Option<Box<dyn AudioFilter>> {
         "compressor" => Box::new(Compressor::default()),
         "limiter" => Box::new(Limiter::default()),
         "noise_suppression" => Box::new(NoiseSuppression::new()),
+        "pitch_shift" => Box::new(crate::voice::PitchShift::new()),
+        "robot" => Box::new(crate::voice::Robot::new()),
+        "radio" => Box::new(crate::voice::Radio::new()),
+        "echo" => Box::new(crate::voice::Echo::new()),
+        "reverb" => Box::new(crate::voice::Reverb::new()),
         _ => return None,
     };
     filter.update(settings);

@@ -240,6 +240,23 @@ export component AudioSettings inherits VerticalLayout {
         font-size: Theme.font-xs;
         wrap: word-wrap;
     }
+    // Voice effects, one click each (the filters below stay editable).
+    HorizontalLayout {
+        spacing: 10px;
+        Text { text: "Voice"; color: Theme.text-muted; font-size: Theme.font-s; vertical-alignment: center; width: 80px; }
+        Select {
+            label: "Voice effect";
+            options: ["Off", "Deeper", "Higher", "Robot", "Radio", "Cave", "Echo"];
+            current-index: root.audio.voice;
+            selected(i) => { root.audio-set("voice", i); }
+        }
+    }
+    if root.audio.voice > 0 && root.audio.monitoring == 0: Text {
+        text: "Turn on Hear on my speakers to try it (headphones avoid feedback).";
+        color: Theme.text-faint;
+        font-size: Theme.font-xs;
+        wrap: word-wrap;
+    }
     if root.audio.problem != "": Rectangle {
         border-radius: Theme.radius-m;
         background: Theme.warn.with-alpha(0.12);
@@ -297,7 +314,7 @@ export component AudioSettings inherits VerticalLayout {
         Select {
             width: 150px;
             label: "Add filter";
-            options: ["+ Add filter…", "Noise suppression", "Noise gate", "Compressor", "Limiter", "Gain"];
+            options: ["+ Add filter…", "Noise suppression", "Noise gate", "Compressor", "Limiter", "Gain", "Pitch shift", "Robot voice", "Radio voice", "Echo", "Reverb"];
             current-index: 0;
             selected(i) => { if (i > 0) { root.filter-add(i - 1); } }
         }

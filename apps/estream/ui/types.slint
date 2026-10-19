@@ -197,6 +197,8 @@ export struct AudioInspect {
     problem: string,
     /// The source's name (shown when the settings open on their own, e.g. over the Live deck).
     name: string,
+    /// The voice preset: 0 off, then the presets in menu order.
+    voice: int,
 }
 // Recording & app settings shown in the Settings dialog.
 /// A streaming destination in Settings.

@@ -14,6 +14,7 @@ pub mod mixer;
 pub mod ring;
 pub mod source;
 pub mod tone;
+pub mod voice;
 
 pub use block::Block;
 pub use meter::{Meter, MeterReading};
