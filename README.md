@@ -80,7 +80,7 @@ This produces `target\installer\Clutch-<version>-x64.msi`. The command:
 - builds the MSI with WiX 3.14, which downloads once into `third_party/wix`.
 
 The installer:
-- installs to `C:\Program Files\Clutch` with Start menu and desktop shortcuts;
+- installs to `C:\Program Files\Clutch`, with optional desktop and Start menu shortcuts (both unchecked by default; an upgrade keeps the earlier choice);
 - registers the virtual camera for all users, so Clutch never has to ask for that permission later;
 - upgrades older versions in place.
 

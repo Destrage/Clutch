@@ -332,7 +332,37 @@ fn wix_source(stage: &Path, assets: &Path) -> Result<String> {
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
     <Property Id="WixShellExecTarget" Value="[#{exe}]" />
     <CustomAction Id="LaunchApp" BinaryKey="WixCA" DllEntry="WixShellExec" Impersonate="yes" />
+
+    <!-- Shortcuts are opt-in (unchecked on a fresh install); an upgrade keeps the earlier choice,
+         found from the values the shortcut components write. -->
+    <Property Id="DESKTOPSHORTCUT" Secure="yes">
+      <RegistrySearch Id="FindDesktopShortcut" Root="HKCU" Key="Software\Clutch" Name="DesktopShortcut" Type="raw" />
+    </Property>
+    <Property Id="STARTMENUSHORTCUT" Secure="yes">
+      <RegistrySearch Id="FindStartMenuShortcut" Root="HKCU" Key="Software\Clutch" Name="StartMenuShortcut" Type="raw" />
+    </Property>
     <UI>
+      <Dialog Id="ShortcutsDlg" Width="370" Height="270" Title="!(loc.InstallDirDlg_Title)">
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="!(loc.WixUINext)">
+          <Publish Event="NewDialog" Value="VerifyReadyDlg">1</Publish>
+        </Control>
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)">
+          <Publish Event="NewDialog" Value="InstallDirDlg">1</Publish>
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
+          <Publish Event="SpawnDialog" Value="CancelDlg">1</Publish>
+        </Control>
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="!(loc.InstallDirDlgBannerBitmap)" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes" NoPrefix="yes" Text="{{\WixUI_Font_Title}}Shortcuts" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15" Transparent="yes" NoPrefix="yes" Text="Choose where to add shortcuts to Clutch." />
+        <Control Id="DesktopCheck" Type="CheckBox" X="20" Y="60" Width="330" Height="17" Property="DESKTOPSHORTCUT" CheckBoxValue="1" Text="Add a shortcut to the desktop" />
+        <Control Id="StartMenuCheck" Type="CheckBox" X="20" Y="82" Width="330" Height="17" Property="STARTMENUSHORTCUT" CheckBoxValue="1" Text="Add Clutch to the Start menu" />
+      </Dialog>
+      <!-- Folder → Shortcuts → Ready (a later NewDialog wins over the built-in one). -->
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="ShortcutsDlg" Order="10">WIXUI_DONTVALIDATEPATH OR WIXUI_INSTALLDIR_VALID="1"</Publish>
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="ShortcutsDlg" Order="10">NOT Installed</Publish>
       <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchApp">WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed</Publish>
     </UI>
 
@@ -347,6 +377,7 @@ fn wix_source(stage: &Path, assets: &Path) -> Result<String> {
 
     <DirectoryRef Id="ProgramMenuFolder">
       <Component Id="cmp_StartMenu" Guid="{{{start}}}" Win64="yes">
+        <Condition>STARTMENUSHORTCUT</Condition>
         <Shortcut Id="StartMenuShortcut" Name="Clutch" Description="Stream, record and clip" Target="[INSTALLFOLDER]clutch.exe" WorkingDirectory="INSTALLFOLDER" Icon="clutch.ico">
           <ShortcutProperty Key="System.AppUserModel.ID" Value="{aumid}" />
         </Shortcut>
@@ -355,6 +386,7 @@ fn wix_source(stage: &Path, assets: &Path) -> Result<String> {
     </DirectoryRef>
     <DirectoryRef Id="DesktopFolder">
       <Component Id="cmp_Desktop" Guid="{{{desktop}}}" Win64="yes">
+        <Condition>DESKTOPSHORTCUT</Condition>
         <Shortcut Id="DesktopShortcut" Name="Clutch" Description="Stream, record and clip" Target="[INSTALLFOLDER]clutch.exe" WorkingDirectory="INSTALLFOLDER" Icon="clutch.ico">
           <ShortcutProperty Key="System.AppUserModel.ID" Value="{aumid}" />
         </Shortcut>
@@ -373,8 +405,6 @@ fn wix_source(stage: &Path, assets: &Path) -> Result<String> {
 
     <Feature Id="Main" Title="Clutch" Level="1" Absent="disallow">
 {component_refs}      <ComponentRef Id="cmp_StartMenu" />
-    </Feature>
-    <Feature Id="DesktopShortcut" Title="Desktop shortcut" Level="1">
       <ComponentRef Id="cmp_Desktop" />
     </Feature>
   </Product>
