@@ -589,7 +589,7 @@ component DestinationEditor inherits VerticalLayout {
     }
     SettingRow {
         label: "Stream key";
-        hint: "Stored encrypted for your Windows account";
+        hint: Platform.key-storage;
         key-field := TextField {
             input-type: InputType.password;
             label: "Stream key";

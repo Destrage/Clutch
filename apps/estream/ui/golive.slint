@@ -1,6 +1,6 @@
 // Go Live in two steps: pick the platform, paste the key. Clutch picks everything else.
 
-import { Theme } from "theme.slint";
+import { Theme, Platform } from "theme.slint";
 import { Icons } from "icons.slint";
 import { Button, Icon, TextField } from "widgets.slint";
 import { Modal } from "overlays.slint";
@@ -108,6 +108,12 @@ export component GoLiveDialog inherits Modal {
                 kind: "ghost";
                 clicked => { root.reveal = !root.reveal; }
             }
+        }
+        if !Platform.key-remembered: Text {
+            text: "This key won't be remembered after Clutch closes: no system keyring is running.";
+            color: Theme.text-faint;
+            font-size: Theme.font-xs;
+            wrap: word-wrap;
         }
         if root.message != "": Text {
             text: root.message;

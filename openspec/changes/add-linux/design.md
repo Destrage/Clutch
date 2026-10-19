@@ -57,8 +57,12 @@ has focus and the settings page says so. The focus trigger reads `_NET_ACTIVE_WI
 reports "unavailable" on Wayland, where no portable API exists.
 
 ### Secrets
-The `keyring` crate over the Secret Service. Stored values get a `keyring:` prefix next to the
-existing `dpapi:` one. Without a Secret Service the key lives for the session only.
+`keyring-core` with the zbus Secret Service store (pure Rust, no libdbus). The Secret Service
+holds one random 256-bit key (`Clutch` / `secrets`); each value is sealed with it
+(ChaCha20-Poly1305 via `ring`, random nonce) and stored as `keyring:<hex>` next to the existing
+`dpapi:` values. Like DPAPI this keeps `protect`/`unprotect` stateless: no entry per destination
+to name, rename or clean up, and the settings file never holds plain text. Without a Secret
+Service the key lives for the session only, and the Go Live box and destination settings say so.
 
 ### Shared memory
 POSIX `shm_open`/`mmap` behind the same `Shm::create`/`open` API. Names are prefixed `/clutch-`

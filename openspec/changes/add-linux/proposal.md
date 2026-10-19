@@ -33,6 +33,7 @@ and the workspace has never been built or tested there. macOS follows in a later
   `estream-health` (system stats), `estream-clips` (Steam paths), `estream-gpu` (backend
   choice), `apps/estream` (secrets, opening files and folders), `apps/estream-browser` (CEF on
   Linux), `xtask` (AppImage), `README.md`, `.github/workflows/ci.yml`.
-- New Linux-only dependencies: `ashpd`, `pipewire`, `v4l`, `keyring`, `x11rb`.
+- New Linux-only dependencies: `ashpd`, `pipewire`, `v4l`, `keyring-core` (+ zbus Secret
+  Service store), `ring` (already in the tree via `rustls`), `libc`, `x11rb`.
 - No change to the project file format. A source whose kind doesn't exist on Linux (game
   capture) is kept and shown as unavailable rather than dropped.

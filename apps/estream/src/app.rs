@@ -1752,7 +1752,10 @@ impl App {
             ThemeMode::Light => false,
             ThemeMode::System => crate::settings::system_prefers_dark(),
         };
-        w.global::<Platform>().set_trash(crate::shell::TRASH.into());
+        let platform = w.global::<Platform>();
+        platform.set_trash(crate::shell::TRASH.into());
+        platform.set_key_storage(crate::secret::storage_note().into());
+        platform.set_key_remembered(crate::secret::persistent());
         let theme = w.global::<Theme>();
         theme.set_dark(dark);
         if let Some((r, g, b)) = crate::settings::parse_hex(&self.settings.accent) {

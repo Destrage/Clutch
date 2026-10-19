@@ -3,6 +3,9 @@
 // Words that differ per system, set once at startup.
 export global Platform {
     in property <string> trash: "Recycle Bin";
+    /// Where stream keys are saved, and whether they survive a restart.
+    in property <string> key-storage: "Stored encrypted for your Windows account";
+    in property <bool> key-remembered: true;
 }
 
 export global Theme {

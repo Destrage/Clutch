@@ -60,6 +60,11 @@ windows = { version = "0.62", features = [
 [target.'cfg(not(windows))'.dependencies]
 trash = "5"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring-core = "1.0.1"
+ring = "0.17.14"
+zbus-secret-service-keyring-store = { version = "1.0.1", features = ["rt-async-io-crypto-rust"] }
+
 [build-dependencies]
 slint-build.workspace = true
 winresource = "0.1"
