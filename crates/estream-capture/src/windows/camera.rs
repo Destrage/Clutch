@@ -216,7 +216,16 @@ struct Shared {
     full_range: bool,
     sequence: u64,
     /// Set when the worker stops (with a reason).
-    stopped: Option<String>,
+    stopped: Option<Stopped>,
+}
+
+/// Why a camera worker stopped.
+#[derive(Debug)]
+struct Stopped {
+    reason: String,
+    /// The camera is still connected: reading just failed (a USB hiccup, a glitched frame), so
+    /// opening it again right away usually works.
+    still_connected: bool,
 }
 
 struct Worker {
@@ -246,8 +255,16 @@ fn spawn_worker(device: String, format: String) -> Worker {
                     Ok(()) => "Camera stopped".to_owned(),
                     Err(e) => e,
                 };
+                let still_connected = devices().iter().any(|d| d.id == device);
                 if let Ok(mut s) = shared.lock() {
-                    s.stopped = Some(reason);
+                    s.stopped = Some(Stopped {
+                        reason: if still_connected {
+                            reason
+                        } else {
+                            "Camera disconnected".into()
+                        },
+                        still_connected,
+                    });
                 }
             })
             .ok()
@@ -331,6 +348,9 @@ fn run_worker(
     tracing::info!(device, format = %wanted.1.label(), "camera started");
 
     let mut back: Vec<u8> = Vec::new();
+    // Reads that failed in a row. Cheap USB webcams drop the odd read; only a run of them means
+    // the reader needs opening again.
+    let mut failed = 0u32;
     while !stop.load(Ordering::Acquire) {
         let mut flags = 0u32;
         let mut sample: Option<IMFSample> = None;
@@ -338,12 +358,22 @@ fn run_worker(
         let read = unsafe {
             reader.ReadSample(STREAM, 0, None, Some(&mut flags), None, Some(&mut sample))
         };
-        if read.is_err()
-            || flags & MF_SOURCE_READERF_ERROR.0 as u32 != 0
-            || flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0
-        {
-            return Err("Camera disconnected".into());
+        // The reader can't go on after these.
+        let fatal = flags & MF_SOURCE_READERF_ERROR.0 as u32 != 0
+            || flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0;
+        if let Err(e) = &read {
+            failed += 1;
+            tracing::warn!(device, error = %e.code(), failed, "camera read failed");
+            if !fatal && failed < 3 {
+                std::thread::sleep(Duration::from_millis(30));
+                continue;
+            }
         }
+        if fatal || read.is_err() {
+            tracing::warn!(device, flags, "camera stream ended");
+            return Err("The camera stopped sending pictures".into());
+        }
+        failed = 0;
         let Some(sample) = sample else { continue };
         // SAFETY: the buffer is locked only for the copy below.
         let stride = unsafe {
@@ -412,7 +442,13 @@ pub struct CameraSource {
     sequence: u64,
     status: SourceStatus,
     next_attempt: Instant,
+    /// When the camera recently dropped out while still connected (to notice it happening often).
+    dropouts: Vec<Instant>,
 }
+
+/// Dropouts within this window that make the camera count as unreliable.
+const DROPOUT_WINDOW: Duration = Duration::from_secs(20);
+const DROPOUTS_SHOWN: usize = 3;
 
 impl CameraSource {
     fn new(ctx: &SourceContext<'_>) -> Self {
@@ -425,6 +461,7 @@ impl CameraSource {
             sequence: 0,
             status: SourceStatus::Unavailable("Starting camera…".into()),
             next_attempt: Instant::now(),
+            dropouts: Vec::new(),
         }
     }
 }
@@ -456,11 +493,28 @@ impl VideoSource for CameraSource {
         let Ok(mut shared) = worker.shared.try_lock() else {
             return;
         };
-        if let Some(reason) = shared.stopped.take() {
+        if let Some(stopped) = shared.stopped.take() {
             drop(shared);
             self.worker = None;
-            self.next_attempt = Instant::now() + Duration::from_secs(2);
-            self.status = SourceStatus::Unavailable(reason);
+            let now = Instant::now();
+            if stopped.still_connected && self.frame.is_some() {
+                // A hiccup while running: open it again at once and keep showing the last
+                // picture meanwhile. Only say something when it keeps happening.
+                self.dropouts
+                    .retain(|t| now.duration_since(*t) < DROPOUT_WINDOW);
+                self.dropouts.push(now);
+                self.next_attempt = now;
+                if self.dropouts.len() >= DROPOUTS_SHOWN {
+                    self.status = SourceStatus::Unavailable(
+                        "The camera keeps dropping out. Try another USB port (not a hub) or a \
+                         lower resolution."
+                            .into(),
+                    );
+                }
+            } else {
+                self.next_attempt = now + Duration::from_secs(2);
+                self.status = SourceStatus::Unavailable(stopped.reason);
+            }
             return;
         }
         if shared.sequence == self.sequence || shared.frame.is_empty() {
@@ -491,7 +545,13 @@ impl VideoSource for CameraSource {
             );
             drop(shared);
             frame.convert(&self.converter, encoder);
-            self.status = SourceStatus::Active;
+            // A warning about repeated dropouts stays up until they stop for a while.
+            let now = Instant::now();
+            self.dropouts
+                .retain(|t| now.duration_since(*t) < DROPOUT_WINDOW);
+            if self.dropouts.len() < DROPOUTS_SHOWN {
+                self.status = SourceStatus::Active;
+            }
         }
     }
 
