@@ -88,7 +88,12 @@ jobs:
             | tar -xJ -C third_party/ffmpeg --strip-components=1
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # Platform app IDs (public by design, kept out of the repo): Music and Connect YouTube.
       - run: cargo xtask package
+        env:
+          CLUTCH_JAMENDO_CLIENT_ID: ${{ secrets.CLUTCH_JAMENDO_CLIENT_ID }}
+          CLUTCH_YOUTUBE_CLIENT_ID: ${{ secrets.CLUTCH_YOUTUBE_CLIENT_ID }}
+          CLUTCH_YOUTUBE_CLIENT_SECRET: ${{ secrets.CLUTCH_YOUTUBE_CLIENT_SECRET }}
       - uses: actions/upload-artifact@v4
         with:
           name: Clutch-AppImage
