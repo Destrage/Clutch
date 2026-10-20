@@ -606,7 +606,7 @@ component DestinationEditor inherits VerticalLayout {
     }
     SettingRow {
         label: "Channel";
-        hint: "For the chat tab: your channel name on Kick or Twitch, or your live link on YouTube";
+        hint: "For chat: your channel name on Kick or Twitch (YouTube uses your connected account, or paste your live link)";
         channel-field := TextField {
             text: root.form.dest-channel;
             label: "Channel for chat";
@@ -615,9 +615,11 @@ component DestinationEditor inherits VerticalLayout {
         }
     }
     if root.form.account-kind != "": account-row := SettingRow {
-        property <string> platform: root.form.account-kind == "twitch" ? "Twitch" : "YouTube";
+        property <string> platform: root.form.account-kind == "twitch" ? "Twitch" : root.form.account-kind == "kick" ? "Kick" : "YouTube";
+        /// Signing in happens in the default browser (not with a code).
+        property <bool> browser: root.form.account-kind == "youtube" || root.form.account-kind == "kick";
         label: "Account";
-        hint: root.form.account-kind == "twitch" ? "Connect to see your viewer count and who's in chat" : "Connect to see your viewer count and open your live chat automatically";
+        hint: root.form.account-kind == "twitch" ? "Connect to reply from Clutch's chat, and see your viewer count and who's in chat" : root.form.account-kind == "kick" ? "Connect to reply to your Kick chat from Clutch" : "Connect to see your live chat in Clutch, reply there, and see your viewer count";
         HorizontalLayout {
             spacing: 8px;
             if root.form.account-name != "": Text {
@@ -633,14 +635,14 @@ component DestinationEditor inherits VerticalLayout {
                 clicked => { root.set("account-disconnect", 0); }
             }
             if root.form.account-name == "" && root.form.account-connecting: Text {
-                text: root.form.account-code != "" ? "Enter code " + root.form.account-code + " on the " + account-row.platform + " page" : root.form.account-kind == "youtube" ? "Finish signing in to Google in your browser" : "Contacting " + account-row.platform + "…";
+                text: root.form.account-code != "" ? "Enter code " + root.form.account-code + " on the " + account-row.platform + " page" : account-row.browser ? "Finish signing in to " + (root.form.account-kind == "kick" ? "Kick" : "Google") + " in your browser" : "Contacting " + account-row.platform + "…";
                 color: Theme.text;
                 font-size: Theme.font-m;
                 vertical-alignment: center;
                 wrap: word-wrap;
                 horizontal-stretch: 1;
             }
-            if root.form.account-name == "" && (root.form.account-code != "" || (root.form.account-kind == "youtube" && root.form.account-connecting)): Button {
+            if root.form.account-name == "" && (root.form.account-code != "" || (account-row.browser && root.form.account-connecting)): Button {
                 text: "Open page";
                 kind: "ghost";
                 clicked => { root.set("account-open", 0); }

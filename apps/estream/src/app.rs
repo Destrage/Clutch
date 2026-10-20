@@ -154,6 +154,20 @@ pub struct App {
     chat_has_frame: bool,
     /// Who is in the selected tab's chat, as last shown.
     chat_people: Option<crate::viewers::Chatters>,
+    /// The platform page shown in the chat panel (None: the combined chat).
+    chat_page: Option<usize>,
+    /// The combined chat: its readers, the rows shown, how many messages were taken from the
+    /// feed, and where replies can go (None: every platform).
+    livechat: crate::livechat::LiveChat,
+    chat_lines: Rc<VecModel<crate::ui::ChatLine>>,
+    chat_seen: u64,
+    chat_shown: Option<(Vec<crate::ui::ChatStateRow>, Vec<Option<crate::livechat::Platform>>)>,
+    chat_reply_to: Vec<Option<crate::livechat::Platform>>,
+    /// A reply being sent: the platforms that couldn't send it arrive here.
+    chat_sending: Option<std::sync::mpsc::Receiver<Vec<String>>>,
+    /// The connected Kick account (replying to Kick chat), and a sign-in in progress.
+    kick: crate::kick::Session,
+    kick_connect: Option<crate::kick::Connecting>,
     /// Viewer counts while live.
     viewers: crate::viewers::ViewerCounts,
     /// The connected Twitch account, shared with the viewer counts (which renew its token).
@@ -540,6 +554,12 @@ impl App {
         let recordings = estream_clips::Library::open_flat(&settings.recording.folder);
         let twitch = crate::twitch::Session::new(settings.twitch.clone());
         let youtube = crate::youtube::Session::new(settings.youtube.clone());
+        let kick = crate::kick::Session::new(settings.kick.clone());
+        let livechat = crate::livechat::LiveChat::new(crate::livechat::Accounts {
+            twitch: twitch.clone(),
+            youtube: youtube.clone(),
+            kick: kick.clone(),
+        });
         let app = App {
             window: window.as_weak(),
             collection: paths.default_collection(),
@@ -614,6 +634,15 @@ impl App {
             chat_sources: Vec::new(),
             chat_has_frame: false,
             chat_people: None,
+            chat_page: None,
+            livechat,
+            chat_lines: Rc::new(VecModel::default()),
+            chat_seen: 0,
+            chat_shown: None,
+            chat_reply_to: Vec::new(),
+            chat_sending: None,
+            kick,
+            kick_connect: None,
             viewers: crate::viewers::ViewerCounts::start(crate::viewers::Accounts {
                 twitch: twitch.clone(),
                 youtube: youtube.clone(),
@@ -768,13 +797,47 @@ impl App {
 
     // ---- Chat ----
 
-    /// Rebuilds the chat tabs when the enabled destinations (or their channels) change.
+    /// Rebuilds the platform pages and the combined chat's readers when the enabled
+    /// destinations, their channels or the connected accounts change.
     fn refresh_chat_tabs(&mut self) {
-        let sources: Vec<(String, estream_media::Service, String)> = self
+        let enabled: Vec<&crate::settings::DestinationConfig> = self
             .settings
             .destinations
             .iter()
             .filter(|d| d.enabled)
+            .collect();
+        // The combined chat reads every destination that has chat.
+        let twitch_login = self.settings.twitch.as_ref().map(|a| a.login.clone());
+        let targets: Vec<crate::livechat::Target> = enabled
+            .iter()
+            .filter_map(|d| {
+                use crate::livechat::Platform;
+                let (platform, channel, connected) = match d.stream.service {
+                    Service::Kick => (Platform::Kick, d.channel.clone(), self.settings.kick.is_some()),
+                    Service::Twitch => (
+                        Platform::Twitch,
+                        Some(d.channel.trim())
+                            .filter(|c| !c.is_empty())
+                            .map(str::to_owned)
+                            .or_else(|| twitch_login.clone())
+                            .unwrap_or_default(),
+                        self.settings.twitch.is_some(),
+                    ),
+                    Service::YouTube => (Platform::YouTube, String::new(), self.settings.youtube.is_some()),
+                    _ => return None,
+                };
+                Some(crate::livechat::Target {
+                    name: d.name.clone(),
+                    platform,
+                    channel,
+                    connected,
+                })
+            })
+            .collect();
+        self.livechat.set_targets(targets);
+
+        let sources: Vec<(String, estream_media::Service, String)> = enabled
+            .iter()
             .map(|d| {
                 // YouTube without a live link: the live broadcast of the connected channel.
                 let service = d.stream.service;
@@ -796,6 +859,9 @@ impl App {
         self.chat_sources = sources.clone();
         self.chat.set_destinations(sources);
         self.chat_has_frame = false;
+        if self.chat_page.is_some_and(|p| p >= self.chat.tabs.len()) {
+            self.chat_page = None;
+        }
         let Some(w) = self.window() else { return };
         let rows: Vec<crate::ui::ChatTabRow> = self
             .chat
@@ -813,18 +879,19 @@ impl App {
             })
             .collect();
         w.set_chat_tabs(ModelRc::new(VecModel::from(rows)));
-        w.set_chat_selected(self.chat.selected as i32);
+        w.set_chat_selected(self.chat_page.map_or(-1, |p| p as i32));
     }
 
+    /// Shows a platform's page (`-1`: back to the combined chat).
     pub fn chat_select(&mut self, index: i32) {
-        if index < 0 || index as usize >= self.chat.tabs.len() {
-            return;
+        self.chat_page = (index >= 0 && (index as usize) < self.chat.tabs.len()).then_some(index as usize);
+        if let Some(page) = self.chat_page {
+            self.chat.selected = page;
+            self.chat_has_frame = false;
+            self.chat.show_current();
         }
-        self.chat.selected = index as usize;
-        self.chat_has_frame = false;
-        self.chat.show_current();
         if let Some(w) = self.window() {
-            w.set_chat_selected(index);
+            w.set_chat_selected(self.chat_page.map_or(-1, |p| p as i32));
         }
     }
 
@@ -835,14 +902,34 @@ impl App {
         );
         if size != self.chat.size && size.0 > 0 && size.1 > 0 {
             self.chat.size = size;
-            self.chat.show_current();
+            if self.chat_page.is_some() {
+                self.chat.show_current();
+            }
         }
     }
 
-    /// While a chat panel is on screen: open the selected tab's page and show its frames.
+    /// Sends a reply from the combined chat: `target` indexes the "Send to" list.
+    pub fn chat_send(&mut self, text: &str, target: i32) {
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        let to = self
+            .chat_reply_to
+            .get(target.max(0) as usize)
+            .copied()
+            .flatten();
+        self.chat_sending = Some(self.livechat.send(to, text.to_owned()));
+    }
+
+    /// While a chat panel is on screen: new messages and reader states for the combined chat, or
+    /// the open platform page's frames.
     fn tick_chat(&mut self) {
         let Some(w) = self.window() else { return };
         self.refresh_chat_tabs();
+        self.tick_live_chat(&w);
+        let Some(page) = self.chat_page else { return };
+        self.chat.selected = page;
         let people = self
             .chat
             .current()
@@ -890,6 +977,82 @@ impl App {
             None => String::new(),
         };
         w.set_chat_message(message.into());
+    }
+
+    /// The combined chat: adds new messages to the list, and updates the reader states and the
+    /// "Send to" choices when they change.
+    fn tick_live_chat(&mut self, w: &AppWindow) {
+        use crate::livechat::{Platform, State};
+        let feed = self.livechat.feed().clone();
+        let (new, seen) = feed.since(self.chat_seen);
+        self.chat_seen = seen;
+        for m in new {
+            self.chat_lines.push(crate::ui::ChatLine {
+                kind: m.platform.key().into(),
+                author: m.author.into(),
+                author_color: parse_color(&m.color).unwrap_or(slint::Color::from_rgb_u8(0x8e, 0xc5, 0xff)),
+                text: m.text.into(),
+                time: m.time.format("%-I:%M %p").to_string().into(),
+            });
+        }
+        // Keep the list as long as the feed.
+        while self.chat_lines.row_count() > 300 {
+            self.chat_lines.remove(0);
+        }
+        let states = feed.states();
+        let rows: Vec<crate::ui::ChatStateRow> = states
+            .iter()
+            .map(|(name, platform, state)| crate::ui::ChatStateRow {
+                kind: platform.key().into(),
+                name: name.clone().into(),
+                state: match state {
+                    State::Connecting => 0,
+                    State::Reading => 1,
+                    State::Waiting(_) => 2,
+                },
+                note: match state {
+                    State::Waiting(why) => why.clone().into(),
+                    _ => SharedString::new(),
+                },
+            })
+            .collect();
+        let mut platforms: Vec<Platform> = Vec::new();
+        for (_, p, _) in &states {
+            if !platforms.contains(p) {
+                platforms.push(*p);
+            }
+        }
+        let mut reply_to: Vec<Option<Platform>> = vec![None];
+        reply_to.extend(platforms.iter().map(|p| Some(*p)));
+        let shown = (rows.clone(), reply_to.clone());
+        if self.chat_shown.as_ref() != Some(&shown) {
+            let targets: Vec<SharedString> = reply_to
+                .iter()
+                .map(|p| p.map_or("All platforms", |p| p.name()).into())
+                .collect();
+            w.set_chat_live(crate::ui::ChatLive {
+                messages: ModelRc::from(self.chat_lines.clone()),
+                states: ModelRc::new(VecModel::from(rows)),
+                targets: ModelRc::new(VecModel::from(targets)),
+            });
+            self.chat_reply_to = reply_to;
+            self.chat_shown = Some(shown);
+        }
+    }
+
+    /// Reports the platforms a reply couldn't be sent to.
+    fn tick_chat_send(&mut self) {
+        let Some(rx) = &self.chat_sending else { return };
+        match rx.try_recv() {
+            Ok(problems) => {
+                self.chat_sending = None;
+                if !problems.is_empty() {
+                    self.toast(problems.join(". "), true);
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => self.chat_sending = None,
+        }
     }
 
     // ---- Twitch account ----
@@ -1084,6 +1247,72 @@ impl App {
         }
     }
 
+    // ---- Kick account ----
+
+    /// Starts connecting Kick. Kick's sign-in opens in the default browser, which hands the
+    /// result back to Clutch.
+    fn kick_connect(&mut self) {
+        match crate::kick::Connecting::start() {
+            Ok(connecting) => {
+                if let Err(e) = crate::shell::open_url(connecting.url()) {
+                    self.toast(format!("Couldn't open your browser: {e}"), true);
+                }
+                self.kick_connect = Some(connecting);
+            }
+            Err(e) => self.toast(e, true),
+        }
+        self.refresh_settings_form();
+    }
+
+    fn kick_disconnect(&mut self) {
+        self.kick_connect = None;
+        self.kick.set(None);
+        self.settings.kick = None;
+        self.settings.save(&self.paths.settings());
+        self.refresh_settings_form();
+    }
+
+    /// Follows a sign-in in progress, and saves tokens a reply renewed.
+    fn tick_kick(&mut self) {
+        use crate::kick::Connect;
+        if let Some(account) = self.kick.take_change() {
+            if account.is_none() {
+                self.toast(
+                    "Your Kick sign-in expired. Connect again in Settings → Stream.".into(),
+                    true,
+                );
+            }
+            self.settings.kick = account;
+            self.settings.save(&self.paths.settings());
+            self.refresh_settings_form();
+        }
+        let Some(connecting) = &self.kick_connect else {
+            return;
+        };
+        match connecting.state() {
+            Connect::Waiting => {}
+            Connect::Done(account) => {
+                self.kick_connect = None;
+                self.toast(format!("Connected to Kick as {}", account.name), false);
+                // Kick destinations without a channel use the connected one.
+                for d in &mut self.settings.destinations {
+                    if d.stream.service == Service::Kick && d.channel.trim().is_empty() {
+                        d.channel = account.name.clone();
+                    }
+                }
+                self.kick.set(Some(account.clone()));
+                self.settings.kick = Some(account);
+                self.settings.save(&self.paths.settings());
+                self.refresh_settings_form();
+            }
+            Connect::Failed(e) => {
+                self.kick_connect = None;
+                self.toast(e, true);
+                self.refresh_settings_form();
+            }
+        }
+    }
+
     // ---- Connected accounts (Settings → Stream) ----
 
     fn selected_service(&self) -> Option<Service> {
@@ -1118,6 +1347,16 @@ impl App {
                 self.youtube_connect.is_some(),
                 String::new(),
             ),
+            Some(Service::Kick) => (
+                "kick",
+                self.settings
+                    .kick
+                    .as_ref()
+                    .map(|a| a.name.clone())
+                    .unwrap_or_default(),
+                self.kick_connect.is_some(),
+                String::new(),
+            ),
             _ => ("", String::new(), false, String::new()),
         }
     }
@@ -1137,6 +1376,19 @@ impl App {
             }
             (Some(Service::YouTube), "open") => {
                 if let Some(c) = &self.youtube_connect
+                    && let Err(e) = crate::shell::open_url(c.url())
+                {
+                    self.toast(format!("Couldn't open your browser: {e}"), true);
+                }
+            }
+            (Some(Service::Kick), "connect") => self.kick_connect(),
+            (Some(Service::Kick), "disconnect") => self.kick_disconnect(),
+            (Some(Service::Kick), "cancel") => {
+                self.kick_connect = None;
+                self.refresh_settings_form();
+            }
+            (Some(Service::Kick), "open") => {
+                if let Some(c) = &self.kick_connect
                     && let Err(e) = crate::shell::open_url(c.url())
                 {
                     self.toast(format!("Couldn't open your browser: {e}"), true);
@@ -1657,6 +1909,8 @@ impl App {
         }
         self.tick_twitch();
         self.tick_youtube();
+        self.tick_kick();
+        self.tick_chat_send();
         if let Some(engine) = &self.engine {
             let image = |frame: estream_engine::CanvasFrame<'_>| {
                 slint::Image::try_from(frame.preview.clone())
@@ -8736,6 +8990,7 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
         p.reload()
     });
     on!(on_chat_resized, |a, w, h| a.chat_resized(w, h));
+    on!(on_chat_send, |a, text, target| a.chat_send(&text, target));
     on!(
         on_signin_pointer,
         |a, kind, x, y, button, dx, dy| if let Some(d) = &mut a.signin {
@@ -8841,6 +9096,19 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     vec![tick]
 }
 
+/// A `#rrggbb` name colour, lightened when too dark to read on the dark chat background
+/// (platforms let people pick navy or black).
+fn parse_color(hex: &str) -> Option<slint::Color> {
+    let hex = hex.strip_prefix('#').filter(|h| h.len() == 6)?;
+    let v = u32::from_str_radix(hex, 16).ok()?;
+    let (r, g, b) = ((v >> 16) as f32, ((v >> 8) & 0xff) as f32, (v & 0xff) as f32);
+    let luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    // Mix toward white until the colour is about as bright as the muted text.
+    let lift = ((110.0 - luma) / (255.0 - luma).max(1.0)).clamp(0.0, 1.0);
+    let up = |c: f32| (c + (255.0 - c) * lift).round() as u8;
+    Some(slint::Color::from_rgb_u8(up(r), up(g), up(b)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -8942,3 +9210,4 @@ mod tests {
         assert_eq!(voice_preset_index(&chain), 0);
     }
 }
+

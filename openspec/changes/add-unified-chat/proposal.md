@@ -10,21 +10,25 @@ asked for everything in one list, and to answer from there, the way multistream 
   as they arrive, each with a small platform badge, the sender's name (in their colour where the
   platform gives one) and the time. Emotes show as their names for now. Unread messages are kept
   while the panel is scrolled up, with a "New messages" button to jump down.
-- **Reply box** under the list: send to all platforms at once or pick one. Each platform's part
-  shows whether it can send (connected) or why not ("Connect Kick to reply there").
+- **Reply box** under the list: send to all platforms at once or pick one. A platform that
+  can't take the message is named with the reason ("Connect Kick in Settings → Stream to reply
+  there").
 - **Platform pages stay** one click away (a "Pages" menu in the panel header) for things the
   combined list doesn't do: moderation, polls, signing in to the platform's own chat.
 - **Reading chat:**
-  - Twitch: with a connected account, EventSub over WebSocket (`channel.chat.message`,
-    `user:read:chat`). Without one, read-only through Twitch's anonymous chat connection.
+  - Twitch: Twitch's chat connection signed in anonymously, which reads any channel without an
+    account or extra permission (replying uses the connected account).
   - YouTube: with a connected account, the live chat of the current broadcast through
-    `liveChatMessages.streamList` (one long-lived call), falling back to `liveChatMessages.list`
-    at the interval YouTube asks for.
+    `liveChatMessages.streamList` over HTTPS (`liveChat/messages/stream`, one long-lived call
+    that streams a JSON array), falling back to `liveChatMessages.list` at the interval YouTube
+    asks for (at least 5 s).
   - Kick: Kick's public chat feed (the realtime feed its own website uses). This is unofficial:
-    the app key is looked up at connect time with a built-in fallback, refusals back off and
-    retry, and a clear message shows if Kick changes it. The chatroom comes from the channel name.
+    Kick rotates the feed's app key, so the known keys are tried in turn and the one that
+    works is remembered; refusals back off and retry, and a clear message shows when none works. The chatroom
+    comes from the channel name.
 - **Sending:**
-  - Twitch: Helix `POST chat/messages` (`user:write:chat`).
+  - Twitch: Helix `POST chat/messages` (`user:write:chat`, added to the Twitch sign-in;
+    connected users connect again once).
   - YouTube: `liveChatMessages.insert`. The YouTube sign-in moves from `youtube.readonly` to
     `youtube.force-ssl` (which also covers reading); connected users connect again once.
   - Kick: new **Connect Kick** in Settings → Stream (OAuth 2.1 with PKCE in the system browser,

@@ -165,6 +165,8 @@ pub struct Settings {
     pub twitch: Option<crate::twitch::TwitchAccount>,
     /// The connected YouTube channel (its live chat and viewer count).
     pub youtube: Option<crate::youtube::YouTubeAccount>,
+    /// The connected Kick account (replying to Kick chat).
+    pub kick: Option<crate::kick::KickAccount>,
     /// Single-stream settings from before multistream; read once, migrated, never written.
     #[serde(rename = "stream", skip_serializing)]
     legacy_stream: Option<estream_media::StreamSettings>,
@@ -467,6 +469,7 @@ impl Default for Settings {
             updates: UpdateSettings::default(),
             twitch: None,
             youtube: None,
+            kick: None,
             legacy_stream: None,
             legacy_key: None,
         }
@@ -497,6 +500,9 @@ impl Settings {
         }
         if let Some(y) = &mut settings.youtube {
             y.unprotect();
+        }
+        if let Some(k) = &mut settings.kick {
+            k.unprotect();
         }
         settings
     }

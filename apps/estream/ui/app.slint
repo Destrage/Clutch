@@ -17,7 +17,7 @@ import { MontageDialog } from "montage.slint";
 import { LiveDeck } from "deck.slint";
 import { Sidebar } from "sidebar.slint";
 import { SceneStrip } from "stage.slint";
-import { ChatPanel, ChatTabRow, SignInDialog } from "chat.slint";
+import { ChatPanel, ChatTabRow, ChatLive, ChatLine, ChatStateRow, SignInDialog } from "chat.slint";
 import { GoLiveDialog } from "golive.slint";
 
 export { Theme, Platform }
@@ -158,6 +158,7 @@ export component AppWindow inherits Window {
     /// Who is in the selected chat (-1: not listed).
     in property <int> chat-people-total: -1;
     in property <[string]> chat-people;
+    in property <ChatLive> chat-live;
     in-out property <bool> chat-open;
     // Signing in to a platform inside Clutch (shown over everything).
     in property <bool> signin-open;
@@ -176,6 +177,7 @@ export component AppWindow inherits Window {
     callback chat-home();
     callback chat-reload();
     callback chat-resized(float, float);
+    callback chat-send(string, int);
     /// Whether a chat panel is on screen.
     out property <bool> chat-visible: root.deck-visible || root.chat-open;
     in-out property <bool> deck-edit;
@@ -649,12 +651,14 @@ export component AppWindow inherits Window {
             chat-message: root.chat-message;
             chat-people-total: root.chat-people-total;
             chat-people: root.chat-people;
+            chat-live: root.chat-live;
             chat-select(i) => { root.chat-select(i); }
             chat-pointer(k, x, y, b, dx, dy) => { root.chat-pointer(k, x, y, b, dx, dy); }
             chat-key(t, d, c, s, a) => { root.chat-key(t, d, c, s, a); }
             chat-home => { root.chat-home(); }
             chat-reload => { root.chat-reload(); }
             chat-resized(w, h) => { root.chat-resized(w, h); }
+            chat-send(t, i) => { root.chat-send(t, i); }
         }
     }
 
@@ -793,12 +797,14 @@ export component AppWindow inherits Window {
                     message: root.chat-message;
                     people-total: root.chat-people-total;
                     people: root.chat-people;
+                    live: root.chat-live;
                     select(i) => { root.chat-select(i); }
                     pointer(k, x, y, b, dx, dy) => { root.chat-pointer(k, x, y, b, dx, dy); }
                     key(t, d, c, s, a) => { root.chat-key(t, d, c, s, a); }
                     home => { root.chat-home(); }
                     reload => { root.chat-reload(); }
                     resized(w, h) => { root.chat-resized(w, h); }
+                    send(t, i) => { root.chat-send(t, i); }
                 }
             }
         }

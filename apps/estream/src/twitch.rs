@@ -3,7 +3,7 @@
 //! Clutch is a public client: the Client ID ships in the app and there is no client secret.
 //! Tokens are saved encrypted (see [`crate::secret`]) and renewed in the background.
 
-use crate::http::{agent, get_bearer, post_form, text};
+use crate::http::{agent, get_bearer, post_form, post_json_bearer, text};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,8 +11,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 pub const CLIENT_ID: &str = "5t3ur0gkcowdbgst7zo0415yo1quzo";
-/// Reading the chatters list needs this; viewer counts need no scope.
-const SCOPES: &str = "moderator:read:chatters";
+/// The chatters list and replying from Clutch's chat (viewer counts need no scope).
+const SCOPES: &str = "moderator:read:chatters user:write:chat";
 const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
 
 /// A connected Twitch account. The tokens live in memory only; they are saved encrypted.
@@ -247,6 +247,57 @@ impl Session {
             "chat/chatters?broadcaster_id={id}&moderator_id={id}&first=1000"
         ))?;
         chatter_list(&body)
+    }
+
+    /// Sends a message to a channel's chat as the connected account.
+    pub fn send_chat(&self, channel: &str, message: &str) -> Result<(), String> {
+        let account = self
+            .account()
+            .ok_or("Connect Twitch in Settings → Stream to reply there")?;
+        let login = self.channel_login(channel).ok_or("Twitch: no channel set")?;
+        let broadcaster = self
+            .helix(&format!("users?login={login}"))
+            .and_then(|b| Some(text(b.get("data")?.get(0)?, "id")))
+            .filter(|id| !id.is_empty())
+            .ok_or("Couldn't find the Twitch channel")?;
+        let body = serde_json::json!({
+            "broadcaster_id": broadcaster,
+            "sender_id": account.user_id,
+            "message": message,
+        });
+        let url = "https://api.twitch.tv/helix/chat/messages";
+        let headers = [("Client-Id", CLIENT_ID)];
+        let (mut status, mut reply) = post_json_bearer(url, &account.access, &headers, &body)
+            .ok_or("Couldn't reach Twitch")?;
+        if status == 401
+            && let Some(renewed) = self.renew(&account)
+        {
+            (status, reply) = post_json_bearer(url, &renewed.access, &headers, &body)
+                .ok_or("Couldn't reach Twitch")?;
+        }
+        match status {
+            200 => {
+                // Twitch can accept the call and still hold the message back (AutoMod, rules).
+                let sent = reply
+                    .get("data")
+                    .and_then(|d| d.get(0))
+                    .and_then(|d| d.get("is_sent"))
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(true);
+                if sent {
+                    Ok(())
+                } else {
+                    Err("Twitch held the message back (the channel's chat rules)".into())
+                }
+            }
+            401 | 403 => {
+                Err("Connect Twitch again in Settings → Stream to reply from Clutch".into())
+            }
+            _ => Err(format!(
+                "Twitch didn't send it ({})",
+                crate::http::error_message(&reply)
+            )),
+        }
     }
 
     /// The destination's channel, or the connected account's when none is set.

@@ -40,6 +40,7 @@ serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.11"
 ureq = { version = "3.4", features = ["json"] }
+tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 slint.workspace = true
 tracing.workspace = true
 uuid.workspace = true

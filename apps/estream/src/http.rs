@@ -46,6 +46,42 @@ pub fn get_bearer(url: &str, token: &str, headers: &[(&str, &str)]) -> Option<(u
     Some((status, body))
 }
 
+/// POSTs JSON with a bearer token: `(status, body)` (`Null` when the reply isn't JSON).
+pub fn post_json_bearer(
+    url: &str,
+    token: &str,
+    headers: &[(&str, &str)],
+    json: &Value,
+) -> Option<(u16, Value)> {
+    let mut request = agent()
+        .post(url)
+        .header("Authorization", &format!("Bearer {token}"));
+    for (k, v) in headers {
+        request = request.header(*k, *v);
+    }
+    let mut response = request
+        .send_json(json)
+        .map_err(|e| tracing::debug!(error = %e, url, "platform API"))
+        .ok()?;
+    let status = response.status().as_u16();
+    let body = response
+        .body_mut()
+        .read_json::<Value>()
+        .unwrap_or(Value::Null);
+    Some((status, body))
+}
+
+/// The error message in a platform's JSON reply ("" when there is none).
+pub fn error_message(body: &Value) -> String {
+    let error = body.get("error");
+    let nested = error.and_then(|e| e.get("message")).and_then(Value::as_str);
+    nested
+        .or_else(|| body.get("message").and_then(Value::as_str))
+        .or_else(|| error.and_then(Value::as_str))
+        .unwrap_or_default()
+        .to_owned()
+}
+
 /// A string field of a JSON object ("" when missing).
 pub fn text(body: &Value, key: &str) -> String {
     body.get(key)

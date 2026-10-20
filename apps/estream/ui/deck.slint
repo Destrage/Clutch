@@ -7,7 +7,7 @@ import { Icons } from "icons.slint";
 import { SceneRow, MixerStrip, LiveRow, AudioInspect } from "types.slint";
 import { Button, Icon, IconButton, Hint } from "widgets.slint";
 import { ProgramView } from "panels.slint";
-import { ChatPanel, ChatTabRow } from "chat.slint";
+import { ChatPanel, ChatTabRow, ChatLive, ChatLine, ChatStateRow } from "chat.slint";
 import { SoundKnob, AudioSettings } from "sound.slint";
 
 // One platform's state in the top bar.
@@ -122,12 +122,14 @@ export component LiveDeck inherits Rectangle {
     in property <string> chat-message;
     in property <int> chat-people-total: -1;
     in property <[string]> chat-people;
+    in property <ChatLive> chat-live;
     callback chat-select(int);
     callback chat-pointer(string, float, float, int, float, float);
     callback chat-key(string, bool, bool, bool, bool);
     callback chat-home();
     callback chat-reload();
     callback chat-resized(float, float);
+    callback chat-send(string, int);
 
     /// The F-key label for scene `i` ("" past F9, or when the key is the clip hotkey).
     pure function key-label(i: int) -> string {
@@ -346,12 +348,14 @@ export component LiveDeck inherits Rectangle {
                     message: root.chat-message;
                     people-total: root.chat-people-total;
                     people: root.chat-people;
+                    live: root.chat-live;
                     select(i) => { root.chat-select(i); }
                     pointer(k, x, y, b, dx, dy) => { root.chat-pointer(k, x, y, b, dx, dy); }
                     key(t, d, c, s, a) => { root.chat-key(t, d, c, s, a); }
                     home => { root.chat-home(); }
                     reload => { root.chat-reload(); }
                     resized(w, h) => { root.chat-resized(w, h); }
+                    send(t, i) => { root.chat-send(t, i); }
                 }
                 Rectangle {
                     border-radius: Theme.radius-l;

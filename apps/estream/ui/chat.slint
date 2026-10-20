@@ -1,10 +1,11 @@
-// The chat panel: a tab per platform, each showing that platform's own chat page, which takes
-// clicks, scrolling and typing like a browser.
+// The chat panel: every platform's messages in one list with a reply box, and each platform's own
+// chat page one click away (it takes clicks, scrolling and typing like a browser).
 
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
-import { Button, IconButton, Icon, EmptyState } from "widgets.slint";
+import { Button, IconButton, Icon, EmptyState, Select, TextField } from "widgets.slint";
 import { Modal } from "overlays.slint";
+import { ListView } from "std-widgets.slint";
 
 export struct ChatTabRow {
     name: string,
@@ -70,17 +71,64 @@ export component WebView inherits Rectangle {
     }
 }
 
+/// One message in the combined chat.
+export struct ChatLine {
+    /// "kick" | "twitch" | "youtube"
+    kind: string,
+    author: string,
+    author-color: color,
+    text: string,
+    time: string,
+}
+
+/// How one destination's chat is being read.
+export struct ChatStateRow {
+    kind: string,
+    name: string,
+    /// 0 connecting, 1 reading, 2 not reading (see note)
+    state: int,
+    note: string,
+}
+
+/// The combined chat: messages, reader states, and where replies can go.
+export struct ChatLive {
+    messages: [ChatLine],
+    states: [ChatStateRow],
+    /// "All platforms", then each platform being read.
+    targets: [string],
+}
+
+component PlatformBadge inherits Rectangle {
+    in property <string> kind;
+    width: 18px;
+    height: 18px;
+    border-radius: 5px;
+    background: kind == "kick" ? #53fc18 : kind == "twitch" ? #a970ff : kind == "youtube" ? #ff3355 : Theme.surface-3;
+    Text {
+        text: root.kind == "kick" ? "K" : root.kind == "twitch" ? "T" : root.kind == "youtube" ? "Y" : "?";
+        color: root.kind == "kick" ? #0f141a : #ffffff;
+        font-size: 11px;
+        font-weight: 800;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
 export component ChatPanel inherits Rectangle {
     in property <[ChatTabRow]> tabs;
-    in property <int> selected;
+    /// The platform page shown (-1: the combined chat).
+    in property <int> selected: -1;
     in property <image> frame;
-    /// Shown instead of the page (how to set the chat up, or that it is loading).
+    /// Shown instead of a platform page (how to set it up, or that it is loading).
     in property <string> message;
-    /// Who is in the selected tab's chat (-1: the platform doesn't list them).
+    in property <ChatLive> live;
+    /// Who is in the chat (-1: the platform doesn't list them).
     in property <int> people-total: -1;
     in property <[string]> people;
     property <bool> people-open;
     changed people-total => { if (root.people-total < 0) { root.people-open = false; } }
+    /// Where replies go (index into live.targets; 0 is all platforms).
+    property <int> reply-target: 0;
     out property <length> view-width: view.width;
     out property <length> view-height: view.height;
     callback select(int);
@@ -89,7 +137,8 @@ export component ChatPanel inherits Rectangle {
     callback home();
     callback reload();
     callback open-settings();
-    /// The page area's size, so the chat page is drawn at exactly that size.
+    callback send(string, int);
+    /// The page area's size, so a platform page is drawn at exactly that size.
     callback resized(float, float);
     changed view-width => { root.resized(root.view-width / 1px, root.view-height / 1px); }
     changed view-height => { root.resized(root.view-width / 1px, root.view-height / 1px); }
@@ -97,6 +146,9 @@ export component ChatPanel inherits Rectangle {
 
     pure function dot(kind: string) -> color {
         return kind == "kick" ? #53fc18 : kind == "twitch" ? #a970ff : kind == "youtube" ? #ff3355 : Theme.text-muted;
+    }
+    pure function state-color(state: int) -> color {
+        return state == 1 ? Theme.ok : state == 0 ? Theme.warn : Theme.text-faint;
     }
 
     background: Theme.surface;
@@ -106,43 +158,61 @@ export component ChatPanel inherits Rectangle {
     clip: true;
 
     VerticalLayout {
-        // Tabs, then going back to the chat after a sign-in page, and reloading.
+        // Header: what is being read (or which page is open), the platform pages, and reload.
         HorizontalLayout {
             height: 48px;
-            padding-left: 8px;
+            padding-left: 10px;
             padding-right: 6px;
-            spacing: 4px;
-            for entry[i] in root.tabs: VerticalLayout {
-                alignment: center;
-                Rectangle {
-                    height: 34px;
-                    width: tab-row.preferred-width;
-                    border-radius: Theme.radius-m;
-                    background: i == root.selected ? Theme.surface-2 : tab-ta.has-hover ? Theme.hover : transparent;
-                    accessible-role: tab;
-                    accessible-label: entry.name + " chat";
-                    accessible-checked: i == root.selected;
-                    tab-row := HorizontalLayout {
-                        padding-left: 12px;
-                        padding-right: 12px;
-                        spacing: 8px;
-                        VerticalLayout {
-                            alignment: center;
-                            Rectangle { width: 8px; height: 8px; border-radius: 4px; background: root.dot(entry.kind); }
-                        }
-                        Text {
-                            text: entry.name;
-                            color: i == root.selected ? Theme.text : Theme.text-muted;
-                            font-size: Theme.font-m;
-                            font-weight: 600;
-                            vertical-alignment: center;
+            spacing: 6px;
+            if root.selected < 0: Text {
+                text: "Chat";
+                color: Theme.text;
+                font-family: Theme.font-display;
+                font-size: Theme.font-l;
+                font-weight: 600;
+                vertical-alignment: center;
+            }
+            if root.selected < 0: HorizontalLayout {
+                spacing: 4px;
+                padding-left: 4px;
+                for st in root.live.states: VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        height: 24px;
+                        width: chip.preferred-width;
+                        border-radius: 12px;
+                        background: Theme.surface-2;
+                        accessible-role: text;
+                        accessible-label: st.name + (st.state == 1 ? ": reading" : st.state == 0 ? ": connecting" : ": " + st.note);
+                        chip := HorizontalLayout {
+                            padding-left: 8px;
+                            padding-right: 10px;
+                            spacing: 6px;
+                            VerticalLayout { alignment: center; Rectangle { width: 7px; height: 7px; border-radius: 3.5px; background: root.state-color(st.state); } }
+                            Text { text: st.name; color: Theme.text-muted; font-size: Theme.font-xs; font-weight: 600; vertical-alignment: center; }
                         }
                     }
-                    tab-ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.select(i); } }
                 }
             }
+            if root.selected >= 0: VerticalLayout {
+                alignment: center;
+                Button {
+                    text: "Back to chat";
+                    has-icon: true;
+                    icon: Icons.chevron-up;
+                    kind: "ghost";
+                    clicked => { root.select(-1); }
+                }
+            }
+            if root.selected >= 0 && root.selected < root.tabs.length: Text {
+                text: root.tabs[root.selected].name;
+                color: Theme.text-muted;
+                font-size: Theme.font-m;
+                font-weight: 600;
+                vertical-alignment: center;
+            }
             Rectangle { horizontal-stretch: 1; }
-            if root.people-total >= 0: VerticalLayout {
+            if root.people-total >= 0 && root.selected >= 0: VerticalLayout {
                 alignment: center;
                 Rectangle {
                     height: 30px;
@@ -164,11 +234,18 @@ export component ChatPanel inherits Rectangle {
             }
             if root.tabs.length > 0: VerticalLayout {
                 alignment: center;
-                IconButton { icon: Icons.chevron-up; tooltip: "Back to the chat (after signing in)"; size: 30px; icon-size: 15px; clicked => { root.home(); } }
+                Button {
+                    text: "Pages";
+                    has-icon: true;
+                    icon: Icons.globe;
+                    kind: "ghost";
+                    tooltip: "Open a platform's own chat page (moderation, polls, signing in)";
+                    clicked => { pages.show(); }
+                }
             }
-            if root.tabs.length > 0: VerticalLayout {
+            if root.selected >= 0: VerticalLayout {
                 alignment: center;
-                IconButton { icon: Icons.refresh; tooltip: "Reload the chat"; size: 30px; icon-size: 15px; clicked => { root.reload(); } }
+                IconButton { icon: Icons.refresh; tooltip: "Reload the page"; size: 30px; icon-size: 15px; clicked => { root.reload(); } }
             }
         }
         Rectangle { height: 1px; background: Theme.border; }
@@ -176,7 +253,9 @@ export component ChatPanel inherits Rectangle {
         view := Rectangle {
             vertical-stretch: 1;
             background: Theme.bg;
-            if root.tabs.length == 0: VerticalLayout {
+
+            // ---- The combined chat ----
+            if root.selected < 0 && root.live.states.length == 0: VerticalLayout {
                 alignment: center;
                 padding: 20px;
                 EmptyState {
@@ -185,14 +264,164 @@ export component ChatPanel inherits Rectangle {
                     body: "Add Kick, Twitch or YouTube under Settings → Stream, with your channel name, and its chat appears here.";
                 }
             }
-            if root.tabs.length > 0: WebView {
+            if root.selected < 0 && root.live.states.length > 0: VerticalLayout {
+                // Platforms that can't be read right now, and why.
+                for st in root.live.states: Rectangle {
+                    visible: st.state == 2;
+                    height: st.state == 2 ? note-text.preferred-height + 12px : 0px;
+                    background: Theme.surface-2;
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        spacing: 8px;
+                        VerticalLayout { alignment: center; PlatformBadge { kind: st.kind; } }
+                        note-text := Text {
+                            text: st.note;
+                            color: Theme.text-muted;
+                            font-size: Theme.font-s;
+                            wrap: word-wrap;
+                            vertical-alignment: center;
+                            width: view.width - 50px;
+                        }
+                    }
+                }
+                Rectangle {
+                    vertical-stretch: 1;
+                    list := ListView {
+                        /// Follows new messages unless the user scrolled up to read.
+                        property <bool> follow: true;
+                        property <length> bottom: min(0px, self.visible-height - self.content-height);
+                        property <int> count: root.live.messages.length;
+                        /// Frames left to keep snapping to the end while new rows are measured.
+                        property <int> settle;
+                        changed count => {
+                            if (self.follow) {
+                                self.settle = 4;
+                                to-end.running = true;
+                            }
+                        }
+                        // Only a real scroll up (a few rows) stops following; rows being
+                        // measured shift the list a little on their own.
+                        changed content-y => {
+                            if (self.content-y <= self.bottom + 24px) {
+                                self.follow = true;
+                            } else if (self.content-y > self.bottom + 160px && self.settle == 0) {
+                                self.follow = false;
+                            }
+                        }
+                        for line in root.live.messages: Rectangle {
+                            HorizontalLayout {
+                                padding-left: 10px;
+                                padding-right: 10px;
+                                padding-top: 4px;
+                                padding-bottom: 4px;
+                                spacing: 8px;
+                                VerticalLayout { alignment: start; padding-top: 1px; PlatformBadge { kind: line.kind; } }
+                                VerticalLayout {
+                                    spacing: 1px;
+                                    HorizontalLayout {
+                                        spacing: 6px;
+                                        Text { text: line.author; color: line.author-color; font-size: Theme.font-m; font-weight: 700; overflow: elide; }
+                                        Text { text: line.time; color: Theme.text-faint; font-size: Theme.font-xs; vertical-alignment: center; }
+                                        Rectangle { horizontal-stretch: 1; }
+                                    }
+                                    Text {
+                                        text: line.text;
+                                        color: Theme.text;
+                                        font-size: Theme.font-m;
+                                        wrap: word-wrap;
+                                        width: list.visible-width - 46px;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    to-end := Timer {
+                        interval: 16ms;
+                        running: false;
+                        triggered => {
+                            list.content-y = list.bottom;
+                            list.settle = max(0, list.settle - 1);
+                            self.running = list.settle > 0;
+                        }
+                    }
+                    if root.live.messages.length == 0: VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: "New messages appear here as they arrive.";
+                            color: Theme.text-faint;
+                            font-size: Theme.font-m;
+                            horizontal-alignment: center;
+                        }
+                    }
+                    if !list.follow: Rectangle {
+                        y: parent.height - self.height - 10px;
+                        x: (parent.width - self.width) / 2;
+                        width: new-row.preferred-width;
+                        height: 30px;
+                        border-radius: 15px;
+                        background: Theme.accent;
+                        drop-shadow-blur: 10px;
+                        drop-shadow-color: #00000060;
+                        accessible-role: button;
+                        accessible-label: "Jump to new messages";
+                        new-row := HorizontalLayout {
+                            padding-left: 14px;
+                            padding-right: 14px;
+                            Text { text: "New messages"; color: Theme.on-accent; font-size: Theme.font-s; font-weight: 700; vertical-alignment: center; }
+                        }
+                        TouchArea {
+                            mouse-cursor: MouseCursor.pointer;
+                            clicked => {
+                                list.follow = true;
+                                list.content-y = list.bottom;
+                            }
+                        }
+                    }
+                }
+                // Replying: to every platform, or one.
+                Rectangle { height: 1px; background: Theme.border; }
+                HorizontalLayout {
+                    padding: 8px;
+                    spacing: 6px;
+                    Select {
+                        width: 130px;
+                        label: "Send to";
+                        options: root.live.targets;
+                        current-index: root.reply-target;
+                        selected(i) => { root.reply-target = i; }
+                    }
+                    reply := TextField {
+                        label: "Message";
+                        placeholder: "Send a message";
+                        accepted(t) => {
+                            if (t != "") {
+                                root.send(t, root.reply-target);
+                                self.text = "";
+                            }
+                        }
+                    }
+                    Button {
+                        text: "Send";
+                        kind: "primary";
+                        enabled: reply.text != "";
+                        clicked => {
+                            root.send(reply.text, root.reply-target);
+                            reply.text = "";
+                        }
+                    }
+                }
+            }
+
+            // ---- A platform's own page ----
+            if root.selected >= 0: WebView {
                 frame: root.frame;
                 message: root.message;
                 pointer(k, x, y, b, dx, dy) => { root.pointer(k, x, y, b, dx, dy); }
                 key(t, d, c, s, a) => { root.key(t, d, c, s, a); }
             }
             // The list of who is in chat, over the page.
-            if root.people-open: Rectangle {
+            if root.people-open && root.selected >= 0: Rectangle {
                 background: Theme.surface;
                 TouchArea {}
                 Flickable {
@@ -212,6 +441,37 @@ export component ChatPanel inherits Rectangle {
                             font-size: Theme.font-m;
                         }
                     }
+                }
+            }
+        }
+    }
+
+    // The platform pages menu.
+    pages := PopupWindow {
+        x: root.width - 220px;
+        y: 44px;
+        width: 210px;
+        Rectangle {
+            background: Theme.surface;
+            border-radius: Theme.radius-m;
+            border-width: 1px;
+            border-color: Theme.border-strong;
+            drop-shadow-blur: 16px;
+            drop-shadow-color: #00000060;
+            VerticalLayout {
+                padding: 6px;
+                spacing: 2px;
+                for entry[i] in root.tabs: Rectangle {
+                    height: 32px;
+                    border-radius: Theme.radius-s;
+                    background: page-ta.has-hover ? Theme.hover : transparent;
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        spacing: 8px;
+                        VerticalLayout { alignment: center; Rectangle { width: 8px; height: 8px; border-radius: 4px; background: root.dot(entry.kind); } }
+                        Text { text: entry.name + " page"; color: Theme.text; font-size: Theme.font-m; vertical-alignment: center; }
+                    }
+                    page-ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.select(i); } }
                 }
             }
         }

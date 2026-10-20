@@ -12,6 +12,8 @@ fn main() {
         "CLUTCH_YOUTUBE_CLIENT_ID",
         "CLUTCH_YOUTUBE_CLIENT_SECRET",
         "CLUTCH_JAMENDO_CLIENT_ID",
+        "CLUTCH_KICK_CLIENT_ID",
+        "CLUTCH_KICK_CLIENT_SECRET",
     ] {
         println!("cargo:rerun-if-env-changed={key}");
         let value = std::env::var(key).ok().or_else(|| {

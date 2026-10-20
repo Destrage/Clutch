@@ -4,25 +4,20 @@
 //! The client is Google's "Desktop app" kind; its ID and secret are compiled in from
 //! `.secrets/clutch.env` (see build.rs). Tokens are saved encrypted (see [`crate::secret`]).
 
-use crate::http::{get_bearer, post_form, text};
-use base64::Engine as _;
+use crate::http::{get_bearer, post_form, post_json_bearer, text};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
 const CLIENT_ID: Option<&str> = option_env!("CLUTCH_YOUTUBE_CLIENT_ID");
 const CLIENT_SECRET: Option<&str> = option_env!("CLUTCH_YOUTUBE_CLIENT_SECRET");
-/// Read-only: the live broadcast, its chat and viewer count.
-const SCOPE: &str = "https://www.googleapis.com/auth/youtube.readonly";
+/// The live broadcast, its chat and viewer count, and sending chat messages (reading alone would
+/// be youtube.readonly; force-ssl covers both).
+const SCOPE: &str = "https://www.googleapis.com/auth/youtube.force-ssl";
 const API: &str = "https://www.googleapis.com/youtube/v3";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
-/// How long to wait for the user to finish in the browser.
-const SIGN_IN_TIME: Duration = Duration::from_secs(10 * 60);
 
 /// A connected YouTube channel. The tokens live in memory only; they are saved encrypted.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -82,17 +77,16 @@ impl Connecting {
         listener.set_nonblocking(true).map_err(|e| e.to_string())?;
         let port = listener.local_addr().map_err(|e| e.to_string())?.port();
         let redirect = format!("http://127.0.0.1:{port}");
-        let verifier = random_token();
-        let challenge =
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(Sha256::digest(&verifier));
-        let csrf = random_token();
+        let verifier = crate::oauth::random_token();
+        let challenge = crate::oauth::challenge(&verifier);
+        let csrf = crate::oauth::random_token();
         let url = format!(
             "https://accounts.google.com/o/oauth2/v2/auth?client_id={}&redirect_uri={}\
              &response_type=code&scope={}&code_challenge={challenge}\
              &code_challenge_method=S256&state={csrf}&access_type=offline&prompt=consent",
-            encode(client_id),
-            encode(&redirect),
-            encode(SCOPE),
+            crate::oauth::encode(client_id),
+            crate::oauth::encode(&redirect),
+            crate::oauth::encode(SCOPE),
         );
         let state = Arc::new(Mutex::new(Connect::Waiting));
         let cancel = Arc::new(AtomicBool::new(false));
@@ -133,25 +127,6 @@ impl Drop for Connecting {
     }
 }
 
-/// 43 random URL-safe characters (a PKCE verifier, or the anti-forgery state).
-fn random_token() -> String {
-    let mut bytes = [0u8; 32];
-    if getrandom::fill(&mut bytes).is_err() {
-        bytes = std::array::from_fn(|_| fastrand::u8(..));
-    }
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
-}
-
-fn encode(s: &str) -> String {
-    percent_encoding::utf8_percent_encode(s, percent_encoding::NON_ALPHANUMERIC).to_string()
-}
-
-fn decode(s: &str) -> String {
-    percent_encoding::percent_decode_str(&s.replace('+', " "))
-        .decode_utf8_lossy()
-        .into_owned()
-}
-
 /// Waits for Google to send the browser back with a code, then trades it for tokens.
 fn sign_in(
     listener: &TcpListener,
@@ -160,31 +135,7 @@ fn sign_in(
     verifier: &str,
     redirect: &str,
 ) -> Result<YouTubeAccount, String> {
-    let until = Instant::now() + SIGN_IN_TIME;
-    let code = loop {
-        if cancel.load(Ordering::Acquire) {
-            return Err("Cancelled".into());
-        }
-        if Instant::now() >= until {
-            // Google never sent the browser back: the window was closed, or Google showed an
-            // error page (for example when the app has reached its user limit).
-            return Err("Google didn't finish the sign-in. If you closed the window, try again; \
-                        if Google showed an error, connecting YouTube may be unavailable for now."
-                .into());
-        }
-        let stream = match listener.accept() {
-            Ok((stream, _)) => stream,
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(Duration::from_millis(200));
-                continue;
-            }
-            Err(e) => return Err(e.to_string()),
-        };
-        // Other requests (the browser's icon) are answered and ignored.
-        if let Some(result) = redirect_request(stream, csrf) {
-            break result?;
-        }
-    };
+    let code = crate::oauth::wait_for_code(listener, cancel, csrf, "Google")?;
     let (Some(client_id), Some(secret)) = (CLIENT_ID, CLIENT_SECRET) else {
         return Err("Connecting YouTube isn't available in this build".into());
     };
@@ -228,85 +179,6 @@ fn sign_in(
     };
     account.set_tokens(&access, &text(&body, "refresh_token"));
     Ok(account)
-}
-
-/// Reads one request to the loopback address: `Some(code or error)` for Google's redirect,
-/// `None` for anything else.
-fn redirect_request(mut stream: TcpStream, csrf: &str) -> Option<Result<String, String>> {
-    let _ = stream.set_nonblocking(false);
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-    let mut buffer = [0u8; 8192];
-    let mut read = 0;
-    while read < buffer.len() {
-        match stream.read(&mut buffer[read..]) {
-            Ok(0) | Err(_) => break,
-            Ok(n) => read += n,
-        }
-        if buffer[..read].windows(4).any(|w| w == b"\r\n\r\n") {
-            break;
-        }
-    }
-    let request = String::from_utf8_lossy(&buffer[..read]);
-    let target = request
-        .lines()
-        .next()
-        .and_then(|l| l.strip_prefix("GET "))
-        .and_then(|l| l.split(' ').next())
-        .unwrap_or_default();
-    let result = redirect_result(target, csrf);
-    let page = match &result {
-        None => {
-            let _ = stream.write_all(
-                b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-            );
-            return None;
-        }
-        Some(Ok(_)) => {
-            "Clutch is connecting to YouTube. You can close this tab and go back to Clutch."
-        }
-        Some(Err(_)) => {
-            "YouTube wasn't connected. You can close this tab; Clutch shows what happened."
-        }
-    };
-    let html = format!(
-        "<!doctype html><meta charset=utf-8><title>Clutch</title>\
-         <body style=\"font:16px system-ui;background:#0f1115;color:#e8eaf0;display:grid;\
-         place-items:center;height:90vh\"><p>{page}</p>"
-    );
-    let _ = stream.write_all(
-        format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{html}",
-            html.len()
-        )
-        .as_bytes(),
-    );
-    result
-}
-
-/// The code (or the error) in Google's redirect to `target` (`/?state=…&code=…`).
-fn redirect_result(target: &str, csrf: &str) -> Option<Result<String, String>> {
-    let query = target.strip_prefix("/?")?;
-    let param = |key: &str| {
-        query
-            .split('&')
-            .filter_map(|p| p.split_once('='))
-            .find(|(k, _)| *k == key)
-            .map(|(_, v)| decode(v))
-    };
-    if let Some(error) = param("error") {
-        return Some(Err(if error == "access_denied" {
-            "The sign-in was declined on Google".into()
-        } else {
-            format!("Google sign-in failed ({error})")
-        }));
-    }
-    let code = param("code")?;
-    if param("state").as_deref() != Some(csrf) {
-        return Some(Err(
-            "The sign-in didn't match this attempt. Try again.".into()
-        ));
-    }
-    Some(Ok(code))
 }
 
 fn channel_of(body: &Value) -> Option<(String, String)> {
@@ -387,6 +259,65 @@ impl Session {
             .and_then(|v| concurrent_viewers(&v));
         Some(Live { video_id, viewers })
     }
+
+    /// The access token to use now (`renew`: after it was refused).
+    pub fn token(&self, renew: bool) -> Option<String> {
+        let account = self.account()?;
+        if renew {
+            return self.renew(&account).map(|a| a.access);
+        }
+        Some(account.access)
+    }
+
+    /// The live chat of the connected channel's current broadcast.
+    pub fn live_chat_id(&self) -> Option<String> {
+        let broadcasts = self
+            .api("liveBroadcasts?part=snippet&broadcastStatus=active&broadcastType=all")?;
+        let id = broadcasts
+            .get("items")?
+            .get(0)?
+            .get("snippet")?
+            .get("liveChatId")?
+            .as_str()?;
+        (!id.is_empty()).then(|| id.to_owned())
+    }
+
+    /// Sends a message to the current broadcast's chat.
+    pub fn send_chat(&self, message: &str) -> Result<(), String> {
+        if self.account().is_none() {
+            return Err("Connect YouTube in Settings → Stream to reply there".into());
+        }
+        let chat = self
+            .live_chat_id()
+            .ok_or("YouTube: your broadcast isn't live yet")?;
+        let body = serde_json::json!({
+            "snippet": {
+                "liveChatId": chat,
+                "type": "textMessageEvent",
+                "textMessageDetails": { "messageText": message },
+            }
+        });
+        let url = format!("{API}/liveChat/messages?part=snippet");
+        let token = self.token(false).ok_or("YouTube isn't connected")?;
+        let (mut status, mut reply) =
+            post_json_bearer(&url, &token, &[], &body).ok_or("Couldn't reach YouTube")?;
+        if status == 401
+            && let Some(token) = self.token(true)
+        {
+            (status, reply) =
+                post_json_bearer(&url, &token, &[], &body).ok_or("Couldn't reach YouTube")?;
+        }
+        match status {
+            200 => Ok(()),
+            401 | 403 if crate::http::error_message(&reply).contains("scope") => Err(
+                "Connect YouTube again in Settings → Stream to reply from Clutch".into(),
+            ),
+            _ => Err(format!(
+                "YouTube didn't send it ({})",
+                crate::http::error_message(&reply)
+            )),
+        }
+    }
 }
 
 fn concurrent_viewers(body: &Value) -> Option<u64> {
@@ -404,23 +335,6 @@ fn concurrent_viewers(body: &Value) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_redirect_carries_the_code() {
-        assert_eq!(
-            redirect_result("/?state=abc&code=4%2F0Ab_x&scope=x", "abc"),
-            Some(Ok("4/0Ab_x".into()))
-        );
-        assert!(matches!(
-            redirect_result("/?state=other&code=x", "abc"),
-            Some(Err(_))
-        ));
-        assert!(matches!(
-            redirect_result("/?error=access_denied&state=abc", "abc"),
-            Some(Err(_))
-        ));
-        assert_eq!(redirect_result("/favicon.ico", "abc"), None);
-    }
 
     #[test]
     fn viewers_are_read_from_the_live_details() {
