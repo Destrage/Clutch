@@ -220,12 +220,40 @@ struct Shared {
 }
 
 /// Why a camera worker stopped.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Stopped {
     reason: String,
     /// The camera is still connected: reading just failed (a USB hiccup, a glitched frame), so
     /// opening it again right away usually works.
     still_connected: bool,
+    /// Another app took the camera (Windows 10 lets one app use a camera at a time). Opening it
+    /// again at once would only take it back and start a tug of war.
+    taken: bool,
+}
+
+/// What a camera says when another app opens it (`MF_E_VIDEO_RECORDING_DEVICE_PREEMPTED`).
+const PREEMPTED: windows::core::HRESULT = windows::core::HRESULT(0xC00D3EA3_u32 as i32);
+const TAKEN: &str =
+    "Another app is using this camera. Close the camera there and Clutch picks it up again.";
+
+/// One reader per camera, shared by every source that shows it. Windows 10 gives a camera to one
+/// reader at a time, so two sources each opening the same webcam would keep taking it from each
+/// other. A second source joins the running reader (and its format).
+fn shared_worker(device: &str, format: &str) -> Arc<Worker> {
+    static WORKERS: OnceLock<Mutex<HashMap<String, std::sync::Weak<Worker>>>> = OnceLock::new();
+    let mut workers = WORKERS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    workers.retain(|_, w| w.strong_count() > 0);
+    if let Some(running) = workers.get(device).and_then(std::sync::Weak::upgrade)
+        && running.shared.lock().is_ok_and(|s| s.stopped.is_none())
+    {
+        return running;
+    }
+    let worker = Arc::new(spawn_worker(device.to_owned(), format.to_owned()));
+    workers.insert(device.to_owned(), Arc::downgrade(&worker));
+    worker
 }
 
 struct Worker {
@@ -256,6 +284,7 @@ fn spawn_worker(device: String, format: String) -> Worker {
                     Err(e) => e,
                 };
                 let still_connected = devices().iter().any(|d| d.id == device);
+                let taken = reason == TAKEN;
                 if let Ok(mut s) = shared.lock() {
                     s.stopped = Some(Stopped {
                         reason: if still_connected {
@@ -264,6 +293,7 @@ fn spawn_worker(device: String, format: String) -> Worker {
                             "Camera disconnected".into()
                         },
                         still_connected,
+                        taken,
                     });
                 }
             })
@@ -371,8 +401,11 @@ fn run_worker(
             || flags & MF_SOURCE_READERF_ERROR.0 as u32 != 0
             || flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0
         {
-            let error = read.err().map(|e| e.code().to_string()).unwrap_or_default();
-            tracing::warn!(device, %error, flags, "camera read failed");
+            let code = read.err().map(|e| e.code());
+            tracing::warn!(device, error = ?code, flags, "camera read failed");
+            if code == Some(PREEMPTED) {
+                return Err(TAKEN.into());
+            }
             return Err("The camera stopped sending pictures".into());
         }
         let Some(sample) = sample else { continue };
@@ -436,7 +469,7 @@ pub struct CameraSettings {
 
 pub struct CameraSource {
     settings: CameraSettings,
-    worker: Option<Worker>,
+    worker: Option<Arc<Worker>>,
     converter: Arc<YuvConverter>,
     frame: Option<Nv12Frame>,
     binding: Option<wgpu::BindGroup>,
@@ -484,21 +517,23 @@ impl VideoSource for CameraSource {
             return;
         }
         if self.worker.is_none() && Instant::now() >= self.next_attempt {
-            self.worker = Some(spawn_worker(
-                self.settings.device.clone(),
-                self.settings.format.clone(),
-            ));
+            self.worker = Some(shared_worker(&self.settings.device, &self.settings.format));
         }
         let Some(worker) = &self.worker else { return };
         // Never block the video thread: skip this tick if the worker holds the lock.
-        let Ok(mut shared) = worker.shared.try_lock() else {
+        let Ok(shared) = worker.shared.try_lock() else {
             return;
         };
-        if let Some(stopped) = shared.stopped.take() {
+        // Left in place (not taken): every source sharing this reader needs to see it.
+        if let Some(stopped) = shared.stopped.clone() {
             drop(shared);
             self.worker = None;
             let now = Instant::now();
-            if stopped.still_connected && self.frame.is_some() {
+            if stopped.taken {
+                // Wait for the other app to let go instead of grabbing the camera back.
+                self.next_attempt = now + Duration::from_secs(3);
+                self.status = SourceStatus::Unavailable(stopped.reason);
+            } else if stopped.still_connected && self.frame.is_some() {
                 // A hiccup while running: open it again at once and keep showing the last
                 // picture meanwhile. Only say something when it keeps happening.
                 self.dropouts
