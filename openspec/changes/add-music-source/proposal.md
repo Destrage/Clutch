@@ -16,9 +16,9 @@ A tester built a browser page to do this by hand; it should be a source type.
     commercial use (CC BY, CC BY-SA, CC0). Off, NonCommercial tracks are included too, and the
     settings say they're for non-monetized streams only.
   - **Credit:** every Creative Commons license needs the artist credited. The source shows
-    "Now playing: Track by Artist (CC BY)" in its settings, and its video side draws an optional
-    now-playing line viewers can see (on by default). The current track's credit is also
-    written to a text file for overlays.
+    "Title by Artist (CC BY 3.0)" in its media controls, and writes "Now playing: …" to a text
+    file that a Text source (Read text from file) shows on screen with its own styling. The
+    settings say where the file is.
   - The wording is "Creative Commons music from Jamendo", never "guaranteed DMCA-free": an
     artist may also register a track elsewhere.
 - **Client ID:** Clutch is registered as a Jamendo app. The ID is public (like the Twitch one)

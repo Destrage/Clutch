@@ -58,6 +58,11 @@ impl Paths {
         self.root.join("logs")
     }
 
+    /// "Now playing" credit files of music sources (read by text sources).
+    pub fn now_playing(&self) -> PathBuf {
+        self.root.join("now-playing")
+    }
+
     pub fn scenes(&self) -> PathBuf {
         self.root.join("scenes")
     }

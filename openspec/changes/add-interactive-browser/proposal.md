@@ -15,7 +15,7 @@ just isn't connected to browser sources.
   back to the studio.
 - **Hold Alt** to edit an interactive source like any other (select, move, resize, Alt-drag to
   crop). Without Alt, clicks on it never start a drag.
-- The cursor shows a pointer over interactive sources, so it's clear why clicks don't move it.
+- Over an interactive source the cursor is a normal arrow, not the move cursor.
 - Works the same for web addresses and local files, in the Stage and in studio mode's Preview.
 
 ## Impact

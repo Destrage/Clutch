@@ -1508,6 +1508,13 @@ impl App {
         let mut registry = estream_engine::SourceRegistry::with_builtins();
         estream_capture::register_all(&mut registry);
         estream_media::media_source::register(&mut registry);
+        // Music needs the Jamendo client ID (public, like the Twitch one); builds without it
+        // show the source as unavailable.
+        estream_media::music_source::configure(
+            option_env!("CLUTCH_JAMENDO_CLIENT_ID"),
+            self.paths.now_playing(),
+        );
+        estream_media::music_source::register(&mut registry);
         if let Some(w) = self.window() {
             w.set_source_types(ModelRc::new(VecModel::from(source_types(&registry))));
         }
@@ -5115,14 +5122,24 @@ impl App {
 
     // ------------------------------------------------------------ media controls
 
-    /// The player of the selected media source, if any.
+    /// The player of the selected media or music source, if any.
     fn selected_player(&self) -> Option<Arc<estream_media::player::Player>> {
         let snapshot = self.engine.as_ref()?.snapshot();
         let source = self
             .current_source(&snapshot)
             .and_then(|id| snapshot.source(id))
-            .filter(|s| s.kind == "media")?;
+            .filter(|s| s.kind == "media" || s.kind == "music")?;
         estream_media::player::get(&source.id.to_string())
+    }
+
+    /// The controller of the selected music source, if any.
+    fn selected_music(&self) -> Option<Arc<estream_media::music_source::Controller>> {
+        let snapshot = self.engine.as_ref()?.snapshot();
+        let source = self
+            .current_source(&snapshot)
+            .and_then(|id| snapshot.source(id))
+            .filter(|s| s.kind == "music")?;
+        estream_media::music_source::get(&source.id.to_string())
     }
 
     fn media_inspect(&self) -> MediaInspect {
@@ -5131,18 +5148,16 @@ impl App {
             return MediaInspect::default();
         };
         let s = player.status();
-        let clock = |d: Duration| {
-            let secs = d.as_secs();
-            if secs >= 3600 {
-                format!("{}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60)
-            } else {
-                format!("{}:{:02}", secs / 60, secs % 60)
-            }
-        };
-        let time = match s.duration {
-            Some(d) => format!("{} / {}", clock(s.position), clock(d)),
-            None => clock(s.position),
-        };
+        // Music shows the track's credit (title, artist, license) instead of a file name.
+        if let Some(music) = self.selected_music() {
+            return MediaInspect {
+                has: true,
+                item: music.now_playing().into(),
+                index: "".into(),
+                ..self.media_times(&s)
+            };
+        }
+        let times = self.media_times(&s);
         MediaInspect {
             has: true,
             item: match (&s.state, s.item.is_empty()) {
@@ -5158,12 +5173,33 @@ impl App {
             } else {
                 "".into()
             },
+            ..times
+        }
+    }
+
+    /// Position, progress and play state of a player.
+    fn media_times(&self, s: &estream_media::player::PlayerStatus) -> MediaInspect {
+        use estream_media::player::PlayState;
+        let clock = |d: Duration| {
+            let secs = d.as_secs();
+            if secs >= 3600 {
+                format!("{}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60)
+            } else {
+                format!("{}:{:02}", secs / 60, secs % 60)
+            }
+        };
+        let time = match s.duration {
+            Some(d) => format!("{} / {}", clock(s.position), clock(d)),
+            None => clock(s.position),
+        };
+        MediaInspect {
             time: time.into(),
             progress: s.duration.map_or(0.0, |d| {
                 (s.position.as_secs_f32() / d.as_secs_f32().max(0.001)).clamp(0.0, 1.0)
             }),
             paused: s.state == PlayState::Paused,
             ended: s.state == PlayState::Ended,
+            ..Default::default()
         }
     }
 
@@ -5177,7 +5213,11 @@ impl App {
                 player.set_paused(false);
                 player.restart();
             }
-            "next" => player.next(),
+            // Music's "next" is Skip: the controller starts another track.
+            "next" => match self.selected_music() {
+                Some(music) => music.skip(),
+                None => player.next(),
+            },
             "previous" => player.previous(),
             _ => {}
         }

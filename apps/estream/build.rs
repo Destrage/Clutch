@@ -8,7 +8,11 @@ fn main() {
     // Without them, connecting that platform says it isn't available in this build.
     println!("cargo:rerun-if-changed=../../.secrets/clutch.env");
     let file = std::fs::read_to_string("../../.secrets/clutch.env").unwrap_or_default();
-    for key in ["CLUTCH_YOUTUBE_CLIENT_ID", "CLUTCH_YOUTUBE_CLIENT_SECRET"] {
+    for key in [
+        "CLUTCH_YOUTUBE_CLIENT_ID",
+        "CLUTCH_YOUTUBE_CLIENT_SECRET",
+        "CLUTCH_JAMENDO_CLIENT_ID",
+    ] {
         println!("cargo:rerun-if-env-changed={key}");
         let value = std::env::var(key).ok().or_else(|| {
             file.lines()

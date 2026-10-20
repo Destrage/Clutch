@@ -224,8 +224,13 @@ pub struct MediaAudio {
 
 impl MediaAudio {
     fn new(settings: &Value) -> Self {
+        Self::from_player(player_for(settings))
+    }
+
+    /// Reads `player`'s audio (the music source plays through the same player).
+    pub(crate) fn from_player(player: Arc<Player>) -> Self {
         Self {
-            player: player_for(settings),
+            player,
             priming: true,
         }
     }

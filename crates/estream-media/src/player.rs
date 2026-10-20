@@ -30,6 +30,11 @@ fn has_ext(path: &Path, list: &[&str]) -> bool {
         .is_some_and(|e| list.iter().any(|x| x.eq_ignore_ascii_case(e)))
 }
 
+fn is_url(path: &Path) -> bool {
+    path.to_str()
+        .is_some_and(|s| s.starts_with("https://") || s.starts_with("http://"))
+}
+
 fn is_media(path: &Path) -> bool {
     has_ext(path, VIDEO_EXTENSIONS)
         || has_ext(path, AUDIO_EXTENSIONS)
@@ -598,7 +603,8 @@ impl Decoder {
 
     /// Plays one item from `start_at`.
     fn play(&mut self, path: &Path, start_at: Duration) -> Outcome {
-        if !path.exists() {
+        // Items can also be streams (the music source plays HTTPS URLs).
+        if !is_url(path) && !path.exists() {
             return Outcome::Failed("file not found".into());
         }
         let mut input = match format::input(path) {

@@ -18,8 +18,8 @@ always show the current track's title, artist and license so it can be credited.
 
 #### Scenario: Now playing
 - **WHEN** a track starts
-- **THEN** its title, artist and license are shown in the source's settings and, when the
-  now-playing line is on, in the picture
+- **THEN** its title, artist and license are shown in the source's media controls and written
+  to the source's now-playing file, which a Text source can show on screen
 
 ### Requirement: Without a client ID
 A build without a Jamendo client ID SHALL show the Music source as unavailable with the reason,

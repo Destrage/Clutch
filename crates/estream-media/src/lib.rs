@@ -8,6 +8,7 @@ pub mod encode;
 pub mod frames;
 pub mod media_source;
 pub mod multistream;
+pub mod music_source;
 pub mod mux;
 pub mod output;
 pub mod player;
