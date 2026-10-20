@@ -348,32 +348,33 @@ fn run_worker(
     tracing::info!(device, format = %wanted.1.label(), "camera started");
 
     let mut back: Vec<u8> = Vec::new();
-    // Reads that failed in a row. Cheap USB webcams drop the odd read; only a run of them means
-    // the reader needs opening again.
-    let mut failed = 0u32;
     while !stop.load(Ordering::Acquire) {
         let mut flags = 0u32;
         let mut sample: Option<IMFSample> = None;
+        let asked = Instant::now();
         // SAFETY: synchronous read with valid out-pointers.
         let read = unsafe {
             reader.ReadSample(STREAM, 0, None, Some(&mut flags), None, Some(&mut sample))
         };
-        // The reader can't go on after these.
-        let fatal = flags & MF_SOURCE_READERF_ERROR.0 as u32 != 0
-            || flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0;
-        if let Err(e) = &read {
-            failed += 1;
-            tracing::warn!(device, error = %e.code(), failed, "camera read failed");
-            if !fatal && failed < 3 {
-                std::thread::sleep(Duration::from_millis(30));
-                continue;
-            }
+        // A read that took this long is a stall (frames normally come every 33 ms or so).
+        let waited = asked.elapsed();
+        if waited > Duration::from_millis(500) {
+            tracing::warn!(
+                device,
+                waited_ms = waited.as_millis() as u64,
+                ok = read.is_ok(),
+                "camera read stalled"
+            );
         }
-        if fatal || read.is_err() {
-            tracing::warn!(device, flags, "camera stream ended");
+        // Once a read fails the reader doesn't recover; the source opens the camera again.
+        if read.is_err()
+            || flags & MF_SOURCE_READERF_ERROR.0 as u32 != 0
+            || flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0
+        {
+            let error = read.err().map(|e| e.code().to_string()).unwrap_or_default();
+            tracing::warn!(device, %error, flags, "camera read failed");
             return Err("The camera stopped sending pictures".into());
         }
-        failed = 0;
         let Some(sample) = sample else { continue };
         // SAFETY: the buffer is locked only for the copy below.
         let stride = unsafe {
