@@ -4,8 +4,8 @@
 
 pub mod kick;
 pub mod twitch;
-pub mod youtube;
 mod ws;
+pub mod youtube;
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -49,6 +49,8 @@ pub struct Message {
     pub color: String,
     pub text: String,
     pub time: chrono::DateTime<chrono::Local>,
+    /// A follow, subscription, gift, donation or raid (shown highlighted), not a chat message.
+    pub event: bool,
 }
 
 /// How a destination's chat reader is doing.
@@ -130,6 +132,8 @@ pub struct Accounts {
 struct Reader {
     target: Target,
     stop: Arc<AtomicBool>,
+    /// Also receives the platform's follows, subs and other events (one reader per platform).
+    events: bool,
 }
 
 impl Drop for Reader {
@@ -170,14 +174,22 @@ impl LiveChat {
         }
         let mut old = std::mem::take(&mut self.readers);
         if let Ok(mut f) = self.feed.0.lock() {
-            f.states
-                .retain(|(name, platform, _)| targets.iter().any(|t| &t.name == name && t.platform == *platform));
+            f.states.retain(|(name, platform, _)| {
+                targets
+                    .iter()
+                    .any(|t| &t.name == name && t.platform == *platform)
+            });
         }
+        // Unchanged readers carry on; new ones start after them, so the platform's events stay
+        // with whichever reader already has them.
+        let mut new = Vec::new();
         for target in targets {
-            if let Some(i) = old.iter().position(|r| r.target == target) {
-                self.readers.push(old.remove(i));
-                continue;
+            match old.iter().position(|r| r.target == target) {
+                Some(i) => self.readers.push(old.remove(i)),
+                None => new.push(target),
             }
+        }
+        for target in new {
             if let Ok(mut f) = self.feed.0.lock() {
                 f.states.retain(|(n, _, _)| *n != target.name);
                 f.states
@@ -190,6 +202,35 @@ impl LiveChat {
                 target.clone(),
                 stop.clone(),
             );
+            let events = target.connected
+                && target.platform != Platform::YouTube
+                && !self
+                    .readers
+                    .iter()
+                    .any(|r| r.events && r.target.platform == target.platform);
+            if events {
+                let (feed, accounts, t, s) = (
+                    self.feed.clone(),
+                    self.accounts.clone(),
+                    target.clone(),
+                    stop.clone(),
+                );
+                let _ = std::thread::Builder::new()
+                    .name(format!("estream-events-{}", target.platform.key()))
+                    .spawn(move || {
+                        let cx = Context {
+                            name: &t.name,
+                            feed: &feed,
+                            stop: &s,
+                        };
+                        match t.platform {
+                            Platform::Twitch => twitch::events(&cx, &accounts.twitch),
+                            Platform::Kick => kick::events(&cx, &accounts.kick),
+                            // Its events come in the chat feed itself.
+                            Platform::YouTube => {}
+                        }
+                    });
+            }
             let _ = std::thread::Builder::new()
                 .name(format!("estream-chat-{}", target.platform.key()))
                 .spawn(move || {
@@ -204,7 +245,11 @@ impl LiveChat {
                         Platform::YouTube => youtube::read(&reader, &accounts.youtube),
                     }
                 });
-            self.readers.push(Reader { target, stop });
+            self.readers.push(Reader {
+                target,
+                stop,
+                events,
+            });
         }
         // Dropping the rest stops their threads.
         drop(old);
@@ -212,7 +257,11 @@ impl LiveChat {
 
     /// Sends `text` to one platform (or every one, for `None`) in the background. The result
     /// is one line per platform that couldn't send it.
-    pub fn send(&self, to: Option<Platform>, text: String) -> std::sync::mpsc::Receiver<Vec<String>> {
+    pub fn send(
+        &self,
+        to: Option<Platform>,
+        text: String,
+    ) -> std::sync::mpsc::Receiver<Vec<String>> {
         let (tx, rx) = std::sync::mpsc::channel();
         let targets: Vec<Target> = self
             .targets()
@@ -278,6 +327,17 @@ fn backoff(failures: u32) -> Duration {
     Duration::from_secs((2u64 << failures.min(5)).min(60))
 }
 
+/// A short system sound for a stream event (follow, sub, …).
+pub fn chime() {
+    #[cfg(windows)]
+    {
+        use windows::Win32::System::Diagnostics::Debug::MessageBeep;
+        use windows::Win32::UI::WindowsAndMessaging::MB_OK;
+        // SAFETY: plays a system sound asynchronously; no pointers involved.
+        let _ = unsafe { MessageBeep(MB_OK) };
+    }
+}
+
 /// A steady colour for a name that has none (Twitch users who never picked one).
 fn name_color(name: &str) -> String {
     const COLORS: [&str; 8] = [
@@ -300,6 +360,7 @@ mod tests {
             color: String::new(),
             text: text.into(),
             time: chrono::Local::now(),
+            event: false,
         }
     }
 

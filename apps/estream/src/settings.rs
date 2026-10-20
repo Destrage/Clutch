@@ -167,6 +167,8 @@ pub struct Settings {
     pub youtube: Option<crate::youtube::YouTubeAccount>,
     /// The connected Kick account (replying to Kick chat).
     pub kick: Option<crate::kick::KickAccount>,
+    /// A chime when a follow, sub or other stream event arrives in the chat.
+    pub chat_chime: bool,
     /// Single-stream settings from before multistream; read once, migrated, never written.
     #[serde(rename = "stream", skip_serializing)]
     legacy_stream: Option<estream_media::StreamSettings>,
@@ -470,6 +472,7 @@ impl Default for Settings {
             twitch: None,
             youtube: None,
             kick: None,
+            chat_chime: true,
             legacy_stream: None,
             legacy_key: None,
         }

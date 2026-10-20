@@ -271,8 +271,8 @@ impl Session {
 
     /// The live chat of the connected channel's current broadcast.
     pub fn live_chat_id(&self) -> Option<String> {
-        let broadcasts = self
-            .api("liveBroadcasts?part=snippet&broadcastStatus=active&broadcastType=all")?;
+        let broadcasts =
+            self.api("liveBroadcasts?part=snippet&broadcastStatus=active&broadcastType=all")?;
         let id = broadcasts
             .get("items")?
             .get(0)?
@@ -309,9 +309,9 @@ impl Session {
         }
         match status {
             200 => Ok(()),
-            401 | 403 if crate::http::error_message(&reply).contains("scope") => Err(
-                "Connect YouTube again in Settings → Stream to reply from Clutch".into(),
-            ),
+            401 | 403 if crate::http::error_message(&reply).contains("scope") => {
+                Err("Connect YouTube again in Settings → Stream to reply from Clutch".into())
+            }
             _ => Err(format!(
                 "YouTube didn't send it ({})",
                 crate::http::error_message(&reply)

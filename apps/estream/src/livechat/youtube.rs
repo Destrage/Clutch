@@ -86,7 +86,8 @@ fn stream(cx: &Context<'_>, session: &crate::youtube::Session, chat: &str) -> En
         let Some(token) = session.token(renewed) else {
             return Ended::Dropped;
         };
-        let mut url = format!("{API}/stream?liveChatId={chat}&part=snippet,authorDetails&maxResults=200");
+        let mut url =
+            format!("{API}/stream?liveChatId={chat}&part=snippet,authorDetails&maxResults=200");
         if let Some(p) = &page {
             url.push_str(&format!("&pageToken={p}"));
         }
@@ -105,7 +106,10 @@ fn stream(cx: &Context<'_>, session: &crate::youtube::Session, chat: &str) -> En
             }
             403 => {
                 let body: Value = response.body_mut().read_json().unwrap_or(Value::Null);
-                return if crate::http::error_message(&body).to_lowercase().contains("quota") {
+                return if crate::http::error_message(&body)
+                    .to_lowercase()
+                    .contains("quota")
+                {
                     Ended::Quota
                 } else {
                     Ended::Unsupported
@@ -210,10 +214,7 @@ fn messages(reply: &Value, skip_before: Option<chrono::DateTime<chrono::Utc>>) -
         .iter()
         .filter_map(|item| {
             let snippet = item.get("snippet")?;
-            let text = snippet.get("displayMessage")?.as_str()?;
-            if text.is_empty() {
-                return None;
-            }
+            let (text, event) = describe(snippet)?;
             let published = snippet
                 .get("publishedAt")
                 .and_then(Value::as_str)
@@ -233,11 +234,78 @@ fn messages(reply: &Value, skip_before: Option<chrono::DateTime<chrono::Utc>>) -
                 platform: Platform::YouTube,
                 color: super::name_color(&author),
                 author,
-                text: text.to_owned(),
-                time: published.map_or_else(chrono::Local::now, |t| t.with_timezone(&chrono::Local)),
+                text,
+                time: published
+                    .map_or_else(chrono::Local::now, |t| t.with_timezone(&chrono::Local)),
+                event,
             })
         })
         .collect()
+}
+
+/// A chat item's text and whether it is a stream event (Super Chat, membership, …): `None` for
+/// kinds that aren't shown.
+fn describe(snippet: &Value) -> Option<(String, bool)> {
+    let s = |v: Option<&Value>| v.and_then(Value::as_str).unwrap_or_default().to_owned();
+    let details = |key: &str| snippet.get(key);
+    let with_comment = |head: String, comment: String| {
+        if comment.is_empty() {
+            head
+        } else {
+            format!("{head}: {comment}")
+        }
+    };
+    let kind = snippet
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("textMessageEvent");
+    let line = match kind {
+        "textMessageEvent" => {
+            let text = s(snippet.get("displayMessage"));
+            return (!text.is_empty()).then_some((text, false));
+        }
+        "superChatEvent" => {
+            let d = details("superChatDetails")?;
+            with_comment(
+                format!("sent a {} Super Chat", s(d.get("amountDisplayString"))),
+                s(d.get("userComment")),
+            )
+        }
+        "superStickerEvent" => {
+            let d = details("superStickerDetails")?;
+            format!("sent a {} Super Sticker", s(d.get("amountDisplayString")))
+        }
+        "newSponsorEvent" => {
+            let level = s(details("newSponsorDetails").and_then(|d| d.get("memberLevelName")));
+            if level.is_empty() {
+                "became a member".to_owned()
+            } else {
+                format!("became a member ({level})")
+            }
+        }
+        "memberMilestoneChatEvent" => {
+            let d = details("memberMilestoneChatDetails")?;
+            let months = d.get("memberMonth").and_then(Value::as_u64).unwrap_or(0);
+            with_comment(
+                format!("has been a member for {months} months"),
+                s(d.get("userComment")),
+            )
+        }
+        "membershipGiftingEvent" => {
+            let d = details("membershipGiftingDetails")?;
+            let count = d
+                .get("giftMembershipsCount")
+                .and_then(Value::as_u64)
+                .unwrap_or(1);
+            if count == 1 {
+                "gifted a membership".to_owned()
+            } else {
+                format!("gifted {count} memberships")
+            }
+        }
+        _ => return None,
+    };
+    Some((line, true))
 }
 
 /// Splits a JSON array arriving in pieces into its whole top-level objects.
@@ -292,6 +360,23 @@ impl Objects {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paid_and_member_messages_are_events() {
+        let chat = serde_json::json!({ "type": "superChatEvent",
+            "superChatDetails": { "amountDisplayString": "$5.00", "userComment": "great stream" } });
+        assert_eq!(
+            describe(&chat),
+            Some(("sent a $5.00 Super Chat: great stream".into(), true))
+        );
+        let gift = serde_json::json!({ "type": "membershipGiftingEvent",
+            "membershipGiftingDetails": { "giftMembershipsCount": 5 } });
+        assert_eq!(describe(&gift), Some(("gifted 5 memberships".into(), true)));
+        let text = serde_json::json!({ "type": "textMessageEvent", "displayMessage": "hi" });
+        assert_eq!(describe(&text), Some(("hi".into(), false)));
+        let other = serde_json::json!({ "type": "pollEvent" });
+        assert_eq!(describe(&other), None);
+    }
 
     #[test]
     fn objects_split_across_pieces() {

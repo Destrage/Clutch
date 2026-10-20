@@ -1,0 +1,14 @@
+name = "clutch-events-relay"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+
+# Served on the project's own domain (the zone is on the same Cloudflare account).
+routes = [{ pattern = "events.destrosphere.com", custom_domain = true }]
+
+[[durable_objects.bindings]]
+name = "CHANNELS"
+class_name = "Channel"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Channel"]

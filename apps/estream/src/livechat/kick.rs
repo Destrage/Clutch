@@ -60,7 +60,9 @@ pub fn read(cx: &Context<'_>, channel_name: &str) {
     while !cx.stopped() {
         cx.state(State::Connecting);
         let Some(room) = channel(&slug) else {
-            cx.state(State::Waiting(format!("Couldn't find the Kick channel \"{slug}\"")));
+            cx.state(State::Waiting(format!(
+                "Couldn't find the Kick channel \"{slug}\""
+            )));
             failures += 1;
             if !cx.pause(backoff(failures).max(Duration::from_secs(20))) {
                 return;
@@ -99,9 +101,8 @@ pub fn read(cx: &Context<'_>, channel_name: &str) {
 }
 
 fn connect(cx: &Context<'_>, key: &str, chatroom: u64, index: usize) -> End {
-    let url = format!(
-        "wss://ws-us2.pusher.com/app/{key}?protocol=7&client=js&version=8.4.0&flash=false"
-    );
+    let url =
+        format!("wss://ws-us2.pusher.com/app/{key}?protocol=7&client=js&version=8.4.0&flash=false");
     let mut socket = match ws::connect(&url) {
         Ok(s) => s,
         Err(e) => {
@@ -132,7 +133,11 @@ fn connect(cx: &Context<'_>, key: &str, chatroom: u64, index: usize) -> End {
         let Ok(event) = serde_json::from_str::<Value>(&text) else {
             continue;
         };
-        match event.get("event").and_then(Value::as_str).unwrap_or_default() {
+        match event
+            .get("event")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+        {
             "pusher:connection_established" => {
                 let subscribe = serde_json::json!({
                     "event": "pusher:subscribe",
@@ -178,6 +183,153 @@ fn connect(cx: &Context<'_>, key: &str, chatroom: u64, index: usize) -> End {
     }
 }
 
+// ---- Follows, subs, gifts and Kicks (through Clutch's events relay) ----
+
+/// Clutch's events relay (`services/events-relay`): Kick sends events to it by webhook, and it
+/// passes each channel's events to that channel's open connections.
+const RELAY: &str = "wss://events.destrosphere.com/kick/live";
+/// Ask the relay for a pong this often; no reply for twice as long means the link is dead.
+const RELAY_PING: Duration = Duration::from_secs(30);
+
+enum RelayEnd {
+    Stopped,
+    /// The relay didn't accept the sign-in: renew it once, then give up.
+    Refused,
+    Dropped,
+}
+
+/// Receives the connected Kick channel's events while the chat is open. Quiet: problems only
+/// reach the log, and the chat keeps working without them.
+pub fn events(cx: &Context<'_>, session: &crate::kick::Session) {
+    match session.subscribe_events() {
+        Ok(()) => {}
+        Err(true) => {
+            tracing::info!("Kick events need the account connected again (new permissions)");
+            return;
+        }
+        // Kick may be briefly unavailable; the relay link still works for any earlier ones.
+        Err(false) => {}
+    }
+    let mut failures = 0;
+    let mut renewed = false;
+    while !cx.stopped() {
+        let Some(token) = session.token(renewed) else {
+            return;
+        };
+        match relay_connection(cx, &token) {
+            RelayEnd::Stopped => return,
+            RelayEnd::Refused if renewed => {
+                tracing::warn!("Clutch's events relay refused the Kick sign-in");
+                return;
+            }
+            RelayEnd::Refused => renewed = true,
+            RelayEnd::Dropped => {
+                renewed = false;
+                failures += 1;
+                if !cx.pause(backoff(failures)) {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+fn relay_connection(cx: &Context<'_>, token: &str) -> RelayEnd {
+    // The relay checks the sign-in with Kick and connects us to that channel only.
+    let mut socket = match ws::connect_authorized(RELAY, token) {
+        Ok(s) => s,
+        Err(Some(401 | 403)) => return RelayEnd::Refused,
+        Err(_) => return RelayEnd::Dropped,
+    };
+    let mut pinged = Instant::now();
+    let mut heard = Instant::now();
+    loop {
+        if cx.stopped() {
+            let _ = socket.close(None);
+            return RelayEnd::Stopped;
+        }
+        if pinged.elapsed() > RELAY_PING {
+            pinged = Instant::now();
+            if !ws::send(&mut socket, "ping") {
+                return RelayEnd::Dropped;
+            }
+        }
+        let text = match ws::next(&mut socket) {
+            Next::Text(t) => t,
+            Next::Idle => {
+                if heard.elapsed() > RELAY_PING * 2 {
+                    return RelayEnd::Dropped;
+                }
+                continue;
+            }
+            Next::Closed => return RelayEnd::Dropped,
+        };
+        heard = Instant::now();
+        let Ok(message) = serde_json::from_str::<Value>(&text) else {
+            continue; // "pong"
+        };
+        if message["type"].as_str() == Some("event") {
+            let kind = message["event"].as_str().unwrap_or_default();
+            if let Some(line) = event_line(kind, &message["data"]) {
+                cx.push(line);
+            }
+        }
+    }
+}
+
+/// The chat line for a Kick event (`None` for ones not shown).
+fn event_line(kind: &str, e: &Value) -> Option<Message> {
+    let name = |v: &Value| v["username"].as_str().unwrap_or_default().to_owned();
+    let (author, text) = match kind {
+        "channel.followed" => (name(&e["follower"]), "followed".to_owned()),
+        "channel.subscription.new" => (name(&e["subscriber"]), "subscribed".to_owned()),
+        "channel.subscription.renewal" => {
+            let months = e["duration"].as_u64().unwrap_or(1);
+            (
+                name(&e["subscriber"]),
+                format!("resubscribed for {months} months"),
+            )
+        }
+        "channel.subscription.gifts" => {
+            let count = e["giftees"].as_array().map_or(1, Vec::len).max(1);
+            let subs = if count == 1 {
+                "a sub".to_owned()
+            } else {
+                format!("{count} subs")
+            };
+            let gifter = Some(name(&e["gifter"]))
+                .filter(|n| !n.is_empty() && e["is_anonymous"].as_bool() != Some(true))
+                .unwrap_or_else(|| "Anonymous".to_owned());
+            (gifter, format!("gifted {subs}"))
+        }
+        "kicks.gifted" => {
+            let amount = e["gift"]["amount"].as_u64().unwrap_or(0);
+            let note = e["gift"]["message"].as_str().unwrap_or_default();
+            let head = format!("sent {amount} Kicks");
+            (
+                name(&e["sender"]),
+                if note.is_empty() {
+                    head
+                } else {
+                    format!("{head}: {note}")
+                },
+            )
+        }
+        _ => return None,
+    };
+    if author.is_empty() {
+        return None;
+    }
+    Some(Message {
+        platform: Platform::Kick,
+        color: super::name_color(&author),
+        author,
+        text,
+        time: chrono::Local::now(),
+        event: true,
+    })
+}
+
 /// A chat message event's data.
 fn parse(data: &Value) -> Option<Message> {
     let sender = data.get("sender")?;
@@ -196,6 +348,7 @@ fn parse(data: &Value) -> Option<Message> {
         color,
         text,
         time: chrono::Local::now(),
+        event: false,
     })
 }
 
@@ -243,6 +396,38 @@ mod tests {
     }
 
     #[test]
+    fn relay_events_become_event_lines() {
+        let follow = serde_json::json!({ "broadcaster": { "user_id": 1, "username": "me" },
+            "follower": { "user_id": 2, "username": "ali" } });
+        let line = event_line("channel.followed", &follow).unwrap();
+        assert_eq!(
+            (line.author.as_str(), line.text.as_str(), line.event),
+            ("ali", "followed", true)
+        );
+        let gifts = serde_json::json!({ "gifter": null, "is_anonymous": true,
+            "giftees": [{ "username": "a" }, { "username": "b" }, { "username": "c" }] });
+        let line = event_line("channel.subscription.gifts", &gifts).unwrap();
+        assert_eq!(
+            (line.author.as_str(), line.text.as_str()),
+            ("Anonymous", "gifted 3 subs")
+        );
+        let kicks = serde_json::json!({ "sender": { "username": "jo" },
+            "gift": { "amount": 500, "message": "gg" } });
+        assert_eq!(
+            event_line("kicks.gifted", &kicks).unwrap().text,
+            "sent 500 Kicks: gg"
+        );
+        let renewal = serde_json::json!({ "subscriber": { "username": "sam" }, "duration": 3 });
+        assert_eq!(
+            event_line("channel.subscription.renewal", &renewal)
+                .unwrap()
+                .text,
+            "resubscribed for 3 months"
+        );
+        assert!(event_line("chat.message.sent", &follow).is_none());
+    }
+
+    #[test]
     fn emotes_read_as_their_names() {
         assert_eq!(emotes_as_names("hi [emote:1:KEKW]!"), "hi KEKW!");
         assert_eq!(emotes_as_names("no emotes"), "no emotes");
@@ -254,7 +439,10 @@ mod tests {
         let body = serde_json::json!({ "id": 668, "user_id": 676, "chatroom": { "id": 668 } });
         assert_eq!(
             channel_of(&body),
-            Some(Channel { chatroom: 668, user_id: 676 })
+            Some(Channel {
+                chatroom: 668,
+                user_id: 676
+            })
         );
     }
 }

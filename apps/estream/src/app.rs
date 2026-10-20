@@ -161,7 +161,11 @@ pub struct App {
     livechat: crate::livechat::LiveChat,
     chat_lines: Rc<VecModel<crate::ui::ChatLine>>,
     chat_seen: u64,
-    chat_shown: Option<(Vec<crate::ui::ChatStateRow>, Vec<Option<crate::livechat::Platform>>)>,
+    chat_shown: Option<(
+        Vec<crate::ui::ChatStateRow>,
+        Vec<Option<crate::livechat::Platform>>,
+        bool,
+    )>,
     chat_reply_to: Vec<Option<crate::livechat::Platform>>,
     /// A reply being sent: the platforms that couldn't send it arrive here.
     chat_sending: Option<std::sync::mpsc::Receiver<Vec<String>>>,
@@ -813,7 +817,11 @@ impl App {
             .filter_map(|d| {
                 use crate::livechat::Platform;
                 let (platform, channel, connected) = match d.stream.service {
-                    Service::Kick => (Platform::Kick, d.channel.clone(), self.settings.kick.is_some()),
+                    Service::Kick => (
+                        Platform::Kick,
+                        d.channel.clone(),
+                        self.settings.kick.is_some(),
+                    ),
                     Service::Twitch => (
                         Platform::Twitch,
                         Some(d.channel.trim())
@@ -823,7 +831,11 @@ impl App {
                             .unwrap_or_default(),
                         self.settings.twitch.is_some(),
                     ),
-                    Service::YouTube => (Platform::YouTube, String::new(), self.settings.youtube.is_some()),
+                    Service::YouTube => (
+                        Platform::YouTube,
+                        String::new(),
+                        self.settings.youtube.is_some(),
+                    ),
                     _ => return None,
                 };
                 Some(crate::livechat::Target {
@@ -884,7 +896,8 @@ impl App {
 
     /// Shows a platform's page (`-1`: back to the combined chat).
     pub fn chat_select(&mut self, index: i32) {
-        self.chat_page = (index >= 0 && (index as usize) < self.chat.tabs.len()).then_some(index as usize);
+        self.chat_page =
+            (index >= 0 && (index as usize) < self.chat.tabs.len()).then_some(index as usize);
         if let Some(page) = self.chat_page {
             self.chat.selected = page;
             self.chat_has_frame = false;
@@ -986,14 +999,20 @@ impl App {
         let feed = self.livechat.feed().clone();
         let (new, seen) = feed.since(self.chat_seen);
         self.chat_seen = seen;
+        let chime = self.settings.chat_chime && new.iter().any(|m| m.event);
         for m in new {
             self.chat_lines.push(crate::ui::ChatLine {
+                event: m.event,
                 kind: m.platform.key().into(),
                 author: m.author.into(),
-                author_color: parse_color(&m.color).unwrap_or(slint::Color::from_rgb_u8(0x8e, 0xc5, 0xff)),
+                author_color: parse_color(&m.color)
+                    .unwrap_or(slint::Color::from_rgb_u8(0x8e, 0xc5, 0xff)),
                 text: m.text.into(),
                 time: m.time.format("%-I:%M %p").to_string().into(),
             });
+        }
+        if chime {
+            crate::livechat::chime();
         }
         // Keep the list as long as the feed.
         while self.chat_lines.row_count() > 300 {
@@ -1024,7 +1043,7 @@ impl App {
         }
         let mut reply_to: Vec<Option<Platform>> = vec![None];
         reply_to.extend(platforms.iter().map(|p| Some(*p)));
-        let shown = (rows.clone(), reply_to.clone());
+        let shown = (rows.clone(), reply_to.clone(), self.settings.chat_chime);
         if self.chat_shown.as_ref() != Some(&shown) {
             let targets: Vec<SharedString> = reply_to
                 .iter()
@@ -1034,10 +1053,19 @@ impl App {
                 messages: ModelRc::from(self.chat_lines.clone()),
                 states: ModelRc::new(VecModel::from(rows)),
                 targets: ModelRc::new(VecModel::from(targets)),
+                chime: self.settings.chat_chime,
             });
             self.chat_reply_to = reply_to;
             self.chat_shown = Some(shown);
         }
+    }
+
+    /// Turns the event chime on or off (kept in settings).
+    pub fn chat_toggle_chime(&mut self) {
+        self.settings.chat_chime = !self.settings.chat_chime;
+        self.settings.save(&self.paths.settings());
+        // Shows the new state on the next tick.
+        self.chat_shown = None;
     }
 
     /// Reports the platforms a reply couldn't be sent to.
@@ -8991,6 +9019,7 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     });
     on!(on_chat_resized, |a, w, h| a.chat_resized(w, h));
     on!(on_chat_send, |a, text, target| a.chat_send(&text, target));
+    on!(on_chat_toggle_chime, |a| a.chat_toggle_chime());
     on!(
         on_signin_pointer,
         |a, kind, x, y, button, dx, dy| if let Some(d) = &mut a.signin {
@@ -9101,7 +9130,11 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
 fn parse_color(hex: &str) -> Option<slint::Color> {
     let hex = hex.strip_prefix('#').filter(|h| h.len() == 6)?;
     let v = u32::from_str_radix(hex, 16).ok()?;
-    let (r, g, b) = ((v >> 16) as f32, ((v >> 8) & 0xff) as f32, (v & 0xff) as f32);
+    let (r, g, b) = (
+        (v >> 16) as f32,
+        ((v >> 8) & 0xff) as f32,
+        (v & 0xff) as f32,
+    );
     let luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
     // Mix toward white until the colour is about as bright as the muted text.
     let lift = ((110.0 - luma) / (255.0 - luma).max(1.0)).clamp(0.0, 1.0);
@@ -9210,4 +9243,3 @@ mod tests {
         assert_eq!(voice_preset_index(&chain), 0);
     }
 }
-

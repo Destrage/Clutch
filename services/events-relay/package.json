@@ -1,0 +1,13 @@
+{
+  "name": "clutch-events-relay",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/kick.test.mjs",
+    "deploy": "wrangler deploy",
+    "logs": "wrangler tail"
+  },
+  "devDependencies": {
+    "wrangler": "^4"
+  }
+}

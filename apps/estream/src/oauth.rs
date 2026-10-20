@@ -109,7 +109,9 @@ fn redirect_request(
             "Clutch is connecting to {platform}. You can close this tab and go back to Clutch."
         ),
         Some(Err(_)) => {
-            format!("{platform} wasn't connected. You can close this tab; Clutch shows what happened.")
+            format!(
+                "{platform} wasn't connected. You can close this tab; Clutch shows what happened."
+            )
         }
     };
     let html = format!(
@@ -185,6 +187,9 @@ mod tests {
     fn pkce_challenge_is_url_safe() {
         let c = challenge(&random_token());
         assert_eq!(c.len(), 43);
-        assert!(c.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        assert!(
+            c.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        );
     }
 }

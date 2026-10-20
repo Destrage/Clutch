@@ -11,8 +11,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 pub const CLIENT_ID: &str = "5t3ur0gkcowdbgst7zo0415yo1quzo";
-/// The chatters list and replying from Clutch's chat (viewer counts need no scope).
-const SCOPES: &str = "moderator:read:chatters user:write:chat";
+/// The chatters list, replying from Clutch's chat, and follows, subs and cheers in it (viewer
+/// counts need no scope).
+const SCOPES: &str = "moderator:read:chatters user:write:chat moderator:read:followers channel:read:subscriptions bits:read";
 const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
 
 /// A connected Twitch account. The tokens live in memory only; they are saved encrypted.
@@ -254,7 +255,9 @@ impl Session {
         let account = self
             .account()
             .ok_or("Connect Twitch in Settings → Stream to reply there")?;
-        let login = self.channel_login(channel).ok_or("Twitch: no channel set")?;
+        let login = self
+            .channel_login(channel)
+            .ok_or("Twitch: no channel set")?;
         let broadcaster = self
             .helix(&format!("users?login={login}"))
             .and_then(|b| Some(text(b.get("data")?.get(0)?, "id")))
@@ -298,6 +301,67 @@ impl Session {
                 crate::http::error_message(&reply)
             )),
         }
+    }
+
+    /// Asks Twitch to send the connected channel's follows, subs, gifts, cheers and raids to an
+    /// EventSub WebSocket session. `Err(true)` when the sign-in lacks the permission for them.
+    pub fn subscribe_events(&self, session_id: &str) -> Result<(), bool> {
+        let account = self.account().ok_or(true)?;
+        let id = account.user_id.clone();
+        let types = [
+            (
+                "channel.follow",
+                "2",
+                serde_json::json!({ "broadcaster_user_id": id, "moderator_user_id": id }),
+            ),
+            (
+                "channel.subscribe",
+                "1",
+                serde_json::json!({ "broadcaster_user_id": id }),
+            ),
+            (
+                "channel.subscription.message",
+                "1",
+                serde_json::json!({ "broadcaster_user_id": id }),
+            ),
+            (
+                "channel.subscription.gift",
+                "1",
+                serde_json::json!({ "broadcaster_user_id": id }),
+            ),
+            (
+                "channel.cheer",
+                "1",
+                serde_json::json!({ "broadcaster_user_id": id }),
+            ),
+            (
+                "channel.raid",
+                "1",
+                serde_json::json!({ "to_broadcaster_user_id": id }),
+            ),
+        ];
+        let url = "https://api.twitch.tv/helix/eventsub/subscriptions";
+        let headers = [("Client-Id", CLIENT_ID)];
+        let mut token = account.access.clone();
+        for (kind, version, condition) in types {
+            let body = serde_json::json!({
+                "type": kind,
+                "version": version,
+                "condition": condition,
+                "transport": { "method": "websocket", "session_id": session_id },
+            });
+            let (mut status, _) = post_json_bearer(url, &token, &headers, &body).ok_or(false)?;
+            if status == 401 {
+                token = self.renew(&account).ok_or(true)?.access;
+                (status, _) = post_json_bearer(url, &token, &headers, &body).ok_or(false)?;
+            }
+            match status {
+                200..=299 | 409 => {}
+                401 | 403 => return Err(true),
+                other => tracing::debug!(status = other, kind, "Twitch event subscription"),
+            }
+        }
+        Ok(())
     }
 
     /// The destination's channel, or the connected account's when none is set.

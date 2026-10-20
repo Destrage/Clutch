@@ -9,6 +9,27 @@ pub type Socket = tungstenite::WebSocket<MaybeTlsStream<TcpStream>>;
 
 pub fn connect(url: &str) -> Result<Socket, String> {
     let (socket, _) = tungstenite::connect(url).map_err(|e| e.to_string())?;
+    Ok(with_timeout(socket))
+}
+
+/// Connects with a bearer token. `Err(Some(status))` when the server answered with an HTTP
+/// error instead (401: the token was refused), `Err(None)` when it couldn't be reached.
+pub fn connect_authorized(url: &str, token: &str) -> Result<Socket, Option<u16>> {
+    use tungstenite::client::IntoClientRequest;
+    let mut request = url.into_client_request().map_err(|_| None)?;
+    let value = format!("Bearer {token}").parse().map_err(|_| None)?;
+    request.headers_mut().insert("Authorization", value);
+    match tungstenite::connect(request) {
+        Ok((socket, _)) => Ok(with_timeout(socket)),
+        Err(tungstenite::Error::Http(response)) => Err(Some(response.status().as_u16())),
+        Err(e) => {
+            tracing::debug!(error = %e, url, "WebSocket connection");
+            Err(None)
+        }
+    }
+}
+
+fn with_timeout(socket: Socket) -> Socket {
     let tcp = match socket.get_ref() {
         MaybeTlsStream::Plain(s) => Some(s),
         MaybeTlsStream::Rustls(s) => Some(s.get_ref()),
@@ -17,7 +38,7 @@ pub fn connect(url: &str) -> Result<Socket, String> {
     if let Some(tcp) = tcp {
         let _ = tcp.set_read_timeout(Some(Duration::from_secs(1)));
     }
-    Ok(socket)
+    socket
 }
 
 /// What the next read brought.

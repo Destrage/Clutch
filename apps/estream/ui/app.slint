@@ -178,6 +178,7 @@ export component AppWindow inherits Window {
     callback chat-reload();
     callback chat-resized(float, float);
     callback chat-send(string, int);
+    callback chat-toggle-chime();
     /// Whether a chat panel is on screen.
     out property <bool> chat-visible: root.deck-visible || root.chat-open;
     in-out property <bool> deck-edit;
@@ -659,6 +660,7 @@ export component AppWindow inherits Window {
             chat-reload => { root.chat-reload(); }
             chat-resized(w, h) => { root.chat-resized(w, h); }
             chat-send(t, i) => { root.chat-send(t, i); }
+            chat-toggle-chime => { root.chat-toggle-chime(); }
         }
     }
 
@@ -805,6 +807,7 @@ export component AppWindow inherits Window {
                     reload => { root.chat-reload(); }
                     resized(w, h) => { root.chat-resized(w, h); }
                     send(t, i) => { root.chat-send(t, i); }
+                    toggle-chime => { root.chat-toggle-chime(); }
                 }
             }
         }

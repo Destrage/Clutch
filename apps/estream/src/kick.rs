@@ -13,7 +13,15 @@ use std::sync::{Arc, Mutex};
 
 const CLIENT_ID: Option<&str> = option_env!("CLUTCH_KICK_CLIENT_ID");
 const CLIENT_SECRET: Option<&str> = option_env!("CLUTCH_KICK_CLIENT_SECRET");
-const SCOPES: &str = "user:read channel:read chat:write";
+const SCOPES: &str = "user:read channel:read chat:write events:subscribe";
+/// The events Clutch asks Kick to send to the relay (see `livechat::kick::events`).
+const EVENTS: [&str; 5] = [
+    "channel.followed",
+    "channel.subscription.new",
+    "channel.subscription.renewal",
+    "channel.subscription.gifts",
+    "kicks.gifted",
+];
 const API: &str = "https://api.kick.com/public/v1";
 const TOKEN_URL: &str = "https://id.kick.com/oauth/token";
 /// Registered with the Kick app; Kick refuses any other.
@@ -204,6 +212,63 @@ impl Session {
         self.renewed(old, renewed)
     }
 
+    /// The access token to use now (`renew`: after it was refused).
+    pub fn token(&self, renew: bool) -> Option<String> {
+        let account = self.account()?;
+        if renew {
+            return self.renew(&account).map(|a| a.access);
+        }
+        Some(account.access)
+    }
+
+    /// Asks Kick to send the connected channel's follows, subs, gifts and Kicks to Clutch's
+    /// events relay (Kick sends them to the webhook address set for the app), skipping the ones
+    /// already asked for. `Err(true)` when the sign-in lacks the permission.
+    pub fn subscribe_events(&self) -> Result<(), bool> {
+        let account = self.account().ok_or(true)?;
+        let url = format!("{API}/events/subscriptions");
+        let mut token = account.access.clone();
+        let (mut status, mut existing) = get_bearer(&url, &token, &[]).ok_or(false)?;
+        if status == 401 {
+            token = self.renew(&account).ok_or(true)?.access;
+            (status, existing) = get_bearer(&url, &token, &[]).ok_or(false)?;
+        }
+        if status == 401 || status == 403 {
+            return Err(true);
+        }
+        let have: Vec<String> = existing
+            .get("data")
+            .and_then(Value::as_array)
+            .map(|subs| {
+                subs.iter()
+                    .filter(|s| {
+                        s.get("broadcaster_user_id").and_then(Value::as_u64)
+                            == Some(account.user_id)
+                    })
+                    .map(|s| text(s, "event"))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let wanted: Vec<Value> = EVENTS
+            .iter()
+            .filter(|name| !have.iter().any(|h| h == *name))
+            .map(|name| serde_json::json!({ "name": name, "version": 1 }))
+            .collect();
+        if wanted.is_empty() {
+            return Ok(());
+        }
+        let body = serde_json::json!({ "events": wanted, "method": "webhook" });
+        let (status, reply) = post_json_bearer(&url, &token, &[], &body).ok_or(false)?;
+        match status {
+            200..=299 => Ok(()),
+            401 | 403 => Err(true),
+            _ => {
+                tracing::warn!(status, error = %crate::http::error_message(&reply), "Kick event subscription");
+                Err(false)
+            }
+        }
+    }
+
     /// Sends a message to a channel's chat as the connected account.
     pub fn send_chat(&self, channel: &str, message: &str) -> Result<(), String> {
         let account = self
@@ -224,8 +289,8 @@ impl Session {
         if status == 401
             && let Some(renewed) = self.renew(&account)
         {
-            (status, reply) = post_json_bearer(&url, &renewed.access, &[], &body)
-                .ok_or("Couldn't reach Kick")?;
+            (status, reply) =
+                post_json_bearer(&url, &renewed.access, &[], &body).ok_or("Couldn't reach Kick")?;
         }
         match status {
             200 => Ok(()),

@@ -79,6 +79,8 @@ export struct ChatLine {
     author-color: color,
     text: string,
     time: string,
+    /// A follow, sub, gift, donation or raid (highlighted).
+    event: bool,
 }
 
 /// How one destination's chat is being read.
@@ -96,6 +98,8 @@ export struct ChatLive {
     states: [ChatStateRow],
     /// "All platforms", then each platform being read.
     targets: [string],
+    /// A chime plays when an event arrives.
+    chime: bool,
 }
 
 component PlatformBadge inherits Rectangle {
@@ -138,6 +142,7 @@ export component ChatPanel inherits Rectangle {
     callback reload();
     callback open-settings();
     callback send(string, int);
+    callback toggle-chime();
     /// The page area's size, so a platform page is drawn at exactly that size.
     callback resized(float, float);
     changed view-width => { root.resized(root.view-width / 1px, root.view-height / 1px); }
@@ -232,6 +237,16 @@ export component ChatPanel inherits Rectangle {
                     people-ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.people-open = !root.people-open; } }
                 }
             }
+            if root.selected < 0 && root.live.states.length > 0: VerticalLayout {
+                alignment: center;
+                IconButton {
+                    icon: root.live.chime ? Icons.volume : Icons.volume-x;
+                    tooltip: root.live.chime ? "Chime on follows, subs and other events: on" : "Chime on follows, subs and other events: off";
+                    size: 30px;
+                    icon-size: 15px;
+                    clicked => { root.toggle-chime(); }
+                }
+            }
             if root.tabs.length > 0: VerticalLayout {
                 alignment: center;
                 Button {
@@ -310,6 +325,9 @@ export component ChatPanel inherits Rectangle {
                             }
                         }
                         for line in root.live.messages: Rectangle {
+                            // Events stand out: a tinted band with an accent edge.
+                            background: line.event ? Theme.accent-soft : transparent;
+                            if line.event: Rectangle { x: 0; width: 3px; background: Theme.accent; }
                             HorizontalLayout {
                                 padding-left: 10px;
                                 padding-right: 10px;
@@ -328,6 +346,7 @@ export component ChatPanel inherits Rectangle {
                                     Text {
                                         text: line.text;
                                         color: Theme.text;
+                                        font-weight: line.event ? 600 : 400;
                                         font-size: Theme.font-m;
                                         wrap: word-wrap;
                                         width: list.visible-width - 46px;
