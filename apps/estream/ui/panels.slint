@@ -1277,6 +1277,42 @@ export component InspectorPanel inherits Panel {
                     IconButton { icon: Icons.skip-forward; tooltip: "Next item"; size: 26px; icon-size: 13px; clicked => { root.media-control("next"); } }
                     Text { text: root.media.time; color: Theme.text-muted; font-size: Theme.font-xs; horizontal-alignment: right; vertical-alignment: center; horizontal-stretch: 1; }
                 }
+                // Music: the playing track and what comes next; click one to play it.
+                if root.media.tracks.length > 0: VerticalLayout {
+                    spacing: 2px;
+                    Text { text: "UP NEXT"; color: Theme.text-muted; font-size: Theme.font-xs; font-weight: 600; }
+                    for track[i] in root.media.tracks: Rectangle {
+                        height: 26px;
+                        border-radius: Theme.radius-s;
+                        background: i == 0 ? Theme.accent.with-alpha(0.14) : track-ta.has-hover ? Theme.hover : transparent;
+                        accessible-role: button;
+                        accessible-label: (i == 0 ? "Playing: " : "Play ") + track;
+                        accessible-action-default => { root.media-control("track:" + i); }
+                        HorizontalLayout {
+                            padding-left: 6px;
+                            padding-right: 6px;
+                            spacing: 6px;
+                            VerticalLayout {
+                                alignment: center;
+                                width: 12px;
+                                if i == 0: Icon { source: Icons.volume; size: 12px; tint: Theme.accent; }
+                            }
+                            Text {
+                                text: track;
+                                color: i == 0 ? Theme.text : Theme.text-muted;
+                                font-size: Theme.font-xs;
+                                font-weight: i == 0 ? 600 : 400;
+                                vertical-alignment: center;
+                                overflow: elide;
+                                horizontal-stretch: 1;
+                            }
+                        }
+                        track-ta := TouchArea {
+                            mouse-cursor: MouseCursor.pointer;
+                            clicked => { root.media-control("track:" + i); }
+                        }
+                    }
+                }
             }
 
             // Video filters of the selected item's source

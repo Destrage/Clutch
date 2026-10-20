@@ -272,6 +272,8 @@ fn golive_key_problem(key: &str) -> Option<&'static str> {
 
 /// Filters added by a voice preset have ids starting with this.
 const VOICE_ID: &str = "voice:";
+/// How many tracks of a music source's playlist the inspector lists (the playing one first).
+const MUSIC_LIST: usize = 15;
 
 /// Which voice preset a filter chain uses: 0 for none, else its place in the menu.
 fn voice_preset_index(filters: &[AudioFilterDef]) -> i32 {
@@ -5437,10 +5439,17 @@ impl App {
         let s = player.status();
         // Music shows the track's credit (title, artist, license) instead of a file name.
         if let Some(music) = self.selected_music() {
+            let (tracks, _) = music.upcoming(MUSIC_LIST);
             return MediaInspect {
                 has: true,
                 item: music.now_playing().into(),
                 index: "".into(),
+                tracks: ModelRc::new(VecModel::from(
+                    tracks
+                        .into_iter()
+                        .map(SharedString::from)
+                        .collect::<Vec<_>>(),
+                )),
                 ..self.media_times(&s)
             };
         }
@@ -5494,17 +5503,28 @@ impl App {
         let Some(player) = self.selected_player() else {
             return;
         };
+        // Music has its own playlist: previous, next and picking a track go to it.
+        if let Some(music) = self.selected_music() {
+            match command {
+                "next" => return music.skip(),
+                "previous" => return music.previous(),
+                _ => {}
+            }
+            if let Some(n) = command
+                .strip_prefix("track:")
+                .and_then(|n| n.parse::<usize>().ok())
+            {
+                let (_, start) = music.upcoming(MUSIC_LIST);
+                return music.play(start + n);
+            }
+        }
         match command {
             "toggle" => player.toggle_pause(),
             "restart" => {
                 player.set_paused(false);
                 player.restart();
             }
-            // Music's "next" is Skip: the controller starts another track.
-            "next" => match self.selected_music() {
-                Some(music) => music.skip(),
-                None => player.next(),
-            },
+            "next" => player.next(),
             "previous" => player.previous(),
             _ => {}
         }

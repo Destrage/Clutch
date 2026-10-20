@@ -9,7 +9,7 @@ use estream_audio::{AudioSource, Block};
 use estream_core::{SourceStatus, Timestamp};
 use estream_engine::{Property, PropertySchema, SelectOption, SourceRegistry, SourceType};
 use serde_json::Value;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
@@ -77,6 +77,8 @@ pub fn schema() -> PropertySchema {
             "Only licenses that allow commercial use. Off adds NonCommercial tracks, which are \
              for non-monetized streams only",
         ),
+        Property::bool("repeat", "Repeat this track", false)
+            .hint("Plays the current track again instead of moving on"),
         Property::button("skip", "Track", "Skip").hint(&credit_hint()),
     ])
 }
@@ -229,6 +231,7 @@ fn fetch(tags: &str, safe: bool, offset: usize) -> Result<Vec<Track>, String> {
 struct MusicSettings {
     tags: String,
     safe: bool,
+    repeat: bool,
     skip: i64,
 }
 
@@ -239,6 +242,7 @@ impl MusicSettings {
         Self {
             tags: if custom.is_empty() { genre } else { custom }.to_owned(),
             safe: settings["safe"].as_bool().unwrap_or(true),
+            repeat: settings["repeat"].as_bool().unwrap_or(false),
             skip: settings["skip"].as_i64().unwrap_or(0),
         }
     }
@@ -246,13 +250,24 @@ impl MusicSettings {
 
 // ---------------------------------------------------------------- controller
 
+/// What the user asked the controller to do.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Request {
+    Next,
+    Previous,
+    /// Play this track of the playlist.
+    Play(usize),
+}
+
 #[derive(Default)]
 struct State {
     settings: Option<MusicSettings>,
-    now: Option<Track>,
+    /// The fetched page, shuffled, and the playing track's place in it.
+    playlist: Vec<Track>,
+    pos: Option<usize>,
     /// Why nothing is playing (network trouble, no results).
     problem: Option<String>,
-    skip: bool,
+    request: Option<Request>,
 }
 
 /// Fetches and sequences tracks for one music source, on its own thread.
@@ -295,24 +310,49 @@ impl Controller {
         if let Some(old) = &state.settings {
             // The Skip button counts up.
             if settings.skip != old.skip {
-                state.skip = true;
+                state.request = Some(Request::Next);
             }
         }
         state.settings = Some(settings);
     }
 
     pub fn skip(&self) {
-        self.lock().skip = true;
+        self.lock().request = Some(Request::Next);
+    }
+
+    pub fn previous(&self) {
+        self.lock().request = Some(Request::Previous);
+    }
+
+    /// Plays track `index` of the playlist (as [`Controller::upcoming`] numbers them).
+    pub fn play(&self, index: usize) {
+        self.lock().request = Some(Request::Play(index));
     }
 
     /// The current track's credit, or why nothing plays.
     pub fn now_playing(&self) -> String {
         let state = self.lock();
-        match (&state.now, &state.problem) {
+        let now = state.pos.and_then(|p| state.playlist.get(p));
+        match (now, &state.problem) {
             (_, Some(problem)) => problem.clone(),
             (Some(track), None) => track.credit(),
             (None, None) => "Finding music…".to_owned(),
         }
+    }
+
+    /// Up to `n` tracks from the playing one on: their credits, and the playlist index of the
+    /// first (for [`Controller::play`]).
+    pub fn upcoming(&self, n: usize) -> (Vec<String>, usize) {
+        let state = self.lock();
+        let start = state.pos.unwrap_or(0);
+        let tracks = state
+            .playlist
+            .iter()
+            .skip(start)
+            .take(n)
+            .map(Track::credit)
+            .collect();
+        (tracks, start)
     }
 
     fn status(&self) -> SourceStatus {
@@ -322,7 +362,7 @@ impl Controller {
             );
         }
         let state = self.lock();
-        match (&state.now, &state.problem) {
+        match (state.pos, &state.problem) {
             (None, Some(problem)) => SourceStatus::Error(problem.clone()),
             _ => SourceStatus::Active,
         }
@@ -359,11 +399,57 @@ fn shuffle<T>(items: &mut [T]) {
     }
 }
 
+/// Jamendo sometimes answers a good search with no tracks (about one time in three), then
+/// answers it properly a moment later: ask again a few times before believing it.
+fn fetch_patiently(tags: &str, safe: bool, offset: usize) -> Result<Vec<Track>, String> {
+    let mut last = Ok(Vec::new());
+    for attempt in 0..5 {
+        if attempt > 0 {
+            std::thread::sleep(Duration::from_millis(600));
+        }
+        last = fetch(tags, safe, offset);
+        match &last {
+            Ok(tracks) if tracks.is_empty() => {
+                tracing::debug!(tags, offset, attempt, "music: Jamendo returned no tracks");
+            }
+            _ => return last,
+        }
+    }
+    last
+}
+
+/// What to play next.
+#[derive(Debug, PartialEq)]
+enum Next {
+    /// This track of the playlist (past its end: the next page).
+    Index(usize),
+    /// The same track again.
+    Replay,
+}
+
+/// Decides what the controller does: `pos` is the playing track, `finished` says it ended.
+fn next_step(
+    request: Option<Request>,
+    pos: Option<usize>,
+    finished: bool,
+    repeat: bool,
+) -> Option<Next> {
+    match (request, pos) {
+        (Some(Request::Play(i)), _) => Some(Next::Index(i)),
+        (Some(Request::Next), Some(p)) => Some(Next::Index(p + 1)),
+        (Some(Request::Previous), Some(0)) => Some(Next::Replay),
+        (Some(Request::Previous), Some(p)) => Some(Next::Index(p - 1)),
+        (_, None) => Some(Next::Index(0)),
+        (None, Some(_)) if finished && repeat => Some(Next::Replay),
+        (None, Some(p)) if finished => Some(Next::Index(p + 1)),
+        (None, Some(_)) => None,
+    }
+}
+
 fn run(player: Arc<Player>, state: Arc<Mutex<State>>, stop: Arc<AtomicBool>, credit_file: PathBuf) {
     let lock = || state.lock().unwrap_or_else(|e| e.into_inner());
-    let mut queue: VecDeque<Track> = VecDeque::new();
     let mut offset = 0usize;
-    let mut current: Option<(String, bool)> = None; // (tags, safe) of the queue
+    let mut query: Option<(String, bool)> = None; // (tags, safe) of the playlist
     let mut started = Instant::now();
     let mut retry_at: Option<Instant> = None;
     while !stop.load(Ordering::Acquire) {
@@ -371,17 +457,24 @@ fn run(player: Arc<Player>, state: Arc<Mutex<State>>, stop: Arc<AtomicBool>, cre
         if client_id().is_none() {
             continue;
         }
-        let (settings, skip) = {
+        let (settings, request) = {
             let mut s = lock();
-            (s.settings.clone(), std::mem::take(&mut s.skip))
+            (s.settings.clone(), s.request.take())
         };
         let Some(settings) = settings else { continue };
         let wanted = (settings.tags.clone(), settings.safe);
-        let changed = current.as_ref() != Some(&wanted);
-        if changed {
-            queue.clear();
+        if query.as_ref() != Some(&wanted) {
+            // Another genre, tags or license filter: a new playlist, and the old genre's track
+            // stops now (it would otherwise play on while the new one loads).
+            if query.is_some() {
+                player.update(PlayerSettings::default());
+            }
+            let mut s = lock();
+            s.playlist.clear();
+            s.pos = None;
+            s.problem = None;
             offset = 0;
-            current = Some(wanted);
+            query = Some(wanted);
             retry_at = None;
         }
         let status = player.status();
@@ -390,27 +483,48 @@ fn run(player: Arc<Player>, state: Arc<Mutex<State>>, stop: Arc<AtomicBool>, cre
         let finished = settled
             && (status.state == PlayState::Ended
                 || (status.state == PlayState::Idle && status.error.is_some()));
-        let nothing = lock().now.is_none();
-        if !(changed || skip || finished || nothing) {
+        let pos = lock().pos;
+        let Some(step) = next_step(request, pos, finished, settings.repeat) else {
+            continue;
+        };
+        if step == Next::Replay {
+            player.set_paused(false);
+            player.restart();
+            started = Instant::now();
             continue;
         }
-        if retry_at.is_some_and(|t| Instant::now() < t) {
+        let Next::Index(mut index) = step else {
             continue;
-        }
-        if queue.is_empty() {
-            match fetch(&settings.tags, settings.safe, offset) {
+        };
+        let len = lock().playlist.len();
+        if index >= len {
+            // Past the end (or nothing yet): the next page of tracks.
+            if retry_at.is_some_and(|t| Instant::now() < t) {
+                continue;
+            }
+            let page = if len == 0 { 0 } else { offset };
+            let mut result = fetch_patiently(&settings.tags, settings.safe, page);
+            if matches!(&result, Ok(t) if t.is_empty()) && page > 0 {
+                // Played through every page: start over.
+                result = fetch_patiently(&settings.tags, settings.safe, 0);
+                offset = 0;
+            }
+            match result {
                 Ok(mut tracks) if !tracks.is_empty() => {
                     shuffle(&mut tracks);
-                    offset += PAGE;
-                    queue.extend(tracks);
+                    offset = if page == 0 && offset == 0 {
+                        PAGE
+                    } else {
+                        offset + PAGE
+                    };
+                    let mut s = lock();
+                    s.playlist = tracks;
+                    s.pos = None;
+                    index = 0;
                     retry_at = None;
                 }
-                Ok(_) if offset > 0 => {
-                    // Played through every page: start over.
-                    offset = 0;
-                    continue;
-                }
                 Ok(_) => {
+                    tracing::info!(tags = %settings.tags, "music: no tracks found");
                     lock().problem = Some(format!(
                         "No music found for \"{}\". Try another genre or other tags.",
                         settings.tags
@@ -426,10 +540,11 @@ fn run(player: Arc<Player>, state: Arc<Mutex<State>>, stop: Arc<AtomicBool>, cre
                 }
             }
         }
-        let Some(track) = queue.pop_front() else {
+        let Some(track) = lock().playlist.get(index).cloned() else {
             continue;
         };
         tracing::info!(track = %track.credit(), "music: now playing");
+        player.set_paused(false);
         player.update(PlayerSettings {
             items: vec![PathBuf::from(&track.audio)],
             looping: false,
@@ -444,7 +559,7 @@ fn run(player: Arc<Player>, state: Arc<Mutex<State>>, stop: Arc<AtomicBool>, cre
             let _ = std::fs::write(&credit_file, format!("Now playing: {}", track.credit()));
         }
         let mut s = lock();
-        s.now = Some(track);
+        s.pos = Some(index);
         s.problem = None;
     }
     if !credit_file.as_os_str().is_empty() {
@@ -576,6 +691,36 @@ mod tests {
         assert_eq!(
             parse_tracks(&body, true).unwrap_err(),
             "Jamendo: Invalid client_id"
+        );
+    }
+
+    #[test]
+    fn next_track_decisions() {
+        use Next::*;
+        // Nothing playing yet: the first track.
+        assert_eq!(next_step(None, None, false, false), Some(Index(0)));
+        // Playing and not finished: nothing to do.
+        assert_eq!(next_step(None, Some(3), false, false), None);
+        // Finished: the next one, or the same again with Repeat.
+        assert_eq!(next_step(None, Some(3), true, false), Some(Index(4)));
+        assert_eq!(next_step(None, Some(3), true, true), Some(Replay));
+        // Skip moves on even with Repeat; Previous goes back (or restarts the first).
+        assert_eq!(
+            next_step(Some(Request::Next), Some(3), false, true),
+            Some(Index(4))
+        );
+        assert_eq!(
+            next_step(Some(Request::Previous), Some(3), false, false),
+            Some(Index(2))
+        );
+        assert_eq!(
+            next_step(Some(Request::Previous), Some(0), false, false),
+            Some(Replay)
+        );
+        // Picking a track from the list plays it.
+        assert_eq!(
+            next_step(Some(Request::Play(7)), Some(3), false, false),
+            Some(Index(7))
         );
     }
 
