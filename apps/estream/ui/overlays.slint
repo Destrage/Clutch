@@ -707,24 +707,79 @@ component DestinationEditor inherits VerticalLayout {
     }
 }
 
+/// One entry in the Settings page list.
+component SettingsPageItem inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> current;
+    callback clicked;
+    height: 34px;
+    border-radius: Theme.radius-s;
+    background: root.current ? Theme.accent.with-alpha(0.14) : ta.has-hover ? Theme.hover : transparent;
+    accessible-role: tab;
+    accessible-label: root.label;
+    accessible-checked: root.current;
+    accessible-action-default => { root.clicked(); }
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 8px;
+        spacing: 10px;
+        VerticalLayout {
+            alignment: center;
+            Icon { source: root.icon; size: 16px; tint: root.current ? Theme.accent : Theme.text-muted; }
+        }
+        Text {
+            text: root.label;
+            color: root.current ? Theme.text : Theme.text-muted;
+            font-size: Theme.font-m;
+            font-weight: root.current ? 600 : 500;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// Settings in pages: a list on the left, one page at a time on the right.
 export component SettingsDialog inherits Modal {
     in property <SettingsForm> form;
     in property <string> remote-status;
+    /// The page shown: 0 Stream, 1 Recording, 2 Clips, 3 Virtual camera, 4 Remote control,
+    /// 5 Appearance.
+    in-out property <int> page;
     property <bool> reveal-password: false;
+    property <[{icon: image, label: string}]> pages: [
+        { icon: Icons.radio, label: "Stream" },
+        { icon: Icons.circle, label: "Recording" },
+        { icon: Icons.scissors, label: "Clips" },
+        { icon: Icons.camera, label: "Virtual camera" },
+        { icon: Icons.globe, label: "Remote control" },
+        { icon: Icons.palette, label: "Appearance" },
+    ];
     callback set(string, float);
     callback set-text(string, string);
     callback browse();
 
-
-    card-width: 640px;
+    card-width: 820px;
     card-top: 40px;
 
-    FocusScope {
+    keys := FocusScope {
         height: 0px;
         init => { self.focus(); }
         key-pressed(e) => {
             if (e.text == Key.Escape) {
                 root.dismiss();
+                return EventResult.accept;
+            }
+            if (e.text == Key.UpArrow && root.page > 0) {
+                root.page -= 1;
+                return EventResult.accept;
+            }
+            if (e.text == Key.DownArrow && root.page < root.pages.length - 1) {
+                root.page += 1;
                 return EventResult.accept;
             }
             return EventResult.reject;
@@ -736,427 +791,469 @@ export component SettingsDialog inherits Modal {
         Text { text: "Settings"; color: Theme.text; font-size: Theme.font-xl; font-weight: 700; horizontal-stretch: 1; }
         Button { text: "Done"; kind: "primary"; clicked => { root.dismiss(); } }
     }
-    scroller := Flickable {
-        height: min(content.preferred-height, 640px);
-        width: root.inner-width;
-        content-width: root.inner-width;
-        content-height: content.preferred-height;
-        content := VerticalLayout {
-            width: root.inner-width;
-            padding: 18px;
+    HorizontalLayout {
+        // The same height on every page, so the window doesn't jump when switching.
+        height: 600px;
+        VerticalLayout {
+            width: 190px;
+            padding: 12px;
             padding-top: 8px;
-            spacing: 12px;
-
-            SectionTitle { text: "STREAM DESTINATIONS"; }
-            Text {
-                text: "Go Live streams to every enabled destination at once.";
-                color: Theme.text-faint;
-                font-size: Theme.font-s;
-                wrap: word-wrap;
-            }
-            for d[i] in root.form.destinations: Rectangle {
-                height: 36px;
-                border-radius: Theme.radius-s;
-                background: i == root.form.dest-selected ? Theme.accent.with-alpha(0.14) : row-ta.has-hover ? Theme.hover : transparent;
-                border-width: i == root.form.dest-selected ? 1px : 0px;
-                border-color: Theme.accent.with-alpha(0.5);
-                accessible-role: list-item;
-                accessible-label: d.name;
-                row-ta := TouchArea {
-                    mouse-cursor: MouseCursor.pointer;
-                    clicked => { root.set("dest-select", i); }
-                }
-                HorizontalLayout {
-                    padding-left: 10px;
-                    padding-right: 6px;
-                    spacing: 10px;
-                    VerticalLayout {
-                        alignment: center;
-                        Toggle { checked: d.enabled; toggled(v) => { root.set("dest-enable", i); } }
-                    }
-                    Text { text: d.name; color: d.enabled ? Theme.text : Theme.text-faint; font-size: Theme.font-m; vertical-alignment: center; horizontal-alignment: left; horizontal-stretch: 1; overflow: elide; }
-                    if d.protocol != "": VerticalLayout {
-                        alignment: center;
-                        Badge { text: d.protocol; }
-                    }
-                    VerticalLayout {
-                        alignment: center;
-                        IconButton { icon: Icons.trash; tooltip: "Remove " + d.name; clicked => { root.set("dest-remove", i); } }
-                    }
+            spacing: 2px;
+            alignment: start;
+            accessible-role: tab-list;
+            accessible-label: "Settings pages";
+            for p[i] in root.pages: SettingsPageItem {
+                icon: p.icon;
+                label: p.label;
+                current: i == root.page;
+                clicked => {
+                    root.page = i;
+                    keys.focus();
                 }
             }
-            HorizontalLayout {
+        }
+        Rectangle { width: 1px; background: Theme.border; }
+        scroller := Flickable {
+            property <length> page-width: root.inner-width - 191px;
+            width: self.page-width;
+            content-width: self.page-width;
+            content-height: content.preferred-height;
+            content := VerticalLayout {
+                width: scroller.page-width;
+                padding: 18px;
+                padding-top: 8px;
+                spacing: 12px;
                 alignment: start;
-                Button { text: "Add destination"; has-icon: true; icon: Icons.plus; kind: "ghost"; clicked => { root.set("dest-add", 0); } }
-            }
-            if root.form.dest-selected >= 0: DestinationEditor {
-                form: root.form;
-                set(k, v) => { root.set(k, v); }
-                set-text(k, v) => { root.set-text(k, v); }
-            }
 
-            SectionTitle { text: "RECORDING"; }
-            SettingRow {
-                label: "Folder";
-                TextField { text: root.form.folder; label: "Recording folder"; accepted(t) => { root.set-text("folder", t); } }
-                Button { text: "Browse…"; clicked => { root.browse(); } }
-            }
-            SettingRow {
-                label: "File name";
-                hint: "Date codes like %Y-%m-%d %H-%M-%S";
-                TextField { text: root.form.filename; label: "File name pattern"; accepted(t) => { root.set-text("filename", t); } }
-            }
-            if root.form.canvas-names.length > 1: SettingRow {
-                label: "Canvas";
-                hint: "Also used by the replay buffer";
-                Select {
-                    label: "Canvas to record";
-                    options: root.form.rec-canvas-names;
-                    current-index: root.form.rec-canvas;
-                    selected(i) => { root.set("rec-canvas", i); }
-                }
-            }
-            SettingRow {
-                label: "Format";
-                Select {
-                    label: "Format";
-                    options: ["MKV (crash-safe)", "Fragmented MP4 (crash-safe)", "MP4", "MOV"];
-                    current-index: root.form.container;
-                    selected(i) => { root.set("container", i); }
-                }
-            }
-            SettingRow {
-                label: "Remux to MP4";
-                hint: "After an MKV recording stops";
-                Toggle { checked: root.form.auto-remux; toggled(v) => { root.set("auto-remux", v ? 1 : 0); } }
-            }
-
-            SectionTitle { text: "VIDEO ENCODER"; }
-            SettingRow {
-                label: "Codec";
-                Select {
-                    label: "Codec";
-                    options: ["H.264", "HEVC (H.265)", "AV1"];
-                    current-index: root.form.codec;
-                    selected(i) => { root.set("codec", i); }
-                }
-            }
-            SettingRow {
-                label: "Encoder";
-                hint: "Automatic uses your GPU when possible";
-                Select {
-                    label: "Encoder";
-                    options: root.form.encoders;
-                    current-index: root.form.encoder;
-                    selected(i) => { root.set("encoder", i); }
-                }
-            }
-            SettingRow {
-                label: "Rate control";
-                Select {
-                    label: "Rate control";
-                    options: ["Constant bitrate (CBR)", "Variable bitrate (VBR)", "Constant quality"];
-                    current-index: root.form.rate-control;
-                    selected(i) => { root.set("rate-control", i); }
-                }
-            }
-            if root.form.rate-control != 2: SettingRow {
-                label: "Bitrate";
-                NumberField { label: ""; value: root.form.bitrate; minimum: 500; maximum: 150000; step: 500; suffix: "kbps"; changed(v) => { root.set("bitrate", v); } }
-            }
-            if root.form.rate-control == 2: SettingRow {
-                label: "Quality";
-                hint: "Lower is better; 18–24 is visually lossless";
-                NumberField { label: ""; value: root.form.quality; minimum: 1; maximum: 51; changed(v) => { root.set("quality", v); } }
-            }
-            SettingRow {
-                label: "Preset";
-                Select {
-                    label: "Preset";
-                    options: ["Performance", "Balanced", "Quality"];
-                    current-index: root.form.preset;
-                    selected(i) => { root.set("preset", i); }
-                }
-            }
-            SettingRow {
-                label: "Keyframe interval";
-                NumberField { label: ""; value: root.form.keyframe; minimum: 1; maximum: 10; suffix: "s"; changed(v) => { root.set("keyframe", v); } }
-            }
-
-            SectionTitle { text: "AUDIO"; }
-            SettingRow {
-                label: "Codec";
-                Select {
-                    label: "Audio codec";
-                    options: ["AAC", "Opus"];
-                    current-index: root.form.audio-codec;
-                    selected(i) => { root.set("audio-codec", i); }
-                }
-            }
-            SettingRow {
-                label: "Bitrate per track";
-                NumberField { label: ""; value: root.form.audio-bitrate; minimum: 64; maximum: 512; step: 32; suffix: "kbps"; changed(v) => { root.set("audio-bitrate", v); } }
-            }
-            SettingRow {
-                label: "Tracks to record";
-                HorizontalLayout {
-                    spacing: 4px;
-                    for t in [0, 1, 2, 3, 4, 5]: Rectangle {
-                        property <bool> on: mod(floor(root.form.tracks / pow(2, t)), 2) == 1;
-                        width: 28px;
-                        height: 26px;
+                if root.page == 0: VerticalLayout {
+                    spacing: 12px;
+                    SectionTitle { text: "STREAM DESTINATIONS"; }
+                    Text {
+                        text: "Go Live streams to every enabled destination at once.";
+                        color: Theme.text-faint;
+                        font-size: Theme.font-s;
+                        wrap: word-wrap;
+                    }
+                    for d[i] in root.form.destinations: Rectangle {
+                        height: 36px;
                         border-radius: Theme.radius-s;
-                        background: on ? Theme.accent : Theme.surface-3;
-                        accessible-role: checkbox;
-                        accessible-label: "Record track " + (t + 1);
-                        accessible-checked: on;
-                        Text { text: t + 1; color: on ? Theme.on-accent : Theme.text-muted; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
-                        TouchArea {
+                        background: i == root.form.dest-selected ? Theme.accent.with-alpha(0.14) : row-ta.has-hover ? Theme.hover : transparent;
+                        border-width: i == root.form.dest-selected ? 1px : 0px;
+                        border-color: Theme.accent.with-alpha(0.5);
+                        accessible-role: list-item;
+                        accessible-label: d.name;
+                        row-ta := TouchArea {
                             mouse-cursor: MouseCursor.pointer;
-                            clicked => { root.set("tracks", on ? root.form.tracks - pow(2, t) : root.form.tracks + pow(2, t)); }
+                            clicked => { root.set("dest-select", i); }
+                        }
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 6px;
+                            spacing: 10px;
+                            VerticalLayout {
+                                alignment: center;
+                                Toggle { checked: d.enabled; toggled(v) => { root.set("dest-enable", i); } }
+                            }
+                            Text { text: d.name; color: d.enabled ? Theme.text : Theme.text-faint; font-size: Theme.font-m; vertical-alignment: center; horizontal-alignment: left; horizontal-stretch: 1; overflow: elide; }
+                            if d.protocol != "": VerticalLayout {
+                                alignment: center;
+                                Badge { text: d.protocol; }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                IconButton { icon: Icons.trash; tooltip: "Remove " + d.name; clicked => { root.set("dest-remove", i); } }
+                            }
+                        }
+                    }
+                    HorizontalLayout {
+                        alignment: start;
+                        Button { text: "Add destination"; has-icon: true; icon: Icons.plus; kind: "ghost"; clicked => { root.set("dest-add", 0); } }
+                    }
+                    if root.form.dest-selected >= 0: DestinationEditor {
+                        form: root.form;
+                        set(k, v) => { root.set(k, v); }
+                        set-text(k, v) => { root.set-text(k, v); }
+                    }
+                }
+
+                if root.page == 1: VerticalLayout {
+                    spacing: 12px;
+                    SectionTitle { text: "RECORDING"; }
+                    SettingRow {
+                        label: "Folder";
+                        TextField { text: root.form.folder; label: "Recording folder"; accepted(t) => { root.set-text("folder", t); } }
+                        Button { text: "Browse…"; clicked => { root.browse(); } }
+                    }
+                    SettingRow {
+                        label: "File name";
+                        hint: "Date codes like %Y-%m-%d %H-%M-%S";
+                        TextField { text: root.form.filename; label: "File name pattern"; accepted(t) => { root.set-text("filename", t); } }
+                    }
+                    if root.form.canvas-names.length > 1: SettingRow {
+                        label: "Canvas";
+                        hint: "Also used by the replay buffer";
+                        Select {
+                            label: "Canvas to record";
+                            options: root.form.rec-canvas-names;
+                            current-index: root.form.rec-canvas;
+                            selected(i) => { root.set("rec-canvas", i); }
+                        }
+                    }
+                    SettingRow {
+                        label: "Format";
+                        Select {
+                            label: "Format";
+                            options: ["MKV (crash-safe)", "Fragmented MP4 (crash-safe)", "MP4", "MOV"];
+                            current-index: root.form.container;
+                            selected(i) => { root.set("container", i); }
+                        }
+                    }
+                    SettingRow {
+                        label: "Remux to MP4";
+                        hint: "After an MKV recording stops";
+                        Toggle { checked: root.form.auto-remux; toggled(v) => { root.set("auto-remux", v ? 1 : 0); } }
+                    }
+
+                    SectionTitle { text: "VIDEO ENCODER"; }
+                    SettingRow {
+                        label: "Codec";
+                        Select {
+                            label: "Codec";
+                            options: ["H.264", "HEVC (H.265)", "AV1"];
+                            current-index: root.form.codec;
+                            selected(i) => { root.set("codec", i); }
+                        }
+                    }
+                    SettingRow {
+                        label: "Encoder";
+                        hint: "Automatic uses your GPU when possible";
+                        Select {
+                            label: "Encoder";
+                            options: root.form.encoders;
+                            current-index: root.form.encoder;
+                            selected(i) => { root.set("encoder", i); }
+                        }
+                    }
+                    SettingRow {
+                        label: "Rate control";
+                        Select {
+                            label: "Rate control";
+                            options: ["Constant bitrate (CBR)", "Variable bitrate (VBR)", "Constant quality"];
+                            current-index: root.form.rate-control;
+                            selected(i) => { root.set("rate-control", i); }
+                        }
+                    }
+                    if root.form.rate-control != 2: SettingRow {
+                        label: "Bitrate";
+                        NumberField { label: ""; value: root.form.bitrate; minimum: 500; maximum: 150000; step: 500; suffix: "kbps"; changed(v) => { root.set("bitrate", v); } }
+                    }
+                    if root.form.rate-control == 2: SettingRow {
+                        label: "Quality";
+                        hint: "Lower is better; 18–24 is visually lossless";
+                        NumberField { label: ""; value: root.form.quality; minimum: 1; maximum: 51; changed(v) => { root.set("quality", v); } }
+                    }
+                    SettingRow {
+                        label: "Preset";
+                        Select {
+                            label: "Preset";
+                            options: ["Performance", "Balanced", "Quality"];
+                            current-index: root.form.preset;
+                            selected(i) => { root.set("preset", i); }
+                        }
+                    }
+                    SettingRow {
+                        label: "Keyframe interval";
+                        NumberField { label: ""; value: root.form.keyframe; minimum: 1; maximum: 10; suffix: "s"; changed(v) => { root.set("keyframe", v); } }
+                    }
+
+                    SectionTitle { text: "AUDIO"; }
+                    SettingRow {
+                        label: "Codec";
+                        Select {
+                            label: "Audio codec";
+                            options: ["AAC", "Opus"];
+                            current-index: root.form.audio-codec;
+                            selected(i) => { root.set("audio-codec", i); }
+                        }
+                    }
+                    SettingRow {
+                        label: "Bitrate per track";
+                        NumberField { label: ""; value: root.form.audio-bitrate; minimum: 64; maximum: 512; step: 32; suffix: "kbps"; changed(v) => { root.set("audio-bitrate", v); } }
+                    }
+                    SettingRow {
+                        label: "Tracks to record";
+                        HorizontalLayout {
+                            spacing: 4px;
+                            for t in [0, 1, 2, 3, 4, 5]: Rectangle {
+                                property <bool> on: mod(floor(root.form.tracks / pow(2, t)), 2) == 1;
+                                width: 28px;
+                                height: 26px;
+                                border-radius: Theme.radius-s;
+                                background: on ? Theme.accent : Theme.surface-3;
+                                accessible-role: checkbox;
+                                accessible-label: "Record track " + (t + 1);
+                                accessible-checked: on;
+                                Text { text: t + 1; color: on ? Theme.on-accent : Theme.text-muted; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                                TouchArea {
+                                    mouse-cursor: MouseCursor.pointer;
+                                    clicked => { root.set("tracks", on ? root.form.tracks - pow(2, t) : root.form.tracks + pow(2, t)); }
+                                }
+                            }
                         }
                     }
                 }
-            }
 
-            SectionTitle { text: "REPLAY BUFFER"; }
-            SettingRow {
-                label: "Length";
-                NumberField { label: ""; value: root.form.replay-seconds; minimum: 5; maximum: 300; step: 5; suffix: "s"; changed(v) => { root.set("replay-seconds", v); } }
-            }
+                if root.page == 2: VerticalLayout {
+                    spacing: 12px;
+                    SectionTitle { text: "REPLAY BUFFER"; }
+                    SettingRow {
+                        label: "Length";
+                        NumberField { label: ""; value: root.form.replay-seconds; minimum: 5; maximum: 300; step: 5; suffix: "s"; changed(v) => { root.set("replay-seconds", v); } }
+                    }
 
-            SectionTitle { text: "CLIPS"; }
-            Text {
-                text: "Save your best moments without streaming or recording: Clutch keeps the last minutes in memory while you play, and the clip hotkey saves them.";
-                color: Theme.text-faint;
-                font-size: Theme.font-s;
-                wrap: word-wrap;
-            }
-            if root.form.clip-ask != "": Rectangle {
-                height: ask.preferred-height + 16px;
-                border-radius: Theme.radius-s;
-                background: Theme.accent.with-alpha(0.12);
-                ask := HorizontalLayout {
-                    padding: 8px;
-                    spacing: 8px;
-                    Text { text: "Is " + root.form.clip-ask + " a game? Clip mode will follow it."; color: Theme.text; font-size: Theme.font-s; vertical-alignment: center; horizontal-stretch: 1; wrap: word-wrap; }
-                    Button { text: "It's a game"; kind: "primary"; clicked => { root.set("clip-ask-yes", 0); } }
-                    Button { text: "Not a game"; kind: "ghost"; clicked => { root.set("clip-ask-no", 0); } }
-                }
-            }
-            SettingRow {
-                label: "Clip mode";
-                hint: "Runs the replay buffer by itself while a game is open";
-                HorizontalLayout {
-                    alignment: start;
-                    VerticalLayout {
-                        alignment: center;
-                        Toggle { checked: root.form.clip-mode; toggled(v) => { root.set("clip-mode", v ? 1 : 0); } }
+                    SectionTitle { text: "CLIPS"; }
+                    Text {
+                        text: "Save your best moments without streaming or recording: Clutch keeps the last minutes in memory while you play, and the clip hotkey saves them.";
+                        color: Theme.text-faint;
+                        font-size: Theme.font-s;
+                        wrap: word-wrap;
                     }
-                }
-            }
-            SettingRow {
-                label: "Keep in memory";
-                hint: "How much the buffer holds in clip mode";
-                NumberField { label: ""; value: root.form.clip-buffer; minimum: 30; maximum: 600; step: 30; suffix: "s"; changed(v) => { root.set("clip-buffer", v); } }
-            }
-            SettingRow {
-                label: "Clip hotkey";
-                hint: Platform.hotkeys-note != "" ? Platform.hotkeys-note : "Works in games, e.g. F8 or Ctrl+Shift+C";
-                TextField { text: root.form.clip-hotkey; label: "Clip hotkey"; accepted(t) => { root.set-text("clip-hotkey", t); } }
-                NumberField { width: 110px; label: ""; value: root.form.clip-seconds; minimum: 5; maximum: 600; step: 5; suffix: "s"; changed(v) => { root.set("clip-seconds", v); } }
-            }
-            SettingRow {
-                label: "Longest clip";
-                hint: "Events close together merge into one clip up to this length";
-                NumberField { label: ""; value: root.form.clip-max; minimum: 15; maximum: 300; step: 15; suffix: "s"; changed(v) => { root.set("clip-max", v); } }
-            }
-            SettingRow {
-                label: "Sound when saved";
-                HorizontalLayout {
-                    alignment: start;
-                    VerticalLayout {
-                        alignment: center;
-                        Toggle { checked: root.form.clip-sound; toggled(v) => { root.set("clip-sound", v ? 1 : 0); } }
+                    if root.form.clip-ask != "": Rectangle {
+                        height: ask.preferred-height + 16px;
+                        border-radius: Theme.radius-s;
+                        background: Theme.accent.with-alpha(0.12);
+                        ask := HorizontalLayout {
+                            padding: 8px;
+                            spacing: 8px;
+                            Text { text: "Is " + root.form.clip-ask + " a game? Clip mode will follow it."; color: Theme.text; font-size: Theme.font-s; vertical-alignment: center; horizontal-stretch: 1; wrap: word-wrap; }
+                            Button { text: "It's a game"; kind: "primary"; clicked => { root.set("clip-ask-yes", 0); } }
+                            Button { text: "Not a game"; kind: "ghost"; clicked => { root.set("clip-ask-no", 0); } }
+                        }
                     }
-                }
-            }
-            SettingRow {
-                label: "Clips folder";
-                TextField { text: root.form.clip-folder; label: "Clips folder"; accepted(t) => { root.set-text("clip-folder", t); } }
-            }
-            SettingRow {
-                label: "Storage limit";
-                hint: "Oldest automatic clips are deleted past this; favorites and your own clips never are";
-                NumberField { label: ""; value: root.form.clip-cap; minimum: 1; maximum: 2000; step: 5; suffix: "GB"; changed(v) => { root.set("clip-cap", v); } }
-            }
+                    SettingRow {
+                        label: "Clip mode";
+                        hint: "Runs the replay buffer by itself while a game is open";
+                        HorizontalLayout {
+                            alignment: start;
+                            VerticalLayout {
+                                alignment: center;
+                                Toggle { checked: root.form.clip-mode; toggled(v) => { root.set("clip-mode", v ? 1 : 0); } }
+                            }
+                        }
+                    }
+                    SettingRow {
+                        label: "Keep in memory";
+                        hint: "How much the buffer holds in clip mode";
+                        NumberField { label: ""; value: root.form.clip-buffer; minimum: 30; maximum: 600; step: 30; suffix: "s"; changed(v) => { root.set("clip-buffer", v); } }
+                    }
+                    SettingRow {
+                        label: "Clip hotkey";
+                        hint: Platform.hotkeys-note != "" ? Platform.hotkeys-note : "Works in games, e.g. F8 or Ctrl+Shift+C";
+                        TextField { text: root.form.clip-hotkey; label: "Clip hotkey"; accepted(t) => { root.set-text("clip-hotkey", t); } }
+                        NumberField { width: 110px; label: ""; value: root.form.clip-seconds; minimum: 5; maximum: 600; step: 5; suffix: "s"; changed(v) => { root.set("clip-seconds", v); } }
+                    }
+                    SettingRow {
+                        label: "Longest clip";
+                        hint: "Events close together merge into one clip up to this length";
+                        NumberField { label: ""; value: root.form.clip-max; minimum: 15; maximum: 300; step: 15; suffix: "s"; changed(v) => { root.set("clip-max", v); } }
+                    }
+                    SettingRow {
+                        label: "Sound when saved";
+                        HorizontalLayout {
+                            alignment: start;
+                            VerticalLayout {
+                                alignment: center;
+                                Toggle { checked: root.form.clip-sound; toggled(v) => { root.set("clip-sound", v ? 1 : 0); } }
+                            }
+                        }
+                    }
+                    SettingRow {
+                        label: "Clips folder";
+                        TextField { text: root.form.clip-folder; label: "Clips folder"; accepted(t) => { root.set-text("clip-folder", t); } }
+                    }
+                    SettingRow {
+                        label: "Storage limit";
+                        hint: "Oldest automatic clips are deleted past this; favorites and your own clips never are";
+                        NumberField { label: ""; value: root.form.clip-cap; minimum: 1; maximum: 2000; step: 5; suffix: "GB"; changed(v) => { root.set("clip-cap", v); } }
+                    }
 
-            Text { text: "AUTO-CLIP"; color: Theme.text-muted; font-size: Theme.font-xs; font-weight: 600; }
-            Text {
-                text: "Connect a game to clip kills, wins and objectives automatically. Clutch uses each game's official local event API, so nothing touches the game itself.";
-                color: Theme.text-faint;
-                font-size: Theme.font-s;
-                wrap: word-wrap;
-            }
-            for g[i] in root.form.clip-integrations: HorizontalLayout {
-                spacing: 10px;
-                height: 32px;
-                Text { text: g.name; color: Theme.text; font-size: Theme.font-m; vertical-alignment: center; width: 170px; }
-                Text { text: g.status; color: g.connected ? Theme.text-muted : Theme.text-faint; font-size: Theme.font-s; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
-                Button {
-                    text: g.connected ? "Disconnect" : "Connect";
-                    kind: g.connected ? "ghost" : "default";
-                    tooltip: g.connected ? "Stop listening to this game" : "Set up auto-clip for this game";
-                    clicked => { root.set(g.connected ? "clip-disconnect" : "clip-connect", i); }
-                }
-            }
-            SettingRow {
-                label: "Rules for";
-                Select {
-                    label: "Game";
-                    options: root.form.clip-rule-games;
-                    current-index: root.form.clip-rule-game;
-                    selected(i) => { root.set("clip-rule-game", i); }
-                }
-            }
-            for r[i] in root.form.clip-rules: HorizontalLayout {
-                spacing: 10px;
-                height: 30px;
-                VerticalLayout {
-                    alignment: center;
-                    Toggle { checked: r.enabled; toggled(v) => { root.set("clip-rule-enable", i); } }
-                }
-                Text { text: r.event; color: r.enabled ? Theme.text : Theme.text-faint; font-size: Theme.font-m; vertical-alignment: center; width: 140px; }
-                NumberField { width: 110px; label: ""; enabled: r.enabled; value: r.pre; minimum: 1; maximum: 120; suffix: "s before"; changed(v) => { root.set("clip-rule-pre:" + i, v); } }
-                NumberField { width: 110px; label: ""; enabled: r.enabled; value: r.post; minimum: 0; maximum: 60; suffix: "s after"; changed(v) => { root.set("clip-rule-post:" + i, v); } }
-                Rectangle { horizontal-stretch: 1; }
-            }
-            SettingRow {
-                label: "Hype: game audio";
-                hint: "Any game: clip when it suddenly gets loud";
-                HorizontalLayout {
-                    alignment: start;
-                    VerticalLayout {
-                        alignment: center;
-                        Toggle { checked: root.form.hype-game; toggled(v) => { root.set("hype-game", v ? 1 : 0); } }
+                    Text { text: "AUTO-CLIP"; color: Theme.text-muted; font-size: Theme.font-xs; font-weight: 600; }
+                    Text {
+                        text: "Connect a game to clip kills, wins and objectives automatically. Clutch uses each game's official local event API, so nothing touches the game itself.";
+                        color: Theme.text-faint;
+                        font-size: Theme.font-s;
+                        wrap: word-wrap;
+                    }
+                    for g[i] in root.form.clip-integrations: HorizontalLayout {
+                        spacing: 10px;
+                        height: 32px;
+                        Text { text: g.name; color: Theme.text; font-size: Theme.font-m; vertical-alignment: center; width: 170px; }
+                        Text { text: g.status; color: g.connected ? Theme.text-muted : Theme.text-faint; font-size: Theme.font-s; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                        Button {
+                            text: g.connected ? "Disconnect" : "Connect";
+                            kind: g.connected ? "ghost" : "default";
+                            tooltip: g.connected ? "Stop listening to this game" : "Set up auto-clip for this game";
+                            clicked => { root.set(g.connected ? "clip-disconnect" : "clip-connect", i); }
+                        }
+                    }
+                    SettingRow {
+                        label: "Rules for";
+                        Select {
+                            label: "Game";
+                            options: root.form.clip-rule-games;
+                            current-index: root.form.clip-rule-game;
+                            selected(i) => { root.set("clip-rule-game", i); }
+                        }
+                    }
+                    for r[i] in root.form.clip-rules: HorizontalLayout {
+                        spacing: 10px;
+                        height: 30px;
+                        VerticalLayout {
+                            alignment: center;
+                            Toggle { checked: r.enabled; toggled(v) => { root.set("clip-rule-enable", i); } }
+                        }
+                        Text { text: r.event; color: r.enabled ? Theme.text : Theme.text-faint; font-size: Theme.font-m; vertical-alignment: center; width: 140px; }
+                        NumberField { width: 110px; label: ""; enabled: r.enabled; value: r.pre; minimum: 1; maximum: 120; suffix: "s before"; changed(v) => { root.set("clip-rule-pre:" + i, v); } }
+                        NumberField { width: 110px; label: ""; enabled: r.enabled; value: r.post; minimum: 0; maximum: 60; suffix: "s after"; changed(v) => { root.set("clip-rule-post:" + i, v); } }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                    SettingRow {
+                        label: "Hype: game audio";
+                        hint: "Any game: clip when it suddenly gets loud";
+                        HorizontalLayout {
+                            alignment: start;
+                            VerticalLayout {
+                                alignment: center;
+                                Toggle { checked: root.form.hype-game; toggled(v) => { root.set("hype-game", v ? 1 : 0); } }
+                            }
+                        }
+                    }
+                    SettingRow {
+                        label: "Hype: microphone";
+                        hint: "Clip when you shout or cheer";
+                        HorizontalLayout {
+                            alignment: start;
+                            VerticalLayout {
+                                alignment: center;
+                                Toggle { checked: root.form.hype-mic; toggled(v) => { root.set("hype-mic", v ? 1 : 0); } }
+                            }
+                        }
+                    }
+                    if root.form.hype-game || root.form.hype-mic: SettingRow {
+                        label: "Hype sensitivity";
+                        Select {
+                            label: "Hype sensitivity";
+                            options: ["Low (only big moments)", "Medium", "High (more clips)"];
+                            current-index: root.form.hype-sensitivity;
+                            selected(i) => { root.set("hype-sensitivity", i); }
+                        }
                     }
                 }
-            }
-            SettingRow {
-                label: "Hype: microphone";
-                hint: "Clip when you shout or cheer";
-                HorizontalLayout {
-                    alignment: start;
-                    VerticalLayout {
-                        alignment: center;
-                        Toggle { checked: root.form.hype-mic; toggled(v) => { root.set("hype-mic", v ? 1 : 0); } }
-                    }
-                }
-            }
-            if root.form.hype-game || root.form.hype-mic: SettingRow {
-                label: "Hype sensitivity";
-                Select {
-                    label: "Hype sensitivity";
-                    options: ["Low (only big moments)", "Medium", "High (more clips)"];
-                    current-index: root.form.hype-sensitivity;
-                    selected(i) => { root.set("hype-sensitivity", i); }
-                }
-            }
 
-            SectionTitle { text: "VIRTUAL CAMERA"; }
-            Text {
-                text: "Shows a canvas as a camera in Zoom, Teams, Discord, Meet and other apps (Windows 11, or Linux with v4l2loopback).";
-                color: Theme.text-faint;
-                font-size: Theme.font-s;
-                wrap: word-wrap;
-            }
-            SettingRow {
-                label: "Canvas";
-                Select {
-                    label: "Virtual camera canvas";
-                    options: root.form.canvas-names;
-                    current-index: root.form.vcam-canvas;
-                    selected(i) => { root.set("vcam-canvas", i); }
-                }
-            }
-            SettingRow {
-                label: Platform.vcam-installable ? "Camera component" : "Camera device";
-                hint: root.form.vcam-status;
-                if Platform.vcam-installable: HorizontalLayout {
-                    alignment: start;
-                    Button {
-                        text: root.form.vcam-installed ? "Reinstall" : "Install";
-                        kind: "ghost";
-                        tooltip: "Registers the camera with Windows (asks for permission)";
-                        clicked => { root.set("vcam-install", 0); }
+                if root.page == 3: VerticalLayout {
+                    spacing: 12px;
+                    SectionTitle { text: "VIRTUAL CAMERA"; }
+                    Text {
+                        text: "Shows a canvas as a camera in Zoom, Teams, Discord, Meet and other apps (Windows 11, or Linux with v4l2loopback).";
+                        color: Theme.text-faint;
+                        font-size: Theme.font-s;
+                        wrap: word-wrap;
+                    }
+                    SettingRow {
+                        label: "Canvas";
+                        Select {
+                            label: "Virtual camera canvas";
+                            options: root.form.canvas-names;
+                            current-index: root.form.vcam-canvas;
+                            selected(i) => { root.set("vcam-canvas", i); }
+                        }
+                    }
+                    SettingRow {
+                        label: Platform.vcam-installable ? "Camera component" : "Camera device";
+                        hint: root.form.vcam-status;
+                        if Platform.vcam-installable: HorizontalLayout {
+                            alignment: start;
+                            Button {
+                                text: root.form.vcam-installed ? "Reinstall" : "Install";
+                                kind: "ghost";
+                                tooltip: "Registers the camera with Windows (asks for permission)";
+                                clicked => { root.set("vcam-install", 0); }
+                            }
+                        }
                     }
                 }
-            }
 
-            SectionTitle { text: "REMOTE CONTROL"; }
-            Text {
-                text: "Lets Stream Deck, Touch Portal, Streamer.bot and other obs-websocket tools control Clutch.";
-                color: Theme.text-faint;
-                font-size: Theme.font-s;
-                wrap: word-wrap;
-            }
-            SettingRow {
-                label: "Enable server";
-                hint: root.remote-status;
-                HorizontalLayout {
-                    alignment: start;
-                    VerticalLayout {
-                        alignment: center;
-                        Toggle { checked: root.form.remote-enabled; toggled(v) => { root.set("remote-enable", v ? 1 : 0); } }
+                if root.page == 4: VerticalLayout {
+                    spacing: 12px;
+                    SectionTitle { text: "REMOTE CONTROL"; }
+                    Text {
+                        text: "Lets Stream Deck, Touch Portal, Streamer.bot and other obs-websocket tools control Clutch.";
+                        color: Theme.text-faint;
+                        font-size: Theme.font-s;
+                        wrap: word-wrap;
                     }
-                }
-            }
-            SettingRow {
-                label: "Port";
-                NumberField { label: ""; value: root.form.remote-port; minimum: 1024; maximum: 65535; step: 1; changed(v) => { root.set("remote-port", v); } committed => { root.set("remote-apply", 0); } }
-            }
-            SettingRow {
-                label: "Require password";
-                hint: "Recommended: anyone on your network could connect otherwise.";
-                HorizontalLayout {
-                    alignment: start;
-                    VerticalLayout {
-                        alignment: center;
-                        Toggle { checked: root.form.remote-auth; toggled(v) => { root.set("remote-auth", v ? 1 : 0); } }
+                    SettingRow {
+                        label: "Enable server";
+                        hint: root.remote-status;
+                        HorizontalLayout {
+                            alignment: start;
+                            VerticalLayout {
+                                alignment: center;
+                                Toggle { checked: root.form.remote-enabled; toggled(v) => { root.set("remote-enable", v ? 1 : 0); } }
+                            }
+                        }
                     }
-                }
-            }
-            if root.form.remote-auth: SettingRow {
-                label: "Password";
-                HorizontalLayout {
-                    spacing: 6px;
-                    TextField {
+                    SettingRow {
+                        label: "Port";
+                        NumberField { label: ""; value: root.form.remote-port; minimum: 1024; maximum: 65535; step: 1; changed(v) => { root.set("remote-port", v); } committed => { root.set("remote-apply", 0); } }
+                    }
+                    SettingRow {
+                        label: "Require password";
+                        hint: "Recommended: anyone on your network could connect otherwise.";
+                        HorizontalLayout {
+                            alignment: start;
+                            VerticalLayout {
+                                alignment: center;
+                                Toggle { checked: root.form.remote-auth; toggled(v) => { root.set("remote-auth", v ? 1 : 0); } }
+                            }
+                        }
+                    }
+                    if root.form.remote-auth: SettingRow {
                         label: "Password";
-                        text: root.form.remote-password;
-                        input-type: root.reveal-password ? InputType.text : InputType.password;
-                        accepted(t) => { root.set-text("remote-password", t); }
-                        edited(t) => { root.set-text("remote-password-draft", t); }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            TextField {
+                                label: "Password";
+                                text: root.form.remote-password;
+                                input-type: root.reveal-password ? InputType.text : InputType.password;
+                                accepted(t) => { root.set-text("remote-password", t); }
+                                edited(t) => { root.set-text("remote-password-draft", t); }
+                            }
+                            IconButton {
+                                icon: root.reveal-password ? Icons.eye-off : Icons.eye;
+                                tooltip: root.reveal-password ? "Hide password" : "Show password";
+                                clicked => { root.reveal-password = !root.reveal-password; }
+                            }
+                            Button { text: "Generate"; kind: "ghost"; tooltip: "Make a new random password"; clicked => { root.set("remote-generate", 0); } }
+                        }
                     }
-                    IconButton {
-                        icon: root.reveal-password ? Icons.eye-off : Icons.eye;
-                        tooltip: root.reveal-password ? "Hide password" : "Show password";
-                        clicked => { root.reveal-password = !root.reveal-password; }
-                    }
-                    Button { text: "Generate"; kind: "ghost"; tooltip: "Make a new random password"; clicked => { root.set("remote-generate", 0); } }
                 }
-            }
 
-            SectionTitle { text: "APPEARANCE"; }
-            SettingRow {
-                label: "Theme";
-                Select {
-                    label: "Theme";
-                    options: ["Dark", "Light", "Follow system"];
-                    current-index: root.form.theme;
-                    selected(i) => { root.set("theme", i); }
+                if root.page == 5: VerticalLayout {
+                    spacing: 12px;
+                    SectionTitle { text: "APPEARANCE"; }
+                    SettingRow {
+                        label: "Theme";
+                        Select {
+                            label: "Theme";
+                            options: ["Dark", "Light", "Follow system"];
+                            current-index: root.form.theme;
+                            selected(i) => { root.set("theme", i); }
+                        }
+                    }
+                    Text { text: root.form.ffmpeg; color: Theme.text-faint; font-size: Theme.font-xs; }
                 }
             }
-            Text { text: root.form.ffmpeg; color: Theme.text-faint; font-size: Theme.font-xs; }
         }
     }
 }

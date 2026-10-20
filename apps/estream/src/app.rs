@@ -2334,6 +2334,7 @@ impl App {
         }
         self.refresh_settings_form();
         if let Some(w) = self.window() {
+            w.set_settings_page(0);
             w.set_settings_open(true);
         }
     }
