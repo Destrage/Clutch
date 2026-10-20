@@ -13,6 +13,7 @@ Stream, record and clip your best moments, then cut them into beat-synced montag
 - a virtual camera for Zoom, Teams, Discord, Meet and other apps (Windows 11, or Linux with v4l2loopback);
 - automation: macros started by global hotkeys, a window coming to the front, timers, scenes or outputs;
 - stats and health: live numbers with 5 minutes of history, and plain-language alerts (rendering lag, encoder overload, network trouble, CPU/GPU load, low disk) with advice;
+- performance profiles (Gaming, Balanced, Quality) and "Optimize for this PC", so recording and streaming leave your game alone;
 
 Clutch runs on Windows 10/11 (x64) and on Linux (x86_64, Wayland or X11). See [Linux](#linux) for what differs there.
 

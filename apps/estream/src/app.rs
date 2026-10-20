@@ -27,7 +27,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 pub type Shared = Rc<RefCell<App>>;
@@ -163,6 +163,15 @@ pub struct App {
     clip_rule_game: usize,
     /// Montages: the saved ones, the New montage wizard and the editor.
     montage_ui: crate::montage::MontageUi,
+    /// Settings → Performance: what the background probe found (`None` until it finishes),
+    /// the profile waiting for confirmation, and the settings from before the last change.
+    hardware: Arc<Mutex<Option<crate::performance::Hardware>>>,
+    perf_pending: Option<crate::performance::Profile>,
+    perf_revert: Option<crate::performance::Covered>,
+    /// Whether Settings has been refreshed since the probe finished.
+    hardware_shown: bool,
+    /// The profile the toast's button switches to.
+    toast_profile: Option<crate::performance::Profile>,
 }
 
 /// What the shader editor dialog applies to.
@@ -582,6 +591,11 @@ impl App {
             signin_size: (0.0, 0.0),
             clip_rule_game: 0,
             montage_ui: crate::montage::MontageUi::default(),
+            hardware: Arc::default(),
+            perf_pending: None,
+            perf_revert: None,
+            hardware_shown: false,
+            toast_profile: None,
         };
         window.set_scenes(ModelRc::from(app.scenes_model.clone()));
         window.set_layers(ModelRc::from(app.layers_model.clone()));
@@ -608,6 +622,19 @@ impl App {
         self.apply_layout(self.settings.layout);
         let info = &self.gpu.info;
         w.set_gpu_info(format!("{} · {:?}", info.name, info.backend).into());
+        // Settings → Performance needs the encoders and the machine; probing opens each
+        // encoder once, so it runs off the UI thread.
+        let gpu = info.name.clone();
+        let slot = self.hardware.clone();
+        let _ = std::thread::Builder::new()
+            .name("hardware probe".into())
+            .spawn(move || {
+                let hw = crate::performance::Hardware::probe(&gpu);
+                tracing::info!(found = %hw.summary(), "hardware probed");
+                if let Ok(mut s) = slot.lock() {
+                    *s = Some(hw);
+                }
+            });
 
         self.collection = self
             .settings
@@ -1415,7 +1442,12 @@ impl App {
             self.toast(format!("Couldn't create the setup: {e}"), true);
             return;
         }
+        // The very first setup (not "New setup…") also gets the profile that suits this PC.
+        let first_run = self.previous_setup.is_none();
         self.start(project);
+        if first_run {
+            self.optimize_quietly();
+        }
         self.previous_setup = None;
         w.set_wizard_setup_name("".into());
         self.toast(
@@ -1738,9 +1770,37 @@ impl App {
         if let Some(w) = self.window() {
             w.set_toast_text(text.into());
             w.set_toast_error(error);
+            w.set_toast_action("".into());
         }
+        self.toast_profile = None;
         self.toast_until =
             Some(Instant::now() + Duration::from_millis(if error { 4500 } else { 2200 }));
+    }
+
+    /// A toast with a button that switches to `profile`; it stays up longer, to be clicked.
+    fn toast_with_action(
+        &mut self,
+        text: String,
+        error: bool,
+        action: &str,
+        profile: crate::performance::Profile,
+    ) {
+        self.toast(text, error);
+        if let Some(w) = self.window() {
+            w.set_toast_action(action.into());
+        }
+        self.toast_profile = Some(profile);
+        self.toast_until = Some(Instant::now() + Duration::from_secs(10));
+    }
+
+    /// The toast's button was clicked.
+    pub fn toast_act(&mut self) {
+        if let Some(p) = self.toast_profile.take() {
+            self.apply_profile(p);
+            if self.window().is_some_and(|w| w.get_settings_open()) {
+                self.refresh_settings_form();
+            }
+        }
     }
 
     // ------------------------------------------------------------ appearance
@@ -2334,7 +2394,7 @@ impl App {
         }
         self.refresh_settings_form();
         if let Some(w) = self.window() {
-            w.set_settings_page(0);
+            w.set_settings_page(1);
             w.set_settings_open(true);
         }
     }
@@ -4182,7 +4242,12 @@ impl App {
             account_name: account.1.into(),
             account_connecting: account.2,
             account_code: account.3.into(),
-            ..self.clip_settings_form(stream_form(&self.settings.destinations, self.dest_selected))
+            ..self.performance_form(
+                self.clip_settings_form(stream_form(
+                    &self.settings.destinations,
+                    self.dest_selected,
+                )),
+            )
         });
     }
 
@@ -4408,6 +4473,175 @@ impl App {
         true
     }
 
+    // ------------------------------------------------------------ performance profiles
+
+    /// What the hardware probe found (empty until it finishes).
+    fn hardware(&self) -> crate::performance::Hardware {
+        self.hardware
+            .lock()
+            .ok()
+            .and_then(|h| h.clone())
+            .unwrap_or_default()
+    }
+
+    fn hardware_known(&self) -> bool {
+        self.hardware.lock().is_ok_and(|h| h.is_some())
+    }
+
+    /// The probe usually finished at startup; if not, finishes it now (encoders are cached).
+    fn ensure_hardware(&mut self) {
+        if !self.hardware_known() {
+            let hw = crate::performance::Hardware::probe(&self.gpu.info.name);
+            if let Ok(mut slot) = self.hardware.lock() {
+                *slot = Some(hw);
+            }
+        }
+    }
+
+    /// Each destination's platform-recommended bitrate for its canvas (`None` for a custom
+    /// server, whose bitrate stays).
+    fn recommended_bitrates(&self) -> Vec<Option<u32>> {
+        let canvases = self
+            .engine
+            .as_ref()
+            .map(|e| e.snapshot().canvases.clone())
+            .unwrap_or_default();
+        self.settings
+            .destinations
+            .iter()
+            .map(|d| {
+                let s = &d.stream;
+                if s.service == Service::Custom {
+                    return None;
+                }
+                let canvas = s
+                    .canvas
+                    .and_then(|id| canvases.iter().find(|c| c.id == id))
+                    .or(canvases.first())?;
+                Some(
+                    s.service
+                        .recommended_kbps(canvas.width, canvas.height, canvas.fps.as_f64()),
+                )
+            })
+            .collect()
+    }
+
+    /// The settings `profile` would set, from the current ones.
+    fn profile_target(&self, profile: crate::performance::Profile) -> crate::performance::Covered {
+        crate::performance::Covered::read(&self.settings).with_profile(
+            profile,
+            &self.hardware(),
+            &self.recommended_bitrates(),
+        )
+    }
+
+    /// Settings → Performance fields, on top of `form`.
+    fn performance_form(&self, form: SettingsForm) -> SettingsForm {
+        use crate::performance::{Covered, recommend};
+        let hw = self.hardware();
+        let known = self.hardware_known();
+        let now = Covered::read(&self.settings);
+        let names: Vec<String> = self
+            .settings
+            .destinations
+            .iter()
+            .map(|d| d.name.clone())
+            .collect();
+        let changes: Vec<SharedString> = self
+            .perf_pending
+            .map(|p| now.changes(&self.profile_target(p), &names))
+            .unwrap_or_default()
+            .into_iter()
+            .map(SharedString::from)
+            .collect();
+        SettingsForm {
+            perf_current: now.profile(&hw).map_or(-1, |p| p.index() as i32),
+            perf_recommended: if known {
+                recommend(&hw).index() as i32
+            } else {
+                -1
+            },
+            perf_found: if known {
+                hw.summary().into()
+            } else {
+                "Checking this PC…".into()
+            },
+            perf_warning: hw.warning().unwrap_or_default().into(),
+            perf_pending: self.perf_pending.map_or(-1, |p| p.index() as i32),
+            perf_changes: ModelRc::new(VecModel::from(changes)),
+            perf_can_revert: self.perf_revert.is_some(),
+            ..form
+        }
+    }
+
+    /// Switches every covered setting to `profile` (keeping the old ones for Revert).
+    fn apply_profile(&mut self, profile: crate::performance::Profile) {
+        let before = crate::performance::Covered::read(&self.settings);
+        let target = self.profile_target(profile);
+        if target == before {
+            self.toast(
+                format!("Already using the {} profile", profile.label()),
+                false,
+            );
+            return;
+        }
+        target.write(&mut self.settings);
+        self.perf_revert = Some(before);
+        self.settings.save(&self.paths.settings());
+        tracing::info!(profile = profile.label(), "performance profile applied");
+        let live = self.recording.is_some() || !self.stream_dests.is_empty();
+        self.toast(
+            if live {
+                format!(
+                    "{} profile set. It applies to the next recording or stream.",
+                    profile.label()
+                )
+            } else {
+                format!("{} profile set", profile.label())
+            },
+            false,
+        );
+    }
+
+    /// First run: applies the recommended profile without asking (nothing was set up yet).
+    fn optimize_quietly(&mut self) {
+        self.ensure_hardware();
+        let profile = crate::performance::recommend(&self.hardware());
+        self.profile_target(profile).write(&mut self.settings);
+        self.settings.save(&self.paths.settings());
+        tracing::info!(
+            profile = profile.label(),
+            "first run: performance profile applied"
+        );
+    }
+
+    /// Settings → Performance: one button. Returns false if `field` isn't a performance one.
+    fn performance_setting(&mut self, field: &str, value: f32) -> bool {
+        use crate::performance::{Profile, recommend};
+        let i = value.round().max(0.0) as usize;
+        match field {
+            "perf-pick" => self.perf_pending = Profile::ALL.get(i).copied(),
+            "perf-optimize" => {
+                self.ensure_hardware();
+                self.perf_pending = Some(recommend(&self.hardware()));
+            }
+            "perf-cancel" => self.perf_pending = None,
+            "perf-apply" => {
+                if let Some(p) = self.perf_pending.take() {
+                    self.apply_profile(p);
+                }
+            }
+            "perf-revert" => {
+                if let Some(before) = self.perf_revert.take() {
+                    before.write(&mut self.settings);
+                    self.toast("Previous settings restored".into(), false);
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
     /// The current collection's canvases (ids and names), for output canvas pickers.
     fn canvas_choices(&self) -> (Vec<CanvasId>, Vec<SharedString>) {
         let Some(engine) = &self.engine else {
@@ -4431,8 +4665,9 @@ impl App {
         if let Some(action) = field.strip_prefix("account-") {
             return self.account_action(action);
         }
-        if (field.starts_with("clip") || field.starts_with("hype"))
-            && self.clip_setting(field, value)
+        if ((field.starts_with("clip") || field.starts_with("hype"))
+            && self.clip_setting(field, value))
+            || (field.starts_with("perf-") && self.performance_setting(field, value))
         {
             self.settings.save(&self.paths.settings());
             self.refresh_settings_form();
@@ -5053,7 +5288,28 @@ impl App {
         });
         for alert in raised {
             let problem = alert.severity == estream_health::Severity::Problem;
-            self.toast(format!("{} — {}", alert.title, alert.advice), problem);
+            let text = format!("{} — {}", alert.title, alert.advice);
+            // The encoder or the renderer can't keep up during a game: offer a lighter profile.
+            let costly = alert.id.starts_with("encoder:") || alert.id.starts_with("render-lag:");
+            let lighter = if costly && self.clipper.current_game().is_some() {
+                match crate::performance::Covered::read(&self.settings).profile(&self.hardware()) {
+                    Some(p) => p.lighter(),
+                    None => Some(crate::performance::Profile::Gaming),
+                }
+            } else {
+                None
+            };
+            match lighter {
+                Some(p) => self.toast_with_action(text, problem, "Use a lighter profile", p),
+                None => self.toast(text, problem),
+            }
+        }
+        // The hardware probe finishes in the background; show its findings once it does.
+        if !self.hardware_shown && self.hardware_known() {
+            self.hardware_shown = true;
+            if self.window().is_some_and(|w| w.get_settings_open()) {
+                self.refresh_settings_form();
+            }
         }
         let Some(w) = self.window() else { return };
         let alerts = self.monitor.alerts();
@@ -8055,6 +8311,7 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     on!(on_canvas_remove, |a, id| a.canvas_remove(&id));
     on!(on_canvas_rename, |a, id, name| a.canvas_rename(&id, &name));
     on!(on_settings_browse, |a| a.settings_browse());
+    on!(on_toast_act, |a| a.toast_act());
 
     {
         let app = app.clone();

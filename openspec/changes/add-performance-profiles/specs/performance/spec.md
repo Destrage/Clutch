@@ -9,15 +9,15 @@ NOT change canvases, scenes, sources, recording folder, formats or stream keys.
 #### Scenario: Choosing a profile
 - **WHEN** the user picks Gaming on the Performance page and confirms
 - **THEN** recordings, the replay buffer and every stream destination use the hardware
-  encoder's fastest preset, and the change can be undone in one step
+  encoder's fastest preset, and Undo last profile change restores the previous settings
 
 #### Scenario: Custom
 - **WHEN** the user changes the encoder preset on the Recording page after choosing Balanced
 - **THEN** the Performance page shows Custom
 
 ### Requirement: Optimize for this PC
-The studio SHALL recommend a profile from the PC's hardware encoders, CPU cores, memory and GPU,
-show what it found and every setting it would change, and apply them only after confirmation.
+The studio SHALL recommend Gaming or Balanced from the PC's hardware encoders, CPU cores, memory
+and GPU, show what it found and every setting it would change, and apply them only after confirmation.
 
 #### Scenario: PC with a hardware encoder
 - **WHEN** the user clicks Optimize for this PC on a PC whose GPU has a hardware encoder

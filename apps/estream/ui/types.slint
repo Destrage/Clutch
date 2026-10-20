@@ -320,6 +320,16 @@ export struct SettingsForm {
     hype-sensitivity: int,
     /// A fullscreen program to ask about ("" = none).
     clip-ask: string,
+    /// Settings → Performance: the profile the settings match (0 Gaming, 1 Balanced,
+    /// 2 Quality, -1 custom), the recommended one (-1 = not known yet), what was found on
+    /// this PC, and a profile waiting for confirmation (-1 = none) with its changes.
+    perf-current: int,
+    perf-recommended: int,
+    perf-found: string,
+    perf-warning: string,
+    perf-pending: int,
+    perf-changes: [string],
+    perf-can-revert: bool,
 }
 
 /// One macro in the automation list.

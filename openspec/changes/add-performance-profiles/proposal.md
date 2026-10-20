@@ -9,6 +9,7 @@ for one place that sets everything up so gameplay isn't affected, with a few rea
 
 ## What Changes
 - **performance** capability (new), shown as a **Performance** page at the top of Settings.
+  The hardware is probed in the background at startup (each encoder is opened once).
 - **Profiles**, each a named set of values for the settings that cost the game something:
   - **Gaming (lightest):** hardware encoder, its fastest preset, constant quality ~23 for
     recordings, the platform's recommended bitrate for streams, a 60 s replay buffer in clip mode.
@@ -16,13 +17,14 @@ for one place that sets everything up so gameplay isn't affected, with a few rea
   - **Quality:** hardware encoder (HEVC or AV1 when the GPU has it, for recordings), quality
     preset, quality ~18, 120 s buffer. For strong PCs or recording-focused sessions.
   - **Custom:** shown when the user changes one of those settings by hand.
-- **Optimize for this PC** picks the profile from what Clutch can measure:
+- **Optimize for this PC** recommends Gaming or Balanced from what Clutch can measure (Quality
+  is never picked for the user: it trades encoder headroom for picture quality):
   - the hardware encoders FFmpeg can open (NVENC, AMF, QuickSync); without one, Gaming with
     the software encoder's fastest preset and a warning that a game will lose frames;
   - CPU core count and memory (the replay buffer lives in memory);
   - the GPU vendor and model, and whether its encoder supports HEVC/AV1.
   It shows what it found and each setting it will change (before → after) and applies them only
-  when the user confirms. Applying is one undoable step.
+  when the user confirms. "Undo last profile change" restores the settings from before.
 - **Scope of a profile:** the recording/replay encoder settings, the clip-mode buffer length,
   and every stream destination's encoder, preset and bitrate. It never changes canvases, scenes,
   sources, the recording folder, formats or stream keys.

@@ -19,7 +19,7 @@ those were places, but there's nothing to click.
 - Each page scrolls by itself; the window keeps its size between pages.
 - **Opening at the right page:** places that send the user to stream settings (Go Live's
   "Manage…", a missing destination) open the Stream page. Otherwise Settings opens at the page
-  that was shown last (Stream the first time).
+  that was shown last (the first page the first time).
 - Up/Down arrows move between pages when the page list has focus; every page is reachable
   with the keyboard and named for screen readers.
 

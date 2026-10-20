@@ -118,6 +118,38 @@ impl Probe {
     }
 }
 
+/// The machine's installed memory in bytes, if it can be read.
+pub fn total_memory() -> Option<u64> {
+    #[cfg(windows)]
+    {
+        use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+        let mut status = MEMORYSTATUSEX {
+            dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
+            ..Default::default()
+        };
+        // SAFETY: `status` is a properly sized out-parameter.
+        unsafe { GlobalMemoryStatusEx(&mut status) }.ok()?;
+        Some(status.ullTotalPhys)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let info = std::fs::read_to_string("/proc/meminfo").ok()?;
+        parse_mem_total(&info)
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        None
+    }
+}
+
+/// `MemTotal` from `/proc/meminfo`, in bytes.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn parse_mem_total(info: &str) -> Option<u64> {
+    let line = info.lines().find(|l| l.starts_with("MemTotal:"))?;
+    let kib: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
+    Some(kib * 1024)
+}
+
 #[cfg(windows)]
 mod imp {
     use super::SystemSample;
@@ -589,6 +621,21 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mem_total_parses() {
+        let info = "MemTotal:       32768000 kB\nMemFree:  1000 kB\n";
+        assert_eq!(parse_mem_total(info), Some(32_768_000 * 1024));
+        assert_eq!(parse_mem_total("MemFree: 1 kB"), None);
+    }
+
+    #[test]
+    fn total_memory_is_plausible() {
+        if cfg!(any(windows, target_os = "linux")) {
+            let total = total_memory().expect("total memory");
+            assert!(total > 512 * 1024 * 1024, "{total}");
+        }
+    }
 
     #[test]
     fn samples_are_plausible() {

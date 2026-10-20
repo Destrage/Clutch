@@ -237,6 +237,9 @@ export component AppWindow inherits Window {
     in property <SettingsForm> settings-form;
     in property <string> toast-text;
     in property <bool> toast-error;
+    /// A button on the toast ("" = none), and its click.
+    in property <string> toast-action;
+    callback toast-act();
 
     // Layout (persisted)
     in-out property <length> scenes-width: 220px;
@@ -691,7 +694,7 @@ export component AppWindow inherits Window {
         height: parent.height;
         rows: root.live-rows;
         toggle(i) => { root.live-toggle(i); }
-        manage => { root.live-panel-open = false; root.settings-page = 0; root.action("settings"); }
+        manage => { root.live-panel-open = false; root.settings-page = 1; root.action("settings"); }
         add-platform => { root.live-panel-open = false; root.action("go-live-setup"); }
         dismiss => { root.live-panel-open = false; }
     }
@@ -854,6 +857,8 @@ export component AppWindow inherits Window {
         y: parent.height - self.height - 44px;
         text: root.toast-text;
         error: root.toast-error;
+        action: root.toast-action;
+        act => { root.toast-act(); }
     }
 
     TooltipLayer {

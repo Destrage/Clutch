@@ -10,6 +10,7 @@ mod clips;
 mod http;
 mod interact;
 mod montage;
+mod performance;
 mod presets;
 mod secret;
 mod settings;
