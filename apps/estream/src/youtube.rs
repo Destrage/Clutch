@@ -166,7 +166,11 @@ fn sign_in(
             return Err("Cancelled".into());
         }
         if Instant::now() >= until {
-            return Err("The YouTube sign-in timed out. Try again.".into());
+            // Google never sent the browser back: the window was closed, or Google showed an
+            // error page (for example when the app has reached its user limit).
+            return Err("Google didn't finish the sign-in. If you closed the window, try again; \
+                        if Google showed an error, connecting YouTube may be unavailable for now."
+                .into());
         }
         let stream = match listener.accept() {
             Ok((stream, _)) => stream,
