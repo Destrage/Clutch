@@ -28,13 +28,18 @@ and sound knobs with level meters.
 ## ADDED Requirements
 
 ### Requirement: Sound knobs
-Each audio source SHALL have a round knob that shows its volume and live level. Clicking it SHALL
-mute or unmute, dragging up or down or scrolling SHALL change the volume, double-clicking SHALL
-reset it to 0 dB, and clicking the source's name SHALL open its audio settings.
+Each audio source SHALL have a round knob that shows its volume and live level. Double-clicking it
+SHALL mute or unmute, dragging up or down or scrolling SHALL change the volume, Ctrl+clicking SHALL
+reset it to 0 dB, and clicking the source's name SHALL open its audio settings. A single click
+SHALL do nothing, so grabbing the knob to change the volume never mutes it.
 
-#### Scenario: Click mutes
-- **WHEN** the user clicks a knob without dragging
+#### Scenario: Double-click mutes
+- **WHEN** the user double-clicks a knob
 - **THEN** the source is muted, or unmuted if it was muted, and its volume is unchanged
+
+#### Scenario: Single click does nothing
+- **WHEN** the user clicks a knob once without dragging
+- **THEN** neither the mute state nor the volume changes
 
 #### Scenario: Drag changes volume
 - **WHEN** the user drags a knob upward

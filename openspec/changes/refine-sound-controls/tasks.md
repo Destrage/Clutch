@@ -1,8 +1,9 @@
 # Tasks: refine-sound-controls
 
 ## 1. Knob
-- [x] 1.1 `SoundKnob` widget: ring for volume, level glow, click mutes, drag/scroll sets volume,
-      double-click resets to 0 dB, dB readout while dragging, accessible as a slider
+- [x] 1.1 `SoundKnob` widget: ring for volume, level glow, double-click mutes (single click does
+      nothing), drag/scroll sets volume, Ctrl+click resets to 0 dB, dB readout while dragging,
+      accessible as a slider
 - [x] 1.2 Live deck: knobs replace the faders
 - [x] 1.3 Stage: knobs replace the mute buttons
 
@@ -17,5 +18,5 @@
       monitored source would be captured twice
 
 ## 4. Check
-- [ ] 4.1 Clippy; in-app check of click, drag, scroll, double-click and the settings panel in both
+- [ ] 4.1 Clippy; in-app check of double-click, Ctrl+click, drag, scroll and the settings panel in both
       views; media heard locally once and on the stream once

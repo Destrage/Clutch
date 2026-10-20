@@ -10,7 +10,8 @@ both views. The item settings panel also has no way to close it other than click
 
 ## What Changes
 - **Sound knobs** replace the Live deck faders and the Stage mute buttons:
-  - Click: mute or unmute. Drag up/down (or scroll): volume. Double-click: back to 0 dB.
+  - Double-click: mute or unmute (a single click does nothing, so adjusting the volume never
+    mutes by accident). Drag up/down (or scroll): volume. Ctrl+click: back to 0 dB.
   - The ring shows the volume; the live level glows inside it; muted knobs are dimmed with a
     crossed-out speaker.
   - The value (in dB) shows while dragging; the name sits under the knob.

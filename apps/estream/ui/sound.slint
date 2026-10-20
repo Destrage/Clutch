@@ -7,8 +7,9 @@ import { MixerStrip, AudioInspect } from "types.slint";
 import { Icon, IconButton, NumberField, Toggle, Slider, Select, SectionTitle, Hint } from "widgets.slint";
 
 // A source's sound as a knob. The ring shows the volume (-60 dB to 0 dB) and the live level glows
-// inside. Click mutes, dragging up/down or scrolling sets the volume, double-click goes back to
-// 0 dB, and the name opens the sound's settings.
+// inside. Double-click mutes, dragging up/down or scrolling sets the volume, Ctrl+click goes back
+// to 0 dB, and the name opens the sound's settings. A single click does nothing, so grabbing the
+// knob to change the volume never mutes it by accident.
 export component SoundKnob inherits Rectangle {
     in property <MixerStrip> strip;
     in property <length> size: 52px;
@@ -24,8 +25,8 @@ export component SoundKnob inherits Rectangle {
     property <bool> dragging;
     // The release that ends a drag isn't also a click.
     property <bool> drag-ended;
-    // A click waits briefly, so a double-click doesn't mute and unmute.
-    property <bool> pending-mute;
+    // Ctrl was held when the press began (Ctrl+click resets to 0 dB).
+    property <bool> ctrl-press;
     property <bool> scrolled;
     // How far to drag for the whole range.
     property <length> travel: 160px;
@@ -114,6 +115,7 @@ export component SoundKnob inherits Rectangle {
                             root.start-y = self.mouse-y;
                             root.dragging = false;
                             root.drag-ended = false;
+                            root.ctrl-press = e.modifiers.control;
                         } else if (e.kind == PointerEventKind.up && root.dragging) {
                             root.dragging = false;
                             root.drag-ended = true;
@@ -124,7 +126,6 @@ export component SoundKnob inherits Rectangle {
                         if (self.pressed) {
                             if (!root.dragging && abs(self.mouse-y - root.start-y) > 3px) {
                                 root.dragging = true;
-                                root.pending-mute = false;
                                 Hint.text = "";
                             }
                             if (root.dragging) {
@@ -133,14 +134,15 @@ export component SoundKnob inherits Rectangle {
                         }
                     }
                     clicked => {
-                        if (!root.drag-ended) {
-                            root.pending-mute = true;
+                        if (!root.drag-ended && root.ctrl-press) {
+                            root.fader(1);
+                            root.commit();
                         }
                     }
                     double-clicked => {
-                        root.pending-mute = false;
-                        root.fader(1);
-                        root.commit();
+                        if (!root.ctrl-press) {
+                            root.toggle-mute();
+                        }
                     }
                     scroll-event(e) => {
                         root.fader(clamp(root.f + (e.delta-y > 0 ? 0.03 : -0.03), 0, 1));
@@ -150,7 +152,7 @@ export component SoundKnob inherits Rectangle {
                     changed has-hover => {
                         if (self.has-hover && !root.dragging) {
                             Hint.text = root.strip.problem != "" ? root.strip.problem
-                                : root.strip.name + " · " + root.db-text() + " · click to " + (root.strip.muted ? "unmute" : "mute") + ", drag for volume";
+                                : root.strip.name + " · " + root.db-text() + " · double-click to " + (root.strip.muted ? "unmute" : "mute") + ", drag for volume";
                             Hint.x = root.absolute-position.x + root.width / 2;
                             Hint.y = root.absolute-position.y - 28px;
                         } else {
@@ -183,14 +185,6 @@ export component SoundKnob inherits Rectangle {
         }
     }
 
-    Timer {
-        interval: 250ms;
-        running: root.pending-mute;
-        triggered => {
-            root.pending-mute = false;
-            root.toggle-mute();
-        }
-    }
     // Scrolling ends as one undo step, shortly after the last turn.
     Timer {
         interval: 600ms;

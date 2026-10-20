@@ -331,7 +331,7 @@ fn wix_source(stage: &Path, assets: &Path) -> Result<String> {
 
     <Icon Id="clutch.ico" SourceFile="{icon}" />
     <Property Id="ARPPRODUCTICON" Value="clutch.ico" />
-    <Property Id="ARPURLINFOABOUT" Value="https://github.com/Destrage/Clutch" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/Destrage/clutch-beta" />
     <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
     <WixVariable Id="WixUILicenseRtf" Value="{license}" />
     <WixVariable Id="WixUIBannerBmp" Value="{banner}" />
@@ -343,12 +343,13 @@ fn wix_source(stage: &Path, assets: &Path) -> Result<String> {
     <Property Id="WixShellExecTarget" Value="[#{exe}]" />
     <CustomAction Id="LaunchApp" BinaryKey="WixCA" DllEntry="WixShellExec" Impersonate="yes" />
 
-    <!-- Shortcuts are opt-in (unchecked on a fresh install); an upgrade keeps the earlier choice,
-         found from the values the shortcut components write. -->
+    <!-- The Start menu shortcut is checked on a fresh install (Windows search finds apps through
+         it); the desktop one is opt-in. An upgrade keeps an earlier desktop choice, found from the
+         value its component writes. -->
     <Property Id="DESKTOPSHORTCUT" Secure="yes">
       <RegistrySearch Id="FindDesktopShortcut" Root="HKCU" Key="Software\Clutch" Name="DesktopShortcut" Type="raw" />
     </Property>
-    <Property Id="STARTMENUSHORTCUT" Secure="yes">
+    <Property Id="STARTMENUSHORTCUT" Value="1" Secure="yes">
       <RegistrySearch Id="FindStartMenuShortcut" Root="HKCU" Key="Software\Clutch" Name="StartMenuShortcut" Type="raw" />
     </Property>
     <UI>
