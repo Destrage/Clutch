@@ -69,6 +69,11 @@ pub struct App {
     mixer_at: Instant,
     hover: Option<ItemId>,
     drag: Option<Drag>,
+    /// Interactive browser sources: the page the left button went down on (and its item),
+    /// the page under the pointer, and the page that has the keyboard.
+    web_press: Option<(ItemId, String)>,
+    web_hover: Option<String>,
+    web_focus: Option<String>,
     shut_down: bool,
     clipboard: Option<SceneItem>,
     dirty: bool,
@@ -533,6 +538,9 @@ impl App {
             mixer_at: Instant::now(),
             hover: None,
             drag: None,
+            web_press: None,
+            web_hover: None,
+            web_focus: None,
             shut_down: false,
             clipboard: None,
             dirty: false,
@@ -6975,6 +6983,10 @@ impl App {
 
     pub fn pointer(&mut self, kind: &str, x: f32, y: f32, px: f32, mods: Modifiers) {
         let p = Vec2::new(x, y);
+        // Interactive browser sources take the pointer, unless Alt is held (Alt edits them).
+        if self.web_pointer(kind, p, mods) {
+            return;
+        }
         match kind {
             "down" => self.pointer_down(p, px),
             "move" => self.pointer_move(p, px, mods),
@@ -6984,6 +6996,115 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// Where canvas point `p` lands on item `item`'s page, if it's an interactive browser
+    /// source: the page id, the page point and whether it's on the page.
+    fn web_point(&self, item: ItemId, p: Vec2) -> Option<(String, Vec2, bool)> {
+        let (snapshot, _, scene) = self.canvas_and_scene()?;
+        let scene_item = snapshot.scene(scene?)?.find_item(item)?;
+        let source = scene_item.source_id()?;
+        let def = snapshot.source(source)?;
+        let interactive = def
+            .settings
+            .get("interactive")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if def.kind != "browser" || !interactive {
+            return None;
+        }
+        let g = self.geoms.iter().find(|g| g.id == item)?;
+        let size = estream_core::Size::new(g.source_size.x, g.source_size.y);
+        let (at, inside) =
+            interact::source_point(g.parent, &scene_item.transform, scene_item.crop, size, p)?;
+        Some((source.to_string(), at, inside))
+    }
+
+    /// The interactive browser source on top at `p`: its item, page id and page point.
+    fn web_target(&self, p: Vec2) -> Option<(ItemId, String, Vec2)> {
+        let top = self
+            .geoms
+            .iter()
+            .rev()
+            .filter(|g| g.visible && !g.is_group)
+            .find(|g| g.contains(p))?;
+        let (page, at, inside) = self.web_point(top.id, p)?;
+        inside.then_some((top.id, page, at))
+    }
+
+    /// Gives the keyboard back to the studio.
+    fn web_blur(&mut self) {
+        if let Some(page) = self.web_focus.take() {
+            estream_capture::media::browser::host().focus(&page, false);
+        }
+    }
+
+    /// Sends the pointer to an interactive browser source when it's over one, or while a press
+    /// on one is held. Returns true if the page took it.
+    fn web_pointer(&mut self, kind: &str, p: Vec2, mods: Modifiers) -> bool {
+        use crate::chat::send_pointer;
+        // A held press keeps going to its page, even outside it (text selection, sliders).
+        if let Some((item, page)) = self.web_press.clone() {
+            let at = self.web_point(item, p).map_or(p, |(_, at, _)| at);
+            match kind {
+                "up" => {
+                    self.web_press = None;
+                    send_pointer(&page, false, "up", at.x, at.y, 0, 0.0, 0.0);
+                }
+                "move" => send_pointer(&page, true, "move", at.x, at.y, 0, 0.0, 0.0),
+                _ => {}
+            }
+            return true;
+        }
+        let target = if mods.alt || self.drag.is_some() {
+            None
+        } else {
+            self.web_target(p)
+        };
+        let over = target.as_ref().map(|(_, page, _)| page.clone());
+        if self.web_hover != over {
+            if let Some(old) = self.web_hover.take() {
+                send_pointer(&old, false, "leave", 0.0, 0.0, 0, 0.0, 0.0);
+            }
+            self.web_hover = over;
+        }
+        let Some((item, page, at)) = target else {
+            if kind == "down" {
+                self.web_blur();
+            }
+            return false;
+        };
+        match kind {
+            "down" => {
+                if self.web_focus.as_deref() != Some(page.as_str()) {
+                    self.web_blur();
+                    estream_capture::media::browser::host().focus(&page, true);
+                    self.web_focus = Some(page.clone());
+                }
+                send_pointer(&page, true, "down", at.x, at.y, 0, 0.0, 0.0);
+                self.web_press = Some((item, page));
+            }
+            "move" => {
+                send_pointer(&page, false, "move", at.x, at.y, 0, 0.0, 0.0);
+                self.hover = None;
+                if let Some(w) = self.window() {
+                    w.set_cursor("default".into());
+                    w.set_hover_box(self.hover_box());
+                }
+            }
+            _ => {}
+        }
+        true
+    }
+
+    /// The wheel over the preview: scrolls an interactive page under the pointer. Returns true
+    /// if a page took it (otherwise the preview pans).
+    pub fn preview_wheel(&mut self, x: f32, y: f32, dx: f32, dy: f32) -> bool {
+        let Some((_, page, at)) = self.web_target(Vec2::new(x, y)) else {
+            return false;
+        };
+        crate::chat::send_pointer(&page, false, "wheel", at.x, at.y, 0, dx, dy);
+        true
     }
 
     fn pointer_down(&mut self, p: Vec2, px: f32) {
@@ -7121,6 +7242,16 @@ impl App {
 
     /// Handles a key press that no focused widget consumed. Returns true if used.
     pub fn key(&mut self, text: &str, ctrl: bool, shift: bool, alt: bool) -> bool {
+        // An interactive browser source that was clicked has the keyboard; Escape gives it back.
+        if let Some(page) = self.web_focus.clone() {
+            if text == slint::SharedString::from(slint::platform::Key::Escape).as_str() {
+                self.web_blur();
+            } else {
+                crate::chat::send_key(&page, text, true, ctrl, shift, alt);
+                crate::chat::send_key(&page, text, false, ctrl, shift, alt);
+            }
+            return true;
+        }
         // Without system-wide hotkeys, macro and clip hotkeys work while Clutch is in front.
         if let Some(chord) =
             estream_automation::hotkeys::chord_from_slint(text, ctrl, alt, shift, false)
@@ -8195,6 +8326,13 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
         let app = app.clone();
         w.on_key(move |text, ctrl, shift, alt| match app.try_borrow_mut() {
             Ok(mut a) => a.key(&text, ctrl, shift, alt),
+            Err(_) => false,
+        });
+    }
+    {
+        let app = app.clone();
+        w.on_preview_wheel(move |x, y, dx, dy| match app.try_borrow_mut() {
+            Ok(mut a) => a.preview_wheel(x, y, dx, dy),
             Err(_) => false,
         });
     }

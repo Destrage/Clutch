@@ -523,6 +523,9 @@ pub fn schema() -> PropertySchema {
         Property::int("width", "Width", 16, 7680, 800),
         Property::int("height", "Height", 16, 4320, 600),
         Property::int("fps", "Frame rate", 1, 60, 30),
+        Property::bool("interactive", "Interactive", false).hint(
+            "Clicks, scrolling and typing in the preview go to the page; hold Alt to move it",
+        ),
         Property::text("css", "Custom CSS", true, DEFAULT_CSS),
     ])
 }

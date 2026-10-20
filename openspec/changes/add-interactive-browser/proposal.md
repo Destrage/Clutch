@@ -8,8 +8,7 @@ The browser helper already takes mouse, wheel and keyboard input for the Chat pa
 just isn't connected to browser sources.
 
 ## What Changes
-- **Interactive** switch on each browser source (in its settings and in the right-click menu of
-  the source in *In this scene*). Off by default.
+- **Interactive** switch in each browser source's settings. Off by default.
 - While it's on, the pointer over that source in the preview goes to the page: moving, clicking
   and the wheel, mapped from canvas pixels to page pixels through the item's transform and crop.
   Typing goes to the page while it has focus (after a click on it); **Esc** gives the keyboard
@@ -23,4 +22,4 @@ just isn't connected to browser sources.
 - Affected specs: browser-source (new requirement).
 - Affected code: `crates/estream-capture/src/media/browser.rs` (the `interactive` setting;
   input for a source's page), `apps/estream/src/app.rs` and `interact.rs` (routing preview
-  pointer and keys), `apps/estream/ui` (menu toggle, cursor, wheel).
+  pointer and keys), `apps/estream/ui` (wheel over the preview).

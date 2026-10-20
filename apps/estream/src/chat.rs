@@ -1,7 +1,7 @@
 //! Chat panel: one tab per destination that has a chat, each showing the platform's own
 //! pop-out chat page in an interactive browser page. Sign-ins live in the browser profile.
 
-use estream_capture::media::browser::{PanelPage, Pointer, mods};
+use estream_capture::media::browser::{self, PanelPage, Pointer, mods};
 use estream_media::Service;
 
 /// The pop-out chat page for a destination, or why there is none.
@@ -167,14 +167,14 @@ impl ChatUi {
         hold(&mut held, kind, button);
         self.held = held;
         if let Some(page) = self.page() {
-            send_pointer(page, held, kind, x, y, button, dx, dy);
+            send_pointer(page.id(), held, kind, x, y, button, dx, dy);
         }
     }
 
     /// A key from the UI: `text` as Slint reports it.
     pub fn key(&mut self, text: &str, down: bool, ctrl: bool, shift: bool, alt: bool) {
         if let Some(page) = self.page() {
-            send_key(page, text, down, ctrl, shift, alt);
+            send_key(page.id(), text, down, ctrl, shift, alt);
         }
     }
 }
@@ -213,11 +213,11 @@ impl WebDialog {
 
     pub fn pointer(&mut self, kind: &str, x: f32, y: f32, button: i32, dx: f32, dy: f32) {
         hold(&mut self.held, kind, button);
-        send_pointer(&self.page, self.held, kind, x, y, button, dx, dy);
+        send_pointer(self.page.id(), self.held, kind, x, y, button, dx, dy);
     }
 
     pub fn key(&mut self, text: &str, down: bool, ctrl: bool, shift: bool, alt: bool) {
-        send_key(&self.page, text, down, ctrl, shift, alt);
+        send_key(self.page.id(), text, down, ctrl, shift, alt);
     }
 
     /// The newest frame (if one arrived), and what to show instead of the page ("" for none).
@@ -251,7 +251,7 @@ pub fn hold(held: &mut bool, kind: &str, button: i32) {
 /// A pointer event from the UI, in page pixels.
 #[allow(clippy::too_many_arguments)]
 pub fn send_pointer(
-    page: &PanelPage,
+    page: &str,
     held: bool,
     kind: &str,
     x: f32,
@@ -260,20 +260,23 @@ pub fn send_pointer(
     dx: f32,
     dy: f32,
 ) {
-    page.mouse(Pointer {
-        kind,
-        x: x.round() as i32,
-        y: y.round() as i32,
-        button: button.clamp(0, 2) as u8,
-        clicks: 1,
-        dx: dx.round() as i32,
-        dy: dy.round() as i32,
-        mods: if held { mods::LEFT_BUTTON } else { 0 },
-    });
+    browser::host().mouse(
+        page,
+        Pointer {
+            kind,
+            x: x.round() as i32,
+            y: y.round() as i32,
+            button: button.clamp(0, 2) as u8,
+            clicks: 1,
+            dx: dx.round() as i32,
+            dy: dy.round() as i32,
+            mods: if held { mods::LEFT_BUTTON } else { 0 },
+        },
+    );
 }
 
 /// A key from the UI: `text` as Slint reports it.
-pub fn send_key(page: &PanelPage, text: &str, down: bool, ctrl: bool, shift: bool, alt: bool) {
+pub fn send_key(page: &str, text: &str, down: bool, ctrl: bool, shift: bool, alt: bool) {
     let mut flags = 0;
     if ctrl {
         flags |= mods::CONTROL;
@@ -286,7 +289,8 @@ pub fn send_key(page: &PanelPage, text: &str, down: bool, ctrl: bool, shift: boo
     }
     let (code, ch) = key_code(text, ctrl);
     if code != 0 {
-        page.key(
+        browser::host().key(
+            page,
             if down { "down" } else { "up" },
             code,
             ch.unwrap_or(0),
@@ -300,7 +304,7 @@ pub fn send_key(page: &PanelPage, text: &str, down: bool, ctrl: bool, shift: boo
         && let Some(c) = ch
         && (c >= 0x20 || c == 0x0d)
     {
-        page.key("char", code, c, flags);
+        browser::host().key(page, "char", code, c, flags);
     }
 }
 

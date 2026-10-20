@@ -254,6 +254,7 @@ export component AppWindow inherits Window {
 
     callback key(string, bool, bool, bool) -> bool;
     callback preview-pointer(string, float, float, float, bool, bool, bool);
+    callback preview-wheel(float, float, float, float) -> bool;
     callback scene-activate(string);
     callback scene-add();
     callback scene-duplicate(string);
@@ -429,6 +430,9 @@ export component AppWindow inherits Window {
                             pointer(kind, x, y, px, shift, alt, ctrl) => {
                                 if (kind == "down") { main-keys.focus(); }
                                 root.preview-pointer(kind, x, y, px, shift, alt, ctrl);
+                            }
+                            wheel(x, y, dx, dy) => {
+                                return root.preview-wheel(x, y, dx, dy);
                             }
                         }
                         if root.studio-mode: TransitionColumn {

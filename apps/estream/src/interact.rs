@@ -618,6 +618,27 @@ pub fn centered(geom: &ItemGeom, transform: ItemTransform, canvas: Vec2) -> Item
     }
 }
 
+/// Where canvas point `p` lands on an item's source, in source pixels, through the item's
+/// transform (with bounds and alignment) and crop. The flag says whether it's on the visible
+/// content; outside, the point keeps going (so a drag that leaves the page still tracks).
+pub fn source_point(
+    parent: Affine2,
+    transform: &ItemTransform,
+    crop: Crop,
+    source_size: Size,
+    p: Vec2,
+) -> Option<(Vec2, bool)> {
+    let layout = transform.layout(crop, source_size);
+    let m = parent * layout.matrix;
+    if m.matrix2.determinant().abs() < 1e-9 {
+        return None;
+    }
+    let q = m.inverse().transform_point2(p);
+    let inside = (0.0..=1.0).contains(&q.x) && (0.0..=1.0).contains(&q.y);
+    let uv = layout.uv_min + q * (layout.uv_max - layout.uv_min);
+    Some((uv * source_size.to_vec2(), inside))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -626,6 +647,93 @@ mod tests {
 
     fn approx(a: Vec2, b: Vec2) {
         assert!((a - b).abs().max_element() < 1e-2, "{a:?} != {b:?}");
+    }
+
+    #[test]
+    fn source_point_follows_scale_crop_and_rotation() {
+        let page = Size::new(800.0, 600.0);
+        // Half size, moved to (100, 50).
+        let t = ItemTransform {
+            position: Vec2::new(100.0, 50.0),
+            scale: Vec2::splat(0.5),
+            ..Default::default()
+        };
+        let (pt, inside) = source_point(
+            Affine2::IDENTITY,
+            &t,
+            Crop::NONE,
+            page,
+            Vec2::new(300.0, 200.0),
+        )
+        .unwrap();
+        approx(pt, Vec2::new(400.0, 300.0));
+        assert!(inside);
+        // Cropping 100 px off the left shifts what's under the pointer.
+        let crop = Crop {
+            left: 100,
+            ..Crop::NONE
+        };
+        let (pt, _) =
+            source_point(Affine2::IDENTITY, &t, crop, page, Vec2::new(100.0, 50.0)).unwrap();
+        approx(pt, Vec2::new(100.0, 0.0));
+        // Outside the item: still mapped, but flagged.
+        let (_, inside) = source_point(
+            Affine2::IDENTITY,
+            &t,
+            Crop::NONE,
+            page,
+            Vec2::new(10.0, 10.0),
+        )
+        .unwrap();
+        assert!(!inside);
+        // Rotated 90° clockwise around the position: canvas +y is page +x.
+        let r = ItemTransform {
+            position: Vec2::new(500.0, 0.0),
+            rotation: 90.0,
+            ..Default::default()
+        };
+        let (pt, inside) = source_point(
+            Affine2::IDENTITY,
+            &r,
+            Crop::NONE,
+            page,
+            Vec2::new(490.0, 30.0),
+        )
+        .unwrap();
+        approx(pt, Vec2::new(30.0, 10.0));
+        assert!(inside);
+    }
+
+    #[test]
+    fn source_point_inside_fit_bounds() {
+        // A 800×600 page fitted into a 400×400 box, centred: 400×300 at y = 50.
+        let t = ItemTransform {
+            bounds_mode: BoundsMode::Fit,
+            bounds: Vec2::splat(400.0),
+            bounds_alignment: estream_core::Alignment::Center,
+            ..Default::default()
+        };
+        let page = Size::new(800.0, 600.0);
+        let (pt, inside) = source_point(
+            Affine2::IDENTITY,
+            &t,
+            Crop::NONE,
+            page,
+            Vec2::new(200.0, 200.0),
+        )
+        .unwrap();
+        approx(pt, Vec2::new(400.0, 300.0));
+        assert!(inside);
+        // The letterbox above the page isn't on it.
+        let (_, inside) = source_point(
+            Affine2::IDENTITY,
+            &t,
+            Crop::NONE,
+            page,
+            Vec2::new(200.0, 20.0),
+        )
+        .unwrap();
+        assert!(!inside);
     }
 
     fn setup(items: Vec<SceneItem>) -> (Scene, impl Fn(SourceId) -> Option<Size>) {

@@ -20,6 +20,8 @@ export component Preview inherits Rectangle {
 
     // kind: "down" | "move" | "up"; x/y in canvas pixels; px = canvas px per screen px.
     callback pointer(kind: string, x: float, y: float, px: float, shift: bool, alt: bool, ctrl: bool);
+    /// The wheel at canvas x/y; true if an interactive page took it.
+    callback wheel(x: float, y: float, dx: float, dy: float) -> bool;
 
     out property <float> fit: max(0.01, min((self.width - 48px) / 1px / canvas-w, (self.height - 48px) / 1px / canvas-h));
     out property <float> scale: fit * zoom;
@@ -176,6 +178,11 @@ export component Preview inherits Rectangle {
         }
 
         scroll-event(e) => {
+            // An interactive browser source under the pointer scrolls instead of the preview.
+            if (!e.modifiers.control && !e.modifiers.shift
+                && root.wheel(canvas-x(), canvas-y(), e.delta-x / 1px, e.delta-y / 1px)) {
+                return EventResult.accept;
+            }
             if (e.modifiers.control) {
                 // Zoom around the cursor.
                 let cx = (self.mouse-x - root.img-x) / root.scale;
