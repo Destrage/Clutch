@@ -531,7 +531,7 @@ component SettingRow inherits HorizontalLayout {
         width: 170px;
         alignment: center;
         Text { text: root.label; color: Theme.text; font-size: Theme.font-m; }
-        if root.hint != "": Text { text: root.hint; color: Theme.text-faint; font-size: Theme.font-xs; wrap: word-wrap; }
+        if root.hint != "": Text { width: 170px; text: root.hint; color: Theme.text-faint; font-size: Theme.font-xs; wrap: word-wrap; }
     }
     @children
 }
@@ -833,6 +833,7 @@ export component SettingsDialog inherits Modal {
                         color: Theme.text-faint;
                         font-size: Theme.font-s;
                         wrap: word-wrap;
+                        width: scroller.page-width - 36px;
                     }
                     for d[i] in root.form.destinations: Rectangle {
                         height: 36px;
@@ -1017,6 +1018,7 @@ export component SettingsDialog inherits Modal {
                         color: Theme.text-faint;
                         font-size: Theme.font-s;
                         wrap: word-wrap;
+                        width: scroller.page-width - 36px;
                     }
                     if root.form.clip-ask != "": Rectangle {
                         height: ask.preferred-height + 16px;
@@ -1083,6 +1085,7 @@ export component SettingsDialog inherits Modal {
                         color: Theme.text-faint;
                         font-size: Theme.font-s;
                         wrap: word-wrap;
+                        width: scroller.page-width - 36px;
                     }
                     for g[i] in root.form.clip-integrations: HorizontalLayout {
                         spacing: 10px;
@@ -1158,6 +1161,7 @@ export component SettingsDialog inherits Modal {
                         color: Theme.text-faint;
                         font-size: Theme.font-s;
                         wrap: word-wrap;
+                        width: scroller.page-width - 36px;
                     }
                     SettingRow {
                         label: "Canvas";
@@ -1191,6 +1195,7 @@ export component SettingsDialog inherits Modal {
                         color: Theme.text-faint;
                         font-size: Theme.font-s;
                         wrap: word-wrap;
+                        width: scroller.page-width - 36px;
                     }
                     SettingRow {
                         label: "Enable server";

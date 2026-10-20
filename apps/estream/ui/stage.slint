@@ -57,11 +57,6 @@ component SceneCard inherits Rectangle {
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
-            ta := TouchArea {
-                mouse-cursor: MouseCursor.pointer;
-                clicked => { root.activate(); }
-                double-clicked => { root.renaming = root.scene.id; }
-            }
             if root.studio-mode && root.scene.live: Rectangle {
                 x: 6px;
                 y: 6px;
@@ -71,20 +66,28 @@ component SceneCard inherits Rectangle {
                 background: Theme.live;
                 live := Text { text: "LIVE"; color: Theme.on-accent; font-size: 10px; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
             }
-            // Scene actions on hover.
-            Rectangle {
-                visible: ta.has-hover || actions-ta.has-hover;
-                x: parent.width - self.width - 4px;
-                y: 4px;
-                width: row.preferred-width;
-                height: 26px;
-                border-radius: 6px;
-                background: Theme.surface.with-alpha(0.92);
-                actions-ta := TouchArea { }
-                row := HorizontalLayout {
-                    IconButton { icon: Icons.pencil; tooltip: "Rename"; size: 26px; icon-size: 13px; clicked => { root.renaming = root.scene.id; } }
-                    IconButton { icon: Icons.copy; tooltip: "Duplicate scene"; size: 26px; icon-size: 13px; clicked => { root.duplicate(); } }
-                    IconButton { icon: Icons.trash; tooltip: "Delete scene"; size: 26px; icon-size: 13px; enabled: root.can-delete; clicked => { root.remove(); } }
+            // The actions are inside the card's TouchArea, which stays hovered while the pointer
+            // is over them; beside it, moving onto a button hid the buttons and they flickered.
+            ta := TouchArea {
+                mouse-cursor: MouseCursor.pointer;
+                clicked => { root.activate(); }
+                double-clicked => { root.renaming = root.scene.id; }
+                // Scene actions on hover.
+                Rectangle {
+                    visible: ta.has-hover;
+                    x: parent.width - self.width - 4px;
+                    y: 4px;
+                    width: row.preferred-width;
+                    height: 26px;
+                    border-radius: 6px;
+                    background: Theme.surface.with-alpha(0.92);
+                    // Clicks on the bar itself don't switch scenes.
+                    TouchArea { }
+                    row := HorizontalLayout {
+                        IconButton { icon: Icons.pencil; tooltip: "Rename"; size: 26px; icon-size: 13px; clicked => { root.renaming = root.scene.id; } }
+                        IconButton { icon: Icons.copy; tooltip: "Duplicate scene"; size: 26px; icon-size: 13px; clicked => { root.duplicate(); } }
+                        IconButton { icon: Icons.trash; tooltip: "Delete scene"; size: 26px; icon-size: 13px; enabled: root.can-delete; clicked => { root.remove(); } }
+                    }
                 }
             }
         }

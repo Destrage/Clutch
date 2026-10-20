@@ -562,79 +562,81 @@ export component ScenesPanel inherits Panel {
                 accessible-item-selected: scene.active;
                 accessible-action-default => { root.activate(scene.id); }
 
+                // The row lives inside its TouchArea, which stays hovered over the buttons; beside it,
+                // moving onto a button removed the buttons and they flickered.
                 row-ta := TouchArea {
                     mouse-cursor: MouseCursor.pointer;
                     clicked => { root.activate(scene.id); }
                     double-clicked => { root.renaming = scene.id; }
-                }
-                HorizontalLayout {
-                    padding-left: 10px;
-                    padding-right: 4px;
-                    spacing: 8px;
-                    VerticalLayout {
-                        alignment: center;
-                        Rectangle {
-                            width: 6px;
-                            height: 6px;
-                            border-radius: 3px;
-                            background: scene.active ? Theme.accent : Theme.text-faint.with-alpha(0.5);
-                        }
-                    }
-                    if root.renaming == scene.id: VerticalLayout {
-                        alignment: center;
-                        horizontal-stretch: 1;
-                        TextField {
-                            text: scene.name;
-                            label: "Scene name";
-                            init => { self.focus(); }
-                            accepted(t) => {
-                                root.rename(scene.id, t);
-                                root.renaming = "";
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 4px;
+                        spacing: 8px;
+                        VerticalLayout {
+                            alignment: center;
+                            Rectangle {
+                                width: 6px;
+                                height: 6px;
+                                border-radius: 3px;
+                                background: scene.active ? Theme.accent : Theme.text-faint.with-alpha(0.5);
                             }
-                            changed has-focus => {
-                                if (!self.has-focus && root.renaming == scene.id) {
-                                    root.rename(scene.id, self.text);
+                        }
+                        if root.renaming == scene.id: VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 1;
+                            TextField {
+                                text: scene.name;
+                                label: "Scene name";
+                                init => { self.focus(); }
+                                accepted(t) => {
+                                    root.rename(scene.id, t);
                                     root.renaming = "";
+                                }
+                                changed has-focus => {
+                                    if (!self.has-focus && root.renaming == scene.id) {
+                                        root.rename(scene.id, self.text);
+                                        root.renaming = "";
+                                    }
                                 }
                             }
                         }
-                    }
-                    if root.renaming != scene.id: Text {
-                        text: scene.name;
-                        color: scene.active ? Theme.text : Theme.text-muted;
-                        font-size: Theme.font-m;
-                        font-weight: scene.active ? 600 : 400;
-                        vertical-alignment: center;
-                        overflow: elide;
-                        horizontal-stretch: 1;
-                    }
-                    if root.renaming != scene.id && (row-ta.has-hover || scene.active): HorizontalLayout {
-                        VerticalLayout {
-                            alignment: center;
-                            IconButton {
-                                icon: Icons.pencil; tooltip: "Rename (F2)"; size: 24px; icon-size: 13px;
-                                clicked => { root.renaming = scene.id; }
+                        if root.renaming != scene.id: Text {
+                            text: scene.name;
+                            color: scene.active ? Theme.text : Theme.text-muted;
+                            font-size: Theme.font-m;
+                            font-weight: scene.active ? 600 : 400;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            horizontal-stretch: 1;
+                        }
+                        if root.renaming != scene.id && (row-ta.has-hover || scene.active): HorizontalLayout {
+                            VerticalLayout {
+                                alignment: center;
+                                IconButton {
+                                    icon: Icons.pencil; tooltip: "Rename (F2)"; size: 24px; icon-size: 13px;
+                                    clicked => { root.renaming = scene.id; }
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                IconButton {
+                                    icon: Icons.copy; tooltip: "Duplicate scene"; size: 24px; icon-size: 13px;
+                                    clicked => { root.duplicate(scene.id); }
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                IconButton {
+                                    icon: Icons.trash; tooltip: "Delete scene"; size: 24px; icon-size: 13px;
+                                    enabled: root.scenes.length > 1;
+                                    clicked => { root.remove(scene.id); }
+                                }
                             }
                         }
-                        VerticalLayout {
+                        if root.studio-mode && scene.live: VerticalLayout {
                             alignment: center;
-                            IconButton {
-                                icon: Icons.copy; tooltip: "Duplicate scene"; size: 24px; icon-size: 13px;
-                                clicked => { root.duplicate(scene.id); }
-                            }
+                            Badge { text: "LIVE"; tone: Theme.live; }
                         }
-                        VerticalLayout {
-                            alignment: center;
-                            IconButton {
-                                icon: Icons.trash; tooltip: "Delete scene"; size: 24px; icon-size: 13px;
-                                enabled: root.scenes.length > 1;
-                                clicked => { root.remove(scene.id); }
-                            }
-                        }
-                    }
-                    if root.studio-mode && scene.live: VerticalLayout {
-                        alignment: center;
-                        Badge { text: "LIVE"; tone: Theme.live; }
                     }
                 }
             }
