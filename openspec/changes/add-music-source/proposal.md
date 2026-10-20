@@ -12,8 +12,9 @@ A tester built a browser page to do this by hand; it should be a source type.
     ambient, acoustic, cinematic) or type your own tags.
   - It fetches a playlist from Jamendo and plays it through the same player as media files,
     into the mix with its own knob, filters and tracks. Shuffle, **Skip**, **Previous**,
-    play/pause, **Repeat this track**, and an **Up next** list (the playing track and the next
-    14) where a click plays a track. Jamendo sometimes answers a search with no tracks: Clutch
+    play/pause, a **Repeat** button next to them, and a **Playlist** list (the last 3 played, the
+    playing track and what comes next) where a click plays a track. Jamendo sometimes answers a
+    search with no tracks: Clutch
     asks again before saying nothing was found, and a new genre stops the old one's track.
   - **Safe for monetized streams** (on by default): only tracks whose license allows
     commercial use (CC BY, CC BY-SA, CC0). Off, NonCommercial tracks are included too, and the

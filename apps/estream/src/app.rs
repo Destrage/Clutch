@@ -55,6 +55,9 @@ pub struct App {
     layers_model: Rc<VecModel<LayerRow>>,
     guides_model: Rc<VecModel<Guide>>,
     palette_model: Rc<VecModel<PaletteEntry>>,
+    /// The music source's track list, kept between refreshes: replacing it on every refresh
+    /// would rebuild the rows under the pointer and swallow clicks.
+    music_tracks: Rc<VecModel<SharedString>>,
     props_model: Rc<VecModel<PropRow>>,
     /// Cache key and schema behind the current property rows.
     props: Option<((SourceId, String, u64), estream_engine::PropertySchema)>,
@@ -272,8 +275,10 @@ fn golive_key_problem(key: &str) -> Option<&'static str> {
 
 /// Filters added by a voice preset have ids starting with this.
 const VOICE_ID: &str = "voice:";
-/// How many tracks of a music source's playlist the inspector lists (the playing one first).
+/// How many tracks of a music source's playlist the inspector lists, and how many of them
+/// were already played.
 const MUSIC_LIST: usize = 15;
+const MUSIC_PLAYED: usize = 3;
 
 /// Which voice preset a filter chain uses: 0 for none, else its place in the menu.
 fn voice_preset_index(filters: &[AudioFilterDef]) -> i32 {
@@ -548,6 +553,7 @@ impl App {
             layers_model: Rc::new(VecModel::default()),
             guides_model: Rc::new(VecModel::default()),
             palette_model: Rc::new(VecModel::default()),
+            music_tracks: Rc::new(VecModel::default()),
             props_model: Rc::new(VecModel::default()),
             props: None,
             props_generation: 0,
@@ -5439,17 +5445,19 @@ impl App {
         let s = player.status();
         // Music shows the track's credit (title, artist, license) instead of a file name.
         if let Some(music) = self.selected_music() {
-            let (tracks, _) = music.upcoming(MUSIC_LIST);
+            let (tracks, _, current) = music.window(MUSIC_PLAYED, MUSIC_LIST);
+            let tracks: Vec<SharedString> = tracks.into_iter().map(SharedString::from).collect();
+            if self.music_tracks.iter().ne(tracks.iter().cloned()) {
+                self.music_tracks.set_vec(tracks);
+            }
             return MediaInspect {
                 has: true,
                 item: music.now_playing().into(),
                 index: "".into(),
-                tracks: ModelRc::new(VecModel::from(
-                    tracks
-                        .into_iter()
-                        .map(SharedString::from)
-                        .collect::<Vec<_>>(),
-                )),
+                tracks: ModelRc::from(self.music_tracks.clone()),
+                track: current.map_or(-1, |c| c as i32),
+                music: true,
+                repeat: music.repeat(),
                 ..self.media_times(&s)
             };
         }
@@ -5508,13 +5516,14 @@ impl App {
             match command {
                 "next" => return music.skip(),
                 "previous" => return music.previous(),
+                "repeat" => return music.toggle_repeat(),
                 _ => {}
             }
             if let Some(n) = command
                 .strip_prefix("track:")
                 .and_then(|n| n.parse::<usize>().ok())
             {
-                let (_, start) = music.upcoming(MUSIC_LIST);
+                let (_, start, _) = music.window(MUSIC_PLAYED, MUSIC_LIST);
                 return music.play(start + n);
             }
         }

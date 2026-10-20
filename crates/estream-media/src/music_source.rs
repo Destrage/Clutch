@@ -77,8 +77,6 @@ pub fn schema() -> PropertySchema {
             "Only licenses that allow commercial use. Off adds NonCommercial tracks, which are \
              for non-monetized streams only",
         ),
-        Property::bool("repeat", "Repeat this track", false)
-            .hint("Plays the current track again instead of moving on"),
         Property::button("skip", "Track", "Skip").hint(&credit_hint()),
     ])
 }
@@ -231,7 +229,6 @@ fn fetch(tags: &str, safe: bool, offset: usize) -> Result<Vec<Track>, String> {
 struct MusicSettings {
     tags: String,
     safe: bool,
-    repeat: bool,
     skip: i64,
 }
 
@@ -242,7 +239,6 @@ impl MusicSettings {
         Self {
             tags: if custom.is_empty() { genre } else { custom }.to_owned(),
             safe: settings["safe"].as_bool().unwrap_or(true),
-            repeat: settings["repeat"].as_bool().unwrap_or(false),
             skip: settings["skip"].as_i64().unwrap_or(0),
         }
     }
@@ -268,6 +264,8 @@ struct State {
     /// Why nothing is playing (network trouble, no results).
     problem: Option<String>,
     request: Option<Request>,
+    /// Play the current track again instead of moving on (the Repeat button).
+    repeat: bool,
 }
 
 /// Fetches and sequences tracks for one music source, on its own thread.
@@ -324,9 +322,19 @@ impl Controller {
         self.lock().request = Some(Request::Previous);
     }
 
-    /// Plays track `index` of the playlist (as [`Controller::upcoming`] numbers them).
+    /// Plays track `index` of the playlist (as [`Controller::window`] numbers them).
     pub fn play(&self, index: usize) {
         self.lock().request = Some(Request::Play(index));
+    }
+
+    /// Turns Repeat (play the current track again) on or off.
+    pub fn toggle_repeat(&self) {
+        let mut state = self.lock();
+        state.repeat = !state.repeat;
+    }
+
+    pub fn repeat(&self) -> bool {
+        self.lock().repeat
     }
 
     /// The current track's credit, or why nothing plays.
@@ -340,11 +348,12 @@ impl Controller {
         }
     }
 
-    /// Up to `n` tracks from the playing one on: their credits, and the playlist index of the
-    /// first (for [`Controller::play`]).
-    pub fn upcoming(&self, n: usize) -> (Vec<String>, usize) {
+    /// Up to `n` tracks of the playlist around the playing one (up to `before` already played,
+    /// then the playing one and what comes next): their credits, the playlist index of the first
+    /// (for [`Controller::play`]), and where the playing one is in the list.
+    pub fn window(&self, before: usize, n: usize) -> (Vec<String>, usize, Option<usize>) {
         let state = self.lock();
-        let start = state.pos.unwrap_or(0);
+        let start = state.pos.map_or(0, |p| p.saturating_sub(before));
         let tracks = state
             .playlist
             .iter()
@@ -352,7 +361,7 @@ impl Controller {
             .take(n)
             .map(Track::credit)
             .collect();
-        (tracks, start)
+        (tracks, start, state.pos.map(|p| p - start))
     }
 
     fn status(&self) -> SourceStatus {
@@ -483,8 +492,11 @@ fn run(player: Arc<Player>, state: Arc<Mutex<State>>, stop: Arc<AtomicBool>, cre
         let finished = settled
             && (status.state == PlayState::Ended
                 || (status.state == PlayState::Idle && status.error.is_some()));
-        let pos = lock().pos;
-        let Some(step) = next_step(request, pos, finished, settings.repeat) else {
+        let (pos, repeat) = {
+            let s = lock();
+            (s.pos, s.repeat)
+        };
+        let Some(step) = next_step(request, pos, finished, repeat) else {
             continue;
         };
         if step == Next::Replay {

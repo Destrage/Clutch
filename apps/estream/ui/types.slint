@@ -159,8 +159,12 @@ export struct MediaInspect {
     progress: float,
     paused: bool,
     ended: bool,
-    /// Music: the playing track and the ones after it (empty for media files).
+    /// Music: tracks of its playlist around the playing one (empty for media files), which
+    /// one is playing (-1 none), and whether Repeat is on.
     tracks: [string],
+    track: int,
+    music: bool,
+    repeat: bool,
 }
 
 /// A video filter in the inspector.
