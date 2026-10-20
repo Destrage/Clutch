@@ -176,7 +176,26 @@ pub struct App {
     /// Whether Settings has been refreshed since the probe finished.
     hardware_shown: bool,
     /// The profile the toast's button switches to.
-    toast_profile: Option<crate::performance::Profile>,
+    toast_action: Option<ToastAction>,
+    /// Updates: the updater's phase and download progress (shared with its thread), the
+    /// phase the UI last reacted to, whether the running check was asked for, when the next
+    /// scheduled check is, and whether an install was started (so closing doesn't start it
+    /// twice).
+    update_phase: Arc<Mutex<crate::update::Phase>>,
+    update_progress: Arc<crate::update::Progress>,
+    update_seen: crate::update::Phase,
+    update_manual: bool,
+    update_next_check: Instant,
+    update_installing: bool,
+}
+
+/// What the toast's button does.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ToastAction {
+    /// Switch to a lighter performance profile.
+    Profile(crate::performance::Profile),
+    /// Download the update that was found.
+    InstallUpdate,
 }
 
 /// What the shader editor dialog applies to.
@@ -603,7 +622,14 @@ impl App {
             perf_pending: None,
             perf_revert: None,
             hardware_shown: false,
-            toast_profile: None,
+            toast_action: None,
+            update_phase: Arc::default(),
+            update_progress: Arc::default(),
+            update_seen: crate::update::Phase::Idle,
+            update_manual: false,
+            // The first check waits until startup has settled.
+            update_next_check: Instant::now() + Duration::from_secs(15),
+            update_installing: false,
         };
         window.set_scenes(ModelRc::from(app.scenes_model.clone()));
         window.set_layers(ModelRc::from(app.layers_model.clone()));
@@ -1601,6 +1627,15 @@ impl App {
         if let Some(engine) = self.engine.take() {
             engine.shutdown();
         }
+        // A downloaded update installs once Clutch has closed, never while it runs.
+        if !self.update_installing
+            && let Some(file) = self.update_ready_file()
+        {
+            self.update_installing = true;
+            if let Err(e) = crate::update::install_after_exit(&file, false) {
+                tracing::warn!(error = %e, "couldn't start installing the update");
+            }
+        }
     }
 
     // ------------------------------------------------------------ periodic
@@ -1787,35 +1822,165 @@ impl App {
             w.set_toast_error(error);
             w.set_toast_action("".into());
         }
-        self.toast_profile = None;
+        self.toast_action = None;
         self.toast_until =
             Some(Instant::now() + Duration::from_millis(if error { 4500 } else { 2200 }));
     }
 
-    /// A toast with a button that switches to `profile`; it stays up longer, to be clicked.
-    fn toast_with_action(
-        &mut self,
-        text: String,
-        error: bool,
-        action: &str,
-        profile: crate::performance::Profile,
-    ) {
+    /// A toast with a button labelled `label` that does `action`; it stays up longer, to be
+    /// clicked.
+    fn toast_with_action(&mut self, text: String, error: bool, label: &str, action: ToastAction) {
         self.toast(text, error);
         if let Some(w) = self.window() {
-            w.set_toast_action(action.into());
+            w.set_toast_action(label.into());
         }
-        self.toast_profile = Some(profile);
+        self.toast_action = Some(action);
         self.toast_until = Some(Instant::now() + Duration::from_secs(10));
     }
 
     /// The toast's button was clicked.
     pub fn toast_act(&mut self) {
-        if let Some(p) = self.toast_profile.take() {
-            self.apply_profile(p);
-            if self.window().is_some_and(|w| w.get_settings_open()) {
+        match self.toast_action.take() {
+            Some(ToastAction::Profile(p)) => self.apply_profile(p),
+            Some(ToastAction::InstallUpdate) => self.update_download(),
+            None => return,
+        }
+        if let Some(w) = self.window() {
+            w.set_toast_text("".into());
+            if w.get_settings_open() {
                 self.refresh_settings_form();
             }
         }
+    }
+
+    // ------------------------------------------------------------ updates
+
+    /// Checks for an update now (`manual`: the user clicked Check now, so say what happened).
+    fn update_check(&mut self, manual: bool) {
+        let s = &mut self.settings.updates;
+        s.last_check = Some(chrono::Utc::now().timestamp());
+        let auto = s.mode == crate::settings::UpdateMode::Auto;
+        let betas = s.include_betas();
+        self.settings.save(&self.paths.settings());
+        self.update_manual = manual;
+        crate::update::spawn(
+            &self.update_phase,
+            &self.update_progress,
+            self.paths.updates(),
+            betas,
+            auto,
+            None,
+        );
+    }
+
+    /// Downloads the update that was found (Install in Tell me mode).
+    fn update_download(&mut self) {
+        let found = match &*self.update_phase.lock().unwrap_or_else(|e| e.into_inner()) {
+            crate::update::Phase::Available(r) => Some(r.clone()),
+            _ => None,
+        };
+        if let Some(release) = found {
+            crate::update::spawn(
+                &self.update_phase,
+                &self.update_progress,
+                self.paths.updates(),
+                true,
+                true,
+                Some(release),
+            );
+            self.toast(
+                "Downloading the update. It installs when you close Clutch.".into(),
+                false,
+            );
+        }
+    }
+
+    fn update_ready_file(&self) -> Option<PathBuf> {
+        match &*self.update_phase.lock().unwrap_or_else(|e| e.into_inner()) {
+            crate::update::Phase::Ready(_, path) => Some(path.clone()),
+            _ => None,
+        }
+    }
+
+    /// "Restart to update": installs now, unless something is being recorded or streamed.
+    pub fn update_restart(&mut self) {
+        if self.recording.is_some() || !self.stream_dests.is_empty() {
+            self.toast(
+                "Finish recording or streaming first. The update also installs when you close Clutch."
+                    .into(),
+                false,
+            );
+            return;
+        }
+        let Some(file) = self.update_ready_file() else {
+            return;
+        };
+        match crate::update::install_after_exit(&file, true) {
+            Ok(()) => {
+                self.update_installing = true;
+                self.shutdown();
+                let _ = slint::quit_event_loop();
+            }
+            Err(e) => self.toast(format!("Couldn't install the update: {e}"), true),
+        }
+    }
+
+    /// Once a second: start scheduled checks and react when the updater moves on.
+    fn update_tick(&mut self) {
+        use crate::settings::UpdateMode;
+        use crate::update::Phase;
+        let mode = self.settings.updates.mode;
+        if mode != UpdateMode::Off && Instant::now() >= self.update_next_check {
+            self.update_next_check = Instant::now() + Duration::from_secs(6 * 3600);
+            self.update_check(false);
+        }
+        let phase = self
+            .update_phase
+            .lock()
+            .map(|p| p.clone())
+            .unwrap_or_default();
+        if phase == self.update_seen {
+            // The download's progress moves without the phase changing.
+            if matches!(phase, Phase::Downloading(_))
+                && self.window().is_some_and(|w| w.get_settings_open())
+            {
+                self.refresh_settings_form();
+            }
+            return;
+        }
+        // A manual check reports its result (not the "Checking…" step in between).
+        let manual = !matches!(phase, Phase::Checking | Phase::Downloading(_))
+            && std::mem::take(&mut self.update_manual);
+        match &phase {
+            Phase::Available(r) if mode == UpdateMode::Notify || manual => self.toast_with_action(
+                format!("Clutch {} is out", r.version.label()),
+                false,
+                "Install",
+                ToastAction::InstallUpdate,
+            ),
+            Phase::Ready(r, _) => self.toast(
+                format!(
+                    "Clutch {} is ready. It installs when you close Clutch.",
+                    r.version.label()
+                ),
+                false,
+            ),
+            Phase::UpToDate if manual => self.toast("Clutch is up to date".into(), false),
+            Phase::Failed(e) if manual => {
+                self.toast(format!("Couldn't check for updates: {e}"), true)
+            }
+            _ => {}
+        }
+        if let Some(w) = self.window() {
+            w.set_update_ready(match &phase {
+                Phase::Ready(r, _) => r.version.label().into(),
+                _ => "".into(),
+            });
+            if w.get_settings_open() {
+                self.refresh_settings_form();
+            }
+        }
+        self.update_seen = phase;
     }
 
     // ------------------------------------------------------------ appearance
@@ -4257,12 +4422,12 @@ impl App {
             account_name: account.1.into(),
             account_connecting: account.2,
             account_code: account.3.into(),
-            ..self.performance_form(
+            ..self.update_form(self.performance_form(
                 self.clip_settings_form(stream_form(
                     &self.settings.destinations,
                     self.dest_selected,
                 )),
-            )
+            ))
         });
     }
 
@@ -4589,6 +4754,127 @@ impl App {
         }
     }
 
+    /// Settings → Updates fields, on top of `form`.
+    fn update_form(&self, form: SettingsForm) -> SettingsForm {
+        use crate::settings::UpdateMode;
+        use crate::update::Phase;
+        let s = &self.settings.updates;
+        let phase = self
+            .update_phase
+            .lock()
+            .map(|p| p.clone())
+            .unwrap_or_default();
+        let checked = s.last_check.and_then(|t| {
+            chrono::DateTime::from_timestamp(t, 0).map(|d| {
+                d.with_timezone(&chrono::Local)
+                    .format("%-d %b, %-I:%M %p")
+                    .to_string()
+            })
+        });
+        let (status, action, progress) = match &phase {
+            Phase::Idle | Phase::UpToDate => (
+                match (&phase, checked) {
+                    (Phase::UpToDate, Some(c)) => format!("You're up to date. Checked {c}."),
+                    (_, Some(c)) => format!("Last checked {c}."),
+                    _ => "Not checked yet.".to_owned(),
+                },
+                "",
+                -1.0,
+            ),
+            Phase::Checking => ("Checking…".to_owned(), "", -1.0),
+            Phase::Available(r) => (
+                format!("Clutch {} is out.", r.version.label()),
+                "Install",
+                -1.0,
+            ),
+            Phase::Downloading(r) => {
+                let (done, total) = self
+                    .update_progress
+                    .done
+                    .lock()
+                    .map(|p| *p)
+                    .unwrap_or_default();
+                (
+                    format!(
+                        "Downloading Clutch {}… {} of {} MB",
+                        r.version.label(),
+                        done / 1_000_000,
+                        total / 1_000_000
+                    ),
+                    "",
+                    if total > 0 {
+                        done as f32 / total as f32
+                    } else {
+                        0.0
+                    },
+                )
+            }
+            Phase::Ready(r, _) => (
+                format!(
+                    "Clutch {} is ready. It installs when you close Clutch.",
+                    r.version.label()
+                ),
+                "Restart to update",
+                -1.0,
+            ),
+            Phase::Failed(e) => (format!("Couldn't update: {e}."), "", -1.0),
+        };
+        SettingsForm {
+            upd_mode: match s.mode {
+                UpdateMode::Auto => 0,
+                UpdateMode::Notify => 1,
+                UpdateMode::Off => 2,
+            },
+            upd_betas: s.include_betas(),
+            upd_version: crate::update::current().label().into(),
+            upd_status: status.into(),
+            upd_action: action.into(),
+            upd_progress: progress,
+            upd_notes: matches!(
+                phase,
+                Phase::Available(_) | Phase::Downloading(_) | Phase::Ready(..)
+            ),
+            ..form
+        }
+    }
+
+    /// Settings → Updates: one field or button. Returns false if `field` isn't an update one.
+    fn update_setting(&mut self, field: &str, value: f32) -> bool {
+        use crate::settings::UpdateMode;
+        use crate::update::Phase;
+        match field {
+            "upd-mode" => {
+                self.settings.updates.mode = match value.round() as i32 {
+                    1 => UpdateMode::Notify,
+                    2 => UpdateMode::Off,
+                    _ => UpdateMode::Auto,
+                };
+                // Turning automatic installs on downloads what was already found.
+                if self.settings.updates.mode == UpdateMode::Auto {
+                    self.update_download();
+                }
+            }
+            "upd-betas" => self.settings.updates.betas = Some(value > 0.5),
+            "upd-check" => self.update_check(true),
+            // Restart to update when one is downloaded, otherwise Install (download) it.
+            "upd-action" if self.update_ready_file().is_some() => self.update_restart(),
+            "upd-action" => self.update_download(),
+            "upd-notes" => {
+                let page = match &*self.update_phase.lock().unwrap_or_else(|e| e.into_inner()) {
+                    Phase::Available(r) | Phase::Downloading(r) | Phase::Ready(r, _) => {
+                        Some(r.page.clone())
+                    }
+                    _ => None,
+                };
+                if let Some(page) = page {
+                    let _ = crate::shell::open_url(&page);
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
     /// Switches every covered setting to `profile` (keeping the old ones for Revert).
     fn apply_profile(&mut self, profile: crate::performance::Profile) {
         let before = crate::performance::Covered::read(&self.settings);
@@ -4683,6 +4969,7 @@ impl App {
         if ((field.starts_with("clip") || field.starts_with("hype"))
             && self.clip_setting(field, value))
             || (field.starts_with("perf-") && self.performance_setting(field, value))
+            || (field.starts_with("upd-") && self.update_setting(field, value))
         {
             self.settings.save(&self.paths.settings());
             self.refresh_settings_form();
@@ -5348,10 +5635,16 @@ impl App {
                 None
             };
             match lighter {
-                Some(p) => self.toast_with_action(text, problem, "Use a lighter profile", p),
+                Some(p) => self.toast_with_action(
+                    text,
+                    problem,
+                    "Use a lighter profile",
+                    ToastAction::Profile(p),
+                ),
                 None => self.toast(text, problem),
             }
         }
+        self.update_tick();
         // The hardware probe finishes in the background; show its findings once it does.
         if !self.hardware_shown && self.hardware_known() {
             self.hardware_shown = true;
@@ -7333,7 +7626,9 @@ impl App {
     }
 
     pub fn run_id(&mut self, id: &str) {
-        if let Some(scene) = id.strip_prefix("scene:") {
+        if id == "update-restart" {
+            self.update_restart();
+        } else if let Some(scene) = id.strip_prefix("scene:") {
             self.scene_activate(scene);
         } else if let Some(item) = id.strip_prefix("item:") {
             self.layer_select(item);

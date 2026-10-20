@@ -200,6 +200,9 @@ export component TopBar inherits Rectangle {
     callback toggle-stream();
     callback show-deck();
     in property <bool> studio-mode;
+    /// The version an update is ready to install ("" = none).
+    in property <string> update-ready;
+    callback update-restart();
     callback toggle-studio();
     callback open-destinations();
     in property <bool> live-panel-open;
@@ -303,6 +306,17 @@ export component TopBar inherits Rectangle {
 
         Rectangle { horizontal-stretch: 1; }
 
+        if root.update-ready != "": VerticalLayout {
+            alignment: center;
+            Button {
+                text: "Restart to update";
+                has-icon: true;
+                icon: Icons.refresh;
+                kind: "ghost";
+                tooltip: "Clutch " + root.update-ready + " is ready. It also installs when you close Clutch.";
+                clicked => { root.update-restart(); }
+            }
+        }
         VerticalLayout {
             alignment: center;
             Button {

@@ -204,6 +204,8 @@ export component AppWindow inherits Window {
     in-out property <bool> settings-open;
     /// The Settings page shown (kept while Settings is closed, so it reopens there).
     in-out property <int> settings-page;
+    /// The version an update is ready to install ("" = none).
+    in property <string> update-ready;
     in-out property <bool> automation-open;
     in-out property <bool> stats-open;
     in-out property <bool> clips-open;
@@ -393,6 +395,8 @@ export component AppWindow inherits Window {
                 save-replay => { root.action("replay.save"); }
                 open-settings => { root.action("settings"); }
                 studio-mode: root.studio-mode;
+                update-ready: root.update-ready;
+                update-restart => { root.action("update-restart"); }
                 toggle-studio => { root.action("studio.toggle"); }
             }
             // The Stage: the preview fills the page; layers and settings float over it.

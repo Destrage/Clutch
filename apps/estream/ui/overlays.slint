@@ -800,7 +800,7 @@ export component SettingsDialog inherits Modal {
     in property <SettingsForm> form;
     in property <string> remote-status;
     /// The page shown: 0 Performance, 1 Stream, 2 Recording, 3 Clips, 4 Virtual camera,
-    /// 5 Remote control, 6 Appearance.
+    /// 5 Remote control, 6 Appearance, 7 Updates.
     in-out property <int> page;
     property <bool> reveal-password: false;
     property <[{icon: image, label: string}]> pages: [
@@ -811,6 +811,7 @@ export component SettingsDialog inherits Modal {
         { icon: Icons.camera, label: "Virtual camera" },
         { icon: Icons.globe, label: "Remote control" },
         { icon: Icons.palette, label: "Appearance" },
+        { icon: Icons.refresh, label: "Updates" },
     ];
     callback set(string, float);
     callback set-text(string, string);
@@ -1435,6 +1436,86 @@ export component SettingsDialog inherits Modal {
                         }
                     }
                     Text { text: root.form.ffmpeg; color: Theme.text-faint; font-size: Theme.font-xs; }
+                }
+
+                if root.page == 7: VerticalLayout {
+                    spacing: 12px;
+                    SectionTitle { text: "UPDATES"; }
+                    Text {
+                        text: "New versions of Clutch come from its releases on GitHub. Updates never install while you record or stream.";
+                        color: Theme.text-faint;
+                        font-size: Theme.font-s;
+                        wrap: word-wrap;
+                        width: scroller.page-width - 36px;
+                    }
+                    SettingRow {
+                        label: "Updates";
+                        Select {
+                            label: "Updates";
+                            options: [
+                                "Install automatically when Clutch closes",
+                                "Tell me when one is out",
+                                "Off",
+                            ];
+                            current-index: root.form.upd-mode;
+                            selected(i) => { root.set("upd-mode", i); }
+                        }
+                    }
+                    SettingRow {
+                        label: "Include beta versions";
+                        hint: "Get new features sooner; they may have rough edges";
+                        HorizontalLayout {
+                            alignment: start;
+                            VerticalLayout {
+                                alignment: center;
+                                Toggle { checked: root.form.upd-betas; toggled(v) => { root.set("upd-betas", v ? 1 : 0); } }
+                            }
+                        }
+                    }
+                    SettingRow {
+                        label: "Installed";
+                        Text { text: "Clutch " + root.form.upd-version; color: Theme.text; font-size: Theme.font-m; vertical-alignment: center; }
+                    }
+                    Text {
+                        text: root.form.upd-status;
+                        color: Theme.text-muted;
+                        font-size: Theme.font-s;
+                        wrap: word-wrap;
+                        width: scroller.page-width - 36px;
+                    }
+                    if root.form.upd-progress >= 0: Rectangle {
+                        height: 6px;
+                        border-radius: 3px;
+                        background: Theme.surface-3;
+                        Rectangle {
+                            x: 0;
+                            width: parent.width * clamp(root.form.upd-progress, 0, 1);
+                            height: parent.height;
+                            border-radius: 3px;
+                            background: Theme.accent;
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        Button {
+                            text: "Check now";
+                            kind: "ghost";
+                            has-icon: true;
+                            icon: Icons.refresh;
+                            clicked => { root.set("upd-check", 0); }
+                        }
+                        if root.form.upd-notes: Button {
+                            text: "What's new";
+                            kind: "ghost";
+                            clicked => { root.set("upd-notes", 0); }
+                        }
+                        if root.form.upd-action != "": Button {
+                            text: root.form.upd-action;
+                            kind: "primary";
+                            clicked => { root.set("upd-action", 0); }
+                        }
+                    }
                 }
             }
         }

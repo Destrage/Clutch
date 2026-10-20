@@ -58,6 +58,13 @@ impl Paths {
         self.root.join("logs")
     }
 
+    /// Downloaded updates: the local (not roaming) cache, as installers are large.
+    pub fn updates(&self) -> PathBuf {
+        dirs::cache_dir()
+            .map(|d| d.join("Clutch").join("updates"))
+            .unwrap_or_else(|| self.root.join("updates"))
+    }
+
     /// "Now playing" credit files of music sources (read by text sources).
     pub fn now_playing(&self) -> PathBuf {
         self.root.join("now-playing")
@@ -152,6 +159,8 @@ pub struct Settings {
     pub vcam_canvas: Option<estream_core::CanvasId>,
     /// Clip mode, the clip hotkey, auto-clip and the clip library.
     pub clips: ClipSettings,
+    /// How Clutch updates itself.
+    pub updates: UpdateSettings,
     /// The connected Twitch account (viewer count, who's in chat).
     pub twitch: Option<crate::twitch::TwitchAccount>,
     /// The connected YouTube channel (its live chat and viewer count).
@@ -411,6 +420,36 @@ impl RemoteSettings {
     }
 }
 
+/// How much Clutch does about updates on its own.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateMode {
+    /// Download in the background and install when Clutch closes.
+    #[default]
+    Auto,
+    /// Say a new version is out; download only when asked.
+    Notify,
+    /// No checks unless the user clicks Check now.
+    Off,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UpdateSettings {
+    pub mode: UpdateMode,
+    /// Whether betas count (`None`: yes while this version is itself a beta).
+    pub betas: Option<bool>,
+    /// When Clutch last checked (Unix seconds).
+    pub last_check: Option<i64>,
+}
+
+impl UpdateSettings {
+    pub fn include_betas(&self) -> bool {
+        self.betas
+            .unwrap_or_else(|| crate::update::current().is_beta())
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -425,6 +464,7 @@ impl Default for Settings {
             remote: RemoteSettings::default(),
             vcam_canvas: None,
             clips: ClipSettings::default(),
+            updates: UpdateSettings::default(),
             twitch: None,
             youtube: None,
             legacy_stream: None,

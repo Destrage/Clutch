@@ -330,6 +330,16 @@ export struct SettingsForm {
     perf-pending: int,
     perf-changes: [string],
     perf-can-revert: bool,
+    /// Settings → Updates: mode (0 install automatically, 1 tell me, 2 off), whether betas
+    /// count, the installed version, what's happening, the action button ("" none), download
+    /// progress (-1 none) and whether there's a release page to open.
+    upd-mode: int,
+    upd-betas: bool,
+    upd-version: string,
+    upd-status: string,
+    upd-action: string,
+    upd-progress: float,
+    upd-notes: bool,
 }
 
 /// One macro in the automation list.

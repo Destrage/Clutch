@@ -12,6 +12,12 @@ type Result<T> = std::result::Result<T, String>;
 
 const TARGET: &str = "x86_64-pc-windows-msvc";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The installer's version: Windows installers take numbers only, so `0.3.5-beta.4` becomes
+/// `0.3.5` (betas of one version upgrade each other: same-version upgrades are allowed).
+fn msi_version() -> &'static str {
+    VERSION.split('-').next().unwrap_or(VERSION)
+}
 /// Never change: Windows uses it to recognise upgrades of eStream and Clutch (Clutch was called eStream up to 0.2).
 const UPGRADE_CODE: &str = "6F1C2E8A-4B7D-4E21-9C3A-58D0E2B4A719";
 /// Must match `APP_USER_MODEL_ID` in `apps/estream/src/main.rs`, so Start and the taskbar
@@ -324,7 +330,7 @@ fn wix_source(stage: &Path, assets: &Path) -> Result<String> {
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*" Name="Clutch" Language="1033" Version="{VERSION}" Manufacturer="Clutch" UpgradeCode="{{{UPGRADE_CODE}}}">
+  <Product Id="*" Name="Clutch" Language="1033" Version="{msi_version}" Manufacturer="Clutch" UpgradeCode="{{{UPGRADE_CODE}}}">
     <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" Platform="x64" Description="Clutch streaming, recording and clipping studio" />
     <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of Clutch is already installed." />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
@@ -428,6 +434,7 @@ fn wix_source(stage: &Path, assets: &Path) -> Result<String> {
         start = guid("clutch:shortcut:startmenu"),
         desktop = guid("clutch:shortcut:desktop"),
         aumid = APP_USER_MODEL_ID,
+        msi_version = msi_version(),
     ))
 }
 

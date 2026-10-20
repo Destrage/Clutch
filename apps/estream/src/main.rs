@@ -16,6 +16,7 @@ mod secret;
 mod settings;
 mod shell;
 mod twitch;
+mod update;
 mod viewers;
 mod youtube;
 
