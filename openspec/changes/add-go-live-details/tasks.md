@@ -1,7 +1,7 @@
 ## 1. Platform APIs
-- [ ] 1.1 YouTube: list upcoming and active broadcasts with details and bound stream; categories
+- [x] 1.1 YouTube: list upcoming and active broadcasts with details and bound stream; categories
       for the channel's region; tests on recorded replies
-- [ ] 1.2 YouTube: create (insert, then the video's category and made-for-kids), update, and bind;
+- [x] 1.2 YouTube: create (insert, then the video's category and made-for-kids), update, and bind;
       read one broadcast; delete only when it never went live; tests for that check
 - [ ] 1.3 Twitch: read and update channel details; search categories; tag checks; add
       `channel:manage:broadcast` to the sign-in

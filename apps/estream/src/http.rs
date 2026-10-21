@@ -79,9 +79,24 @@ pub fn post_json_bearer(
     headers: &[(&str, &str)],
     json: &Value,
 ) -> Option<(u16, Value)> {
-    let mut request = agent()
-        .post(url)
-        .header("Authorization", &format!("Bearer {token}"));
+    send_json_bearer("POST", url, token, headers, json)
+}
+
+/// Sends JSON with a bearer token and `method` (POST, PUT, PATCH): `(status, body)`.
+pub fn send_json_bearer(
+    method: &str,
+    url: &str,
+    token: &str,
+    headers: &[(&str, &str)],
+    json: &Value,
+) -> Option<(u16, Value)> {
+    let agent = agent();
+    let request = match method {
+        "PUT" => agent.put(url),
+        "PATCH" => agent.patch(url),
+        _ => agent.post(url),
+    };
+    let mut request = request.header("Authorization", &format!("Bearer {token}"));
     for (k, v) in headers {
         request = request.header(*k, *v);
     }
