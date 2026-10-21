@@ -23,8 +23,8 @@ platform they stream to, without watching each platform's dashboard. Chat alone 
     Durable Object per Kick channel. `POST /kick/webhook` verifies Kick's signature (RSA PKCS#1
     v1.5 / SHA-256 over `message-id.timestamp.body`, with Kick's public key fetched and cached,
     not hardcoded) and passes the event to the channel's open connections. `GET /kick/live` is
-    a WebSocket for Clutch: the first message carries the streamer's Kick access token, which the
-    relay checks with Kick to learn the channel, so a connection only ever gets its own channel's
+    a WebSocket for Clutch: the request carries the streamer's Kick access token (Authorization
+    header), which the relay checks with Kick before accepting, to learn the channel, so a connection only ever gets its own channel's
     events. Nothing is stored; events with no listener are dropped.
   - **Kick sign-in tokens:** `POST /kick/token` and `/kick/refresh` swap Clutch's sign-in code
     and refresh tokens for tokens, adding the app's secret, which lives only in the relay (a
