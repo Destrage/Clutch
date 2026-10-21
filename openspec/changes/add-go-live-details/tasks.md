@@ -5,9 +5,9 @@
       read one broadcast; delete only when it never went live; tests for that check
 - [x] 1.3 Twitch: read and update channel details; search categories; tag checks; add
       `channel:manage:broadcast` to the sign-in
-- [ ] 1.4 Kick: read and update channel details; search categories; add `channel:write` to the
-      sign-in (and on the Kick app)
-- [ ] 1.5 A missing permission asks the user to connect again, as for stream keys
+- [x] 1.4 Kick: read and update channel details; search categories; add `channel:write` to the
+      sign-in (still to do by the owner: tick Write channel on the Kick app)
+- [x] 1.5 A missing permission asks the user to connect again, as for stream keys
 
 ## 2. Details and settings
 - [ ] 2.1 `details` per destination and `stream.ask_details` in settings, with defaults; old

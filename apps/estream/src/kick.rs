@@ -7,7 +7,7 @@
 //! Clutch. Kick only accepts the exact redirect registered for the app, so the loopback port is
 //! fixed.
 
-use crate::http::{get_bearer, post_json, post_json_bearer, text};
+use crate::http::{get_bearer, post_json, post_json_bearer, send_json_bearer, text};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::net::TcpListener;
@@ -15,7 +15,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 const CLIENT_ID: Option<&str> = option_env!("CLUTCH_KICK_CLIENT_ID");
-const SCOPES: &str = "user:read channel:read chat:write events:subscribe streamkey:read";
+const SCOPES: &str =
+    "user:read channel:read chat:write events:subscribe streamkey:read channel:write";
 /// The events Clutch asks Kick to send to the relay (see `livechat::kick::events`).
 const EVENTS: [&str; 5] = [
     "channel.followed",
@@ -254,17 +255,7 @@ impl Session {
 
     /// The connected channel's stream server and key: `(server, key)`.
     pub fn stream_setup(&self) -> Result<(String, String), String> {
-        let account = self
-            .account()
-            .ok_or("Connect Kick in Settings → Stream first")?;
-        let url = format!("{API}/channels");
-        let (mut status, mut body) =
-            get_bearer(&url, &account.access, &[]).ok_or("Couldn't reach Kick")?;
-        if status == 401
-            && let Some(renewed) = self.renew(&account)
-        {
-            (status, body) = get_bearer(&url, &renewed.access, &[]).ok_or("Couldn't reach Kick")?;
-        }
+        let (status, body) = self.get("channels")?;
         if status == 401 || status == 403 {
             return Err("Connect Kick again in Settings → Stream to get the stream key".into());
         }
@@ -315,6 +306,114 @@ impl Session {
             )),
         }
     }
+
+    /// GETs an API path, renewing the sign-in once if it expired: `(status, body)`.
+    fn get(&self, path: &str) -> Result<(u16, Value), String> {
+        let account = self
+            .account()
+            .ok_or("Connect Kick in Settings → Stream first")?;
+        let url = format!("{API}/{path}");
+        let (mut status, mut body) =
+            get_bearer(&url, &account.access, &[]).ok_or("Couldn't reach Kick")?;
+        if status == 401
+            && let Some(renewed) = self.renew(&account)
+        {
+            (status, body) = get_bearer(&url, &renewed.access, &[]).ok_or("Couldn't reach Kick")?;
+        }
+        Ok((status, body))
+    }
+
+    /// The connected channel's stream title and category.
+    pub fn channel_details(&self) -> Result<ChannelDetails, String> {
+        let (status, body) = self.get("channels")?;
+        if status != 200 {
+            return Err("Couldn't read your Kick channel".into());
+        }
+        details_of(&body).ok_or_else(|| "Couldn't read your Kick channel".into())
+    }
+
+    /// Saves the connected channel's stream title and category.
+    pub fn set_channel_details(&self, details: &ChannelDetails) -> Result<(), String> {
+        let account = self
+            .account()
+            .ok_or("Connect Kick in Settings → Stream first")?;
+        let url = format!("{API}/channels");
+        let body = channel_update(details);
+        let (mut status, mut reply) = send_json_bearer("PATCH", &url, &account.access, &[], &body)
+            .ok_or("Couldn't reach Kick")?;
+        if status == 401
+            && let Some(renewed) = self.renew(&account)
+        {
+            (status, reply) = send_json_bearer("PATCH", &url, &renewed.access, &[], &body)
+                .ok_or("Couldn't reach Kick")?;
+        }
+        match status {
+            200..=299 => Ok(()),
+            401 | 403 => Err(
+                "Connect Kick again in Settings → Stream to change your title from Clutch".into(),
+            ),
+            _ => Err(format!(
+                "Kick didn't save the title ({})",
+                crate::http::error_message(&reply)
+            )),
+        }
+    }
+
+    /// Kick categories matching `query`: (id, name).
+    pub fn search_categories(&self, query: &str) -> Result<Vec<(u64, String)>, String> {
+        if query.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        let (status, body) = self.get(&format!(
+            "categories?q={}",
+            crate::oauth::encode(query.trim())
+        ))?;
+        if status != 200 {
+            return Err("Couldn't search Kick's categories".into());
+        }
+        Ok(categories_of(&body))
+    }
+}
+
+// ---- Channel details (the Go live window) ----
+
+/// What viewers see about the channel's stream.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChannelDetails {
+    pub title: String,
+    /// Kick's category id and name (0 and "" for none).
+    pub category_id: u64,
+    pub category: String,
+}
+
+fn details_of(body: &Value) -> Option<ChannelDetails> {
+    let c = body.get("data")?.get(0)?;
+    Some(ChannelDetails {
+        title: text(c, "stream_title"),
+        category_id: c["category"]["id"].as_u64().unwrap_or(0),
+        category: text(&c["category"], "name"),
+    })
+}
+
+fn channel_update(details: &ChannelDetails) -> Value {
+    let mut body = serde_json::json!({ "stream_title": details.title });
+    if details.category_id != 0 {
+        body["category_id"] = details.category_id.into();
+    }
+    body
+}
+
+fn categories_of(body: &Value) -> Vec<(u64, String)> {
+    body["data"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|c| Some((c["id"].as_u64()?, text(c, "name"))))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -330,5 +429,42 @@ mod tests {
         account.set_tokens("access-token", "refresh-token");
         let json = serde_json::to_string(&account).unwrap();
         assert!(!json.contains("access-token") && !json.contains("refresh-token"));
+    }
+
+    #[test]
+    fn channel_details_are_read_and_written() {
+        let body = serde_json::json!({ "data": [{
+            "slug": "destragex", "stream_title": "Ranked",
+            "category": { "id": 15, "name": "Just Chatting", "thumbnail": "t" }
+        }]});
+        let details = details_of(&body).unwrap();
+        assert_eq!(
+            details,
+            ChannelDetails {
+                title: "Ranked".into(),
+                category_id: 15,
+                category: "Just Chatting".into(),
+            }
+        );
+        let update = channel_update(&details);
+        assert_eq!(update["stream_title"], "Ranked");
+        assert_eq!(update["category_id"], 15);
+        let no_category = channel_update(&ChannelDetails {
+            title: "x".into(),
+            ..Default::default()
+        });
+        assert!(no_category.get("category_id").is_none());
+    }
+
+    #[test]
+    fn categories_come_from_the_search() {
+        let body = serde_json::json!({ "data": [
+            { "id": 28, "name": "Grand Theft Auto V" },
+            { "name": "no id" }
+        ]});
+        assert_eq!(
+            categories_of(&body),
+            vec![(28, "Grand Theft Auto V".into())]
+        );
     }
 }
