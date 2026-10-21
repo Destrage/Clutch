@@ -176,6 +176,9 @@ pub struct App {
     stream_fill: Vec<(usize, std::sync::mpsc::Receiver<StreamFill>)>,
     /// What YouTube does with the stream, while streaming to YouTube with it connected.
     yt_watch: Option<YouTubeWatch>,
+    /// The YouTube broadcast Clutch created for this stream while it isn't live yet: its id and
+    /// when it was made. Deleted when the stream ends before it goes live.
+    yt_created: Option<(String, Instant)>,
     /// Starting a waiting YouTube broadcast.
     yt_start: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
     /// Viewer counts while live.
@@ -235,8 +238,8 @@ enum ToastAction {
 /// What the YouTube checker found.
 enum YouTubeNews {
     State(crate::youtube::LiveState),
-    /// It created a broadcast (none was there to go live on): its title.
-    Created(String),
+    /// It created a broadcast (none was there to go live on): its id and title.
+    Created(String, String),
     Failed(String),
 }
 
@@ -253,7 +256,13 @@ struct YouTubeWatch {
 }
 
 impl YouTubeWatch {
-    fn start(session: crate::youtube::Session, key: String) -> Self {
+    /// `created`: the broadcast Clutch created for this stream that isn't live yet (from an
+    /// earlier watch, before a reconnect), with when it was made.
+    fn start(
+        session: crate::youtube::Session,
+        key: String,
+        created: Option<(String, Instant)>,
+    ) -> Self {
         use std::sync::atomic::Ordering;
         let (tx, rx) = std::sync::mpsc::channel();
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -262,26 +271,29 @@ impl YouTubeWatch {
             .name("estream-youtube-status".into())
             .spawn(move || {
                 use crate::youtube::LiveState;
-                let mut created = match session.ensure_broadcast(&k) {
-                    Ok(Some((id, title))) => {
-                        let _ = tx.send(YouTubeNews::Created(title));
-                        Some((id, Instant::now()))
+                let mut created = created;
+                if created.is_none() {
+                    match session.ensure_broadcast(&k) {
+                        Ok(Some((id, title))) => {
+                            let _ = tx.send(YouTubeNews::Created(id.clone(), title));
+                            created = Some((id, Instant::now()));
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            let _ = tx.send(YouTubeNews::Failed(e));
+                        }
                     }
-                    Ok(None) => None,
-                    Err(e) => {
-                        let _ = tx.send(YouTubeNews::Failed(e));
-                        None
-                    }
-                };
+                }
                 while !s.load(Ordering::Acquire) {
                     let state = session.live_state(&k);
                     let live = state == Some(LiveState::Live);
-                    // Auto-start acts when the video arrives; a broadcast made while the video
-                    // was already flowing may not see that, so start it if it hasn't by now.
+                    // Auto-start acts when the video arrives on the bound stream (the app
+                    // reconnects for that); if it hasn't by now, start the broadcast, until it's
+                    // live (YouTube refuses while it doesn't see the video yet).
                     if state == Some(LiveState::Starting)
-                        && let Some((id, _)) =
-                            created.take_if(|(_, at)| at.elapsed() > Duration::from_secs(15))
-                        && let Err(e) = session.start_broadcast(&id)
+                        && let Some((id, at)) = &created
+                        && at.elapsed() > Duration::from_secs(15)
+                        && let Err(e) = session.start_broadcast(id)
                     {
                         tracing::warn!(error = %e, "couldn't start the new YouTube broadcast");
                     }
@@ -748,6 +760,7 @@ impl App {
             kick_connect: None,
             stream_fill: Vec::new(),
             yt_watch: None,
+            yt_created: None,
             yt_start: None,
             viewers: crate::viewers::ViewerCounts::start(crate::viewers::Accounts {
                 twitch: twitch.clone(),
@@ -1482,7 +1495,11 @@ impl App {
             return;
         };
         if self.yt_watch.as_ref().is_none_or(|w| w.key != key) {
-            self.yt_watch = Some(YouTubeWatch::start(self.youtube.clone(), key));
+            self.yt_watch = Some(YouTubeWatch::start(
+                self.youtube.clone(),
+                key,
+                self.yt_created.clone(),
+            ));
         }
         let Some(watch) = &mut self.yt_watch else {
             return;
@@ -1504,7 +1521,11 @@ impl App {
             watch.state = Some(state);
         }
         let seen_live = watch.seen_live;
-        if let (Some(i), Some(state)) = (live, &watch.state)
+        let current = watch.state.clone();
+        if seen_live {
+            self.yt_created = None;
+        }
+        if let (Some(i), Some(state)) = (live, &current)
             && let Some(row) = rows.get_mut(i)
             && *state != LiveState::Live
         {
@@ -1513,10 +1534,24 @@ impl App {
         }
         for n in news {
             match n {
-                YouTubeNews::Created(title) => self.toast(
-                    format!("Created a YouTube broadcast to go live on: {title}"),
-                    false,
-                ),
+                YouTubeNews::Created(id, title) => {
+                    self.yt_created = Some((id, Instant::now()));
+                    // YouTube only notices video that starts after the stream is bound to a
+                    // broadcast (auto-start and starting it both wait for that), so reconnect.
+                    // Nothing is live yet, so nobody sees the short gap.
+                    if let (Some(i), Some(engine), Some(stream)) =
+                        (live, &self.engine, &mut self.stream)
+                        && let Some(k) = self.stream_dests.iter().position(|d| d.config == i)
+                    {
+                        let dest = self.settings.destinations[i].to_destination();
+                        stream.restart_destination(engine, k, &dest);
+                        self.stream_dests[k] = LiveDest::new(i);
+                    }
+                    self.toast(
+                        format!("Created a YouTube broadcast to go live on: {title}"),
+                        false,
+                    );
+                }
                 YouTubeNews::Failed(e) => self.toast(e, true),
                 YouTubeNews::State(_) => {}
             }
@@ -1581,6 +1616,22 @@ impl App {
             format!("Your YouTube broadcast uses a different stream key: {name} switched to it"),
             false,
         );
+    }
+
+    /// Deletes the broadcast Clutch created when the stream ends before it went live, so it
+    /// doesn't stay on the channel as an upcoming stream holding the stream key.
+    fn drop_unused_broadcast(&mut self) {
+        let Some((id, _)) = self.yt_created.take() else {
+            return;
+        };
+        let youtube = self.youtube.clone();
+        let _ = std::thread::Builder::new()
+            .name("estream-youtube-delete".into())
+            .spawn(move || {
+                if let Err(e) = youtube.delete_broadcast(&id) {
+                    tracing::warn!(error = %e, "couldn't delete the unused YouTube broadcast");
+                }
+            });
     }
 
     /// Starts a YouTube broadcast that waits for it (from the toast's button).
@@ -3851,6 +3902,7 @@ impl App {
         if let Some(stream) = self.stream.take() {
             stream.stop_in_background(engine);
             self.stream_dests.clear();
+            self.drop_unused_broadcast();
             self.toast("Stream ended".into(), false);
             self.update_outputs();
             return;
@@ -3898,6 +3950,9 @@ impl App {
             },
             (Some(stream), Some(k)) if stream.destinations()[k].is_active() => {
                 stream.stop_destination(engine, k);
+                if self.settings.destinations[config].stream.service == Service::YouTube {
+                    self.drop_unused_broadcast();
+                }
                 self.toast(format!("Ended the stream on {}", dest.name), false);
             }
             (Some(stream), Some(k)) => {

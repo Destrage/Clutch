@@ -6,7 +6,7 @@
 //! which adds the secret (`services/events-relay`), so it can be changed without a new Clutch.
 //! Tokens are saved encrypted (see [`crate::secret`]).
 
-use crate::http::{get_bearer, post_json, post_json_bearer, text};
+use crate::http::{delete_bearer, get_bearer, post_json, post_json_bearer, text};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::net::TcpListener;
@@ -563,6 +563,23 @@ impl Session {
         )
         .map(|_| ())
         .map_err(|e| format!("YouTube didn't start the broadcast ({e})"))
+    }
+
+    /// Deletes a broadcast Clutch created that never went live, so it doesn't stay on the channel
+    /// as an upcoming stream that holds the stream key.
+    pub fn delete_broadcast(&self, broadcast: &str) -> Result<(), String> {
+        let url = format!("{API}/liveBroadcasts?id={broadcast}");
+        let token = self.token(false).ok_or("YouTube isn't connected")?;
+        let mut status = delete_bearer(&url, &token).ok_or("Couldn't reach YouTube")?;
+        if status == 401
+            && let Some(token) = self.token(true)
+        {
+            status = delete_bearer(&url, &token).ok_or("Couldn't reach YouTube")?;
+        }
+        match status {
+            200 | 204 => Ok(()),
+            _ => Err(format!("YouTube didn't delete the broadcast ({status})")),
+        }
     }
 
     /// POSTs `body` to the API (renewing the sign-in once if it expired): the reply, or YouTube's

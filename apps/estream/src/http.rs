@@ -46,6 +46,17 @@ pub fn get_bearer(url: &str, token: &str, headers: &[(&str, &str)]) -> Option<(u
     Some((status, body))
 }
 
+/// DELETEs with a bearer token: the status.
+pub fn delete_bearer(url: &str, token: &str) -> Option<u16> {
+    let response = agent()
+        .delete(url)
+        .header("Authorization", &format!("Bearer {token}"))
+        .call()
+        .map_err(|e| tracing::debug!(error = %e, url, "platform API"))
+        .ok()?;
+    Some(response.status().as_u16())
+}
+
 /// POSTs JSON: `(status, body)` (`Null` when the reply isn't JSON).
 pub fn post_json(url: &str, json: &Value) -> Option<(u16, Value)> {
     let mut response = agent()
