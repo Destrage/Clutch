@@ -10,9 +10,9 @@ fn main() {
     let file = std::fs::read_to_string("../../.secrets/clutch.env").unwrap_or_default();
     for key in [
         "CLUTCH_YOUTUBE_CLIENT_ID",
-        "CLUTCH_YOUTUBE_CLIENT_SECRET",
         "CLUTCH_JAMENDO_CLIENT_ID",
-        // The Kick secret is never built in: it lives in the events relay (services/events-relay).
+        // App secrets (Google, Kick) are never built in: they live in the events relay
+        // (services/events-relay), which swaps sign-in codes and renewals for tokens.
         "CLUTCH_KICK_CLIENT_ID",
         // Clutch's own services, when not the defaults in services.rs.
         "CLUTCH_EVENTS_URL",

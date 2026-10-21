@@ -162,16 +162,30 @@ async function live(request, env) {
   return stub.fetch("https://relay/connect", { headers: { Upgrade: "websocket" } });
 }
 
-// ---- Kick sign-in tokens ----
+// ---- Sign-in tokens (Kick, Google) ----
 //
-// Clutch signs in to Kick with PKCE in the user's browser, then hands the one-time code (or later
-// a refresh token) to the relay, which adds the app's secret and asks Kick for tokens. The secret
-// lives only here (a Worker secret), so it can be changed at any time without a new Clutch.
+// Clutch signs in with PKCE in the user's browser, then hands the one-time code (or later a
+// refresh token) to the relay, which adds the app's secret and asks the platform for tokens. The
+// secrets live only here (Worker secrets), so they can be changed at any time without a new Clutch.
 
-/** The only redirect Clutch's Kick app uses; anything else isn't Clutch. */
-const KICK_REDIRECT = "http://localhost:47615/callback";
+const PROVIDERS = {
+  kick: {
+    tokenUrl: `${KICK_ID}/token`,
+    clientId: (env) => env.KICK_CLIENT_ID,
+    secret: (env) => env.KICK_CLIENT_SECRET,
+    // The only redirect Clutch's Kick app uses (Kick needs an exact, registered address).
+    redirect: (uri) => uri === "http://localhost:47615/callback",
+  },
+  google: {
+    tokenUrl: "https://oauth2.googleapis.com/token",
+    clientId: (env) => env.GOOGLE_CLIENT_ID,
+    secret: (env) => env.GOOGLE_CLIENT_SECRET,
+    // Clutch listens on a free loopback port each time.
+    redirect: (uri) => typeof uri === "string" && /^http:\/\/127\.0\.0\.1:\d{1,5}$/.test(uri),
+  },
+};
 
-async function kickToken(request, env, grant) {
+async function tokenSwap(request, env, provider, grant) {
   const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
   const { success } = await env.TOKEN_LIMIT.limit({ key: ip });
   if (!success) return new Response("too many attempts, try again in a minute", { status: 429 });
@@ -181,10 +195,10 @@ async function kickToken(request, env, grant) {
   } catch {
     return new Response("bad body", { status: 400 });
   }
-  const form = { client_id: env.KICK_CLIENT_ID, client_secret: env.KICK_CLIENT_SECRET };
+  const form = { client_id: provider.clientId(env), client_secret: provider.secret(env) };
   if (grant === "authorization_code") {
     const { code, code_verifier, redirect_uri } = input ?? {};
-    if (typeof code !== "string" || typeof code_verifier !== "string" || redirect_uri !== KICK_REDIRECT) {
+    if (typeof code !== "string" || typeof code_verifier !== "string" || !provider.redirect(redirect_uri)) {
       return new Response("bad request", { status: 400 });
     }
     Object.assign(form, { grant_type: grant, code, code_verifier, redirect_uri });
@@ -193,12 +207,12 @@ async function kickToken(request, env, grant) {
     if (typeof refresh_token !== "string") return new Response("bad request", { status: 400 });
     Object.assign(form, { grant_type: "refresh_token", refresh_token });
   }
-  const res = await fetch(`${KICK_ID}/token`, {
+  const res = await fetch(provider.tokenUrl, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams(form),
   });
-  // Kick's answer goes back as it is (tokens, or the error), never logged.
+  // The platform's answer goes back as it is (tokens, or the error), never logged.
   return new Response(await res.text(), {
     status: res.status,
     headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
@@ -208,11 +222,11 @@ async function kickToken(request, env, grant) {
 export default {
   async fetch(request, env) {
     const { pathname } = new URL(request.url);
-    if (pathname === "/kick/token" && request.method === "POST") {
-      return kickToken(request, env, "authorization_code");
-    }
-    if (pathname === "/kick/refresh" && request.method === "POST") {
-      return kickToken(request, env, "refresh_token");
+    // /kick/token, /kick/refresh, /google/token, /google/refresh
+    const swap = /^\/(kick|google)\/(token|refresh)$/.exec(pathname);
+    if (swap && request.method === "POST") {
+      const grant = swap[2] === "token" ? "authorization_code" : "refresh_token";
+      return tokenSwap(request, env, PROVIDERS[swap[1]], grant);
     }
     if (pathname === "/kick/webhook" && request.method === "POST") return webhook(request, env);
     if (pathname === "/kick/live") return live(request, env);

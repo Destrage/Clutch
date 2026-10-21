@@ -93,7 +93,7 @@ jobs:
         env:
           CLUTCH_JAMENDO_CLIENT_ID: ${{ secrets.CLUTCH_JAMENDO_CLIENT_ID }}
           CLUTCH_YOUTUBE_CLIENT_ID: ${{ secrets.CLUTCH_YOUTUBE_CLIENT_ID }}
-          CLUTCH_YOUTUBE_CLIENT_SECRET: ${{ secrets.CLUTCH_YOUTUBE_CLIENT_SECRET }}
+          CLUTCH_KICK_CLIENT_ID: ${{ secrets.CLUTCH_KICK_CLIENT_ID }}
       - uses: actions/upload-artifact@v4
         with:
           name: Clutch-AppImage

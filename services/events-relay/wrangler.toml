@@ -8,8 +8,11 @@ workers_dev = false
 preview_urls = false
 routes = [{ pattern = "events.destrosphere.com", custom_domain = true }]
 
-# Clutch's Kick app (public). Its secret is set with: npx wrangler secret put KICK_CLIENT_SECRET
+# Clutch's Kick and Google apps (client IDs are public). Their secrets are Worker secrets:
+#   npx wrangler secret put KICK_CLIENT_SECRET
+#   npx wrangler secret put GOOGLE_CLIENT_SECRET
 [vars]
+GOOGLE_CLIENT_ID = "46556432306-3u7mt0aq1fratn3ht9o1tl0ui9reg49s.apps.googleusercontent.com"
 KICK_CLIENT_ID = "01M5DQAWSH2G2VEC4ERGDHNJXY"
 
 # Connection attempts to /kick/live per address: Clutch connects once and reconnects with growing

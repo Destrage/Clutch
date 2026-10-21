@@ -10,11 +10,13 @@ by webhook to one public address per app, which a desktop app can't receive itse
   `Authorization` header. The relay asks Kick whose sign-in it is and connects it to that
   channel only.
 
-- `POST /kick/token`, `POST /kick/refresh`: Clutch signs in to Kick in the browser (PKCE) and
-  hands the one-time code, or later a refresh token, to the relay, which adds the app's secret
-  and asks Kick for tokens. The secret lives only here, so it can be changed without a new
-  Clutch: **Regenerate** it on the Kick app page, then `npx wrangler secret put
-  KICK_CLIENT_SECRET`.
+- `POST /kick/token`, `/kick/refresh`, `/google/token`, `/google/refresh`: Clutch signs in to
+  Kick or Google (YouTube) in the browser (PKCE) and hands the one-time code, or later a refresh
+  token, to the relay, which adds the app's secret and asks the platform for tokens. The secrets
+  live only here, so they can be changed without a new Clutch:
+  - Kick: **Regenerate** on the Kick app page, then `npx wrangler secret put KICK_CLIENT_SECRET`.
+  - Google: in Google Auth Platform → Clients → the Clutch client, **Add secret**, then
+    `npx wrangler secret put GOOGLE_CLIENT_SECRET` with the new one, then disable the old one.
 
 Only Clutch can use it: a sign-in must come from Clutch's Kick app (checked with Kick's token
 introspection against `KICK_CLIENT_ID`), and an event must belong to one of that app's own
@@ -40,8 +42,9 @@ npm test
 1. `npm install`
 2. `npx wrangler login` (opens Cloudflare in the browser; use the account that has
    destrosphere.com)
-3. `npx wrangler secret put KICK_CLIENT_SECRET` and paste the Kick app's client secret when
-   asked (it is stored encrypted by Cloudflare, never in this repo).
+3. `npx wrangler secret put KICK_CLIENT_SECRET` and `npx wrangler secret put GOOGLE_CLIENT_SECRET`,
+   pasting each app's client secret when asked (stored encrypted by Cloudflare, never in this
+   repo or in Clutch).
 4. `npx wrangler deploy`. This creates `events.destrosphere.com` (a custom domain on the
    destrosphere.com zone) and the Durable Object.
 5. On the Kick app (kick.com/settings/developer → the app → Edit): tick **Subscribe to

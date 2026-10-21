@@ -1,10 +1,12 @@
 //! YouTube account: Google sign-in in the user's browser (loopback redirect with PKCE) and the
 //! YouTube Data API, which finds the live broadcast (for its chat) and its viewer count.
 //!
-//! The client is Google's "Desktop app" kind; its ID and secret are compiled in from
-//! `.secrets/clutch.env` (see build.rs). Tokens are saved encrypted (see [`crate::secret`]).
+//! The client is Google's "Desktop app" kind; its ID is compiled in from `.secrets/clutch.env` (see
+//! build.rs). Its secret is not in Clutch: the sign-in code and renewals go to Clutch's relay,
+//! which adds the secret (`services/events-relay`), so it can be changed without a new Clutch.
+//! Tokens are saved encrypted (see [`crate::secret`]).
 
-use crate::http::{get_bearer, post_form, post_json_bearer, text};
+use crate::http::{get_bearer, post_json, post_json_bearer, text};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::net::TcpListener;
@@ -12,12 +14,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 const CLIENT_ID: Option<&str> = option_env!("CLUTCH_YOUTUBE_CLIENT_ID");
-const CLIENT_SECRET: Option<&str> = option_env!("CLUTCH_YOUTUBE_CLIENT_SECRET");
 /// The live broadcast, its chat and viewer count, and sending chat messages (reading alone would
 /// be youtube.readonly; force-ssl covers both).
 const SCOPE: &str = "https://www.googleapis.com/auth/youtube.force-ssl";
 const API: &str = "https://www.googleapis.com/youtube/v3";
-const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 
 /// A connected YouTube channel. The tokens live in memory only; they are saved encrypted.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -70,7 +70,7 @@ pub struct Connecting {
 impl Connecting {
     /// Starts listening for Google's redirect; open [`Self::url`] in the browser.
     pub fn start() -> Result<Self, String> {
-        let (Some(client_id), Some(_)) = (CLIENT_ID, CLIENT_SECRET) else {
+        let Some(client_id) = CLIENT_ID else {
             return Err("Connecting YouTube isn't available in this build".into());
         };
         let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
@@ -136,20 +136,13 @@ fn sign_in(
     redirect: &str,
 ) -> Result<YouTubeAccount, String> {
     let code = crate::oauth::wait_for_code(listener, cancel, csrf, "Google")?;
-    let (Some(client_id), Some(secret)) = (CLIENT_ID, CLIENT_SECRET) else {
-        return Err("Connecting YouTube isn't available in this build".into());
-    };
-    let (status, body) = post_form(
-        TOKEN_URL,
-        &[
-            ("code", &code),
-            ("client_id", client_id),
-            ("client_secret", secret),
-            ("redirect_uri", redirect),
-            ("grant_type", "authorization_code"),
-            ("code_verifier", verifier),
-        ],
-    )?;
+    let request = serde_json::json!({
+        "code": code,
+        "code_verifier": verifier,
+        "redirect_uri": redirect,
+    });
+    let (status, body) = post_json(&crate::services::events_url("/google/token"), &request)
+        .ok_or("Couldn't reach Clutch's sign-in service")?;
     let access = text(&body, "access_token");
     if status != 200 || access.is_empty() {
         return Err(format!(
@@ -218,19 +211,8 @@ impl Session {
     }
 
     fn renew(&self, old: &YouTubeAccount) -> Option<YouTubeAccount> {
-        let (Some(client_id), Some(secret)) = (CLIENT_ID, CLIENT_SECRET) else {
-            return None;
-        };
-        let (status, body) = post_form(
-            TOKEN_URL,
-            &[
-                ("client_id", client_id),
-                ("client_secret", secret),
-                ("refresh_token", &old.refresh),
-                ("grant_type", "refresh_token"),
-            ],
-        )
-        .ok()?;
+        let request = serde_json::json!({ "refresh_token": old.refresh });
+        let (status, body) = post_json(&crate::services::events_url("/google/refresh"), &request)?;
         let renewed = if status == 200 {
             let mut account = old.clone();
             // Google keeps the refresh token unless it sends a new one.
