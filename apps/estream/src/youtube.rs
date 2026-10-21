@@ -421,14 +421,7 @@ fn setup_of(stream: &Value) -> Option<StreamSetup> {
 
 /// What YouTube is doing with the stream whose key is `key`.
 fn state_of(streams: &Value, broadcasts: &Value, key: &str) -> LiveState {
-    let stream = streams
-        .get("items")
-        .and_then(Value::as_array)
-        .and_then(|items| {
-            items
-                .iter()
-                .find(|s| s["cdn"]["ingestionInfo"]["streamName"].as_str() == Some(key))
-        });
+    let stream = stream_with_key(streams, key);
     // The stream an open broadcast uses (as in `pick_stream`), when its key isn't `key`.
     let other = || {
         pick_stream_of(streams, broadcasts, false)
@@ -515,29 +508,106 @@ impl Session {
         Some(state_of(&streams, &broadcasts, key))
     }
 
+    /// Makes sure YouTube has a broadcast to go live on with the stream whose key is `key`. When
+    /// no broadcast is live or upcoming at all (YouTube ends each one when the stream stops, and
+    /// Studio only makes the next when its Stream page is opened), creates one titled and shared
+    /// like the channel's last broadcast, with auto-start and auto-stop, and binds it to the
+    /// stream. Returns the new broadcast's id and title, or `None` when there was one already.
+    pub fn ensure_broadcast(&self, key: &str) -> Result<Option<(String, String)>, String> {
+        let (streams, broadcasts) = self
+            .streams_and_broadcasts()
+            .ok_or("Couldn't read your YouTube streams")?;
+        let Some(stream) = stream_with_key(&streams, key) else {
+            // Not one of the channel's streams: the live status says so.
+            return Ok(None);
+        };
+        if !open_broadcasts(&broadcasts).is_empty() {
+            return Ok(None);
+        }
+        let stream_id = stream["id"].as_str().unwrap_or_default().to_owned();
+        let last = self
+            .api("liveBroadcasts?part=snippet,status&mine=true&broadcastType=all&maxResults=1")
+            .and_then(|b| b["items"].get(0).cloned());
+        let channel = self.account().map(|a| a.channel).unwrap_or_default();
+        let (title, privacy) = new_broadcast_look(last.as_ref(), &channel);
+        let body = serde_json::json!({
+            "snippet": {
+                "title": title,
+                "scheduledStartTime": chrono::Utc::now()
+                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            },
+            "status": { "privacyStatus": privacy, "selfDeclaredMadeForKids": false },
+            "contentDetails": {
+                "enableAutoStart": true,
+                "enableAutoStop": true,
+                "monitorStream": { "enableMonitorStream": false },
+            },
+        });
+        let created = self
+            .post("liveBroadcasts?part=snippet,status,contentDetails", &body)
+            .map_err(|e| format!("YouTube didn't create a broadcast ({e})"))?;
+        let id = created["id"].as_str().unwrap_or_default().to_owned();
+        self.post(
+            &format!("liveBroadcasts/bind?id={id}&part=id,contentDetails&streamId={stream_id}"),
+            &serde_json::json!({}),
+        )
+        .map_err(|e| format!("YouTube didn't attach the new broadcast to your stream ({e})"))?;
+        Ok(Some((id, title)))
+    }
+
     /// Starts a broadcast that waits for it (auto-start off).
     pub fn start_broadcast(&self, broadcast: &str) -> Result<(), String> {
-        let url = format!(
-            "{API}/liveBroadcasts/transition?broadcastStatus=live&id={broadcast}&part=status"
-        );
+        self.post(
+            &format!("liveBroadcasts/transition?broadcastStatus=live&id={broadcast}&part=status"),
+            &serde_json::json!({}),
+        )
+        .map(|_| ())
+        .map_err(|e| format!("YouTube didn't start the broadcast ({e})"))
+    }
+
+    /// POSTs `body` to the API (renewing the sign-in once if it expired): the reply, or YouTube's
+    /// error message.
+    fn post(&self, path: &str, body: &Value) -> Result<Value, String> {
+        let url = format!("{API}/{path}");
         let token = self.token(false).ok_or("YouTube isn't connected")?;
-        let body = serde_json::json!({});
         let (mut status, mut reply) =
-            post_json_bearer(&url, &token, &[], &body).ok_or("Couldn't reach YouTube")?;
+            post_json_bearer(&url, &token, &[], body).ok_or("Couldn't reach YouTube")?;
         if status == 401
             && let Some(token) = self.token(true)
         {
             (status, reply) =
-                post_json_bearer(&url, &token, &[], &body).ok_or("Couldn't reach YouTube")?;
+                post_json_bearer(&url, &token, &[], body).ok_or("Couldn't reach YouTube")?;
         }
         match status {
-            200 => Ok(()),
-            _ => Err(format!(
-                "YouTube didn't start the broadcast ({})",
-                crate::http::error_message(&reply)
-            )),
+            200 => Ok(reply),
+            _ => Err(crate::http::error_message(&reply)),
         }
     }
+}
+
+/// The channel's stream whose key is `key`.
+fn stream_with_key<'a>(streams: &'a Value, key: &str) -> Option<&'a Value> {
+    streams["items"]
+        .as_array()?
+        .iter()
+        .find(|s| s["cdn"]["ingestionInfo"]["streamName"].as_str() == Some(key))
+}
+
+/// Title and privacy for a broadcast Clutch creates: the last broadcast's, else
+/// "<channel> Live Stream" (YouTube's own default) and public.
+fn new_broadcast_look(last: Option<&Value>, channel: &str) -> (String, String) {
+    let field = |v: &Value| {
+        v.as_str()
+            .filter(|s| !s.trim().is_empty())
+            .map(str::to_owned)
+    };
+    let title = last
+        .and_then(|b| field(&b["snippet"]["title"]))
+        .unwrap_or_else(|| format!("{channel} Live Stream").trim().to_owned());
+    let privacy = last
+        .and_then(|b| field(&b["status"]["privacyStatus"]))
+        .unwrap_or_else(|| "public".into());
+    (title, privacy)
 }
 
 #[cfg(test)]
@@ -653,6 +723,22 @@ mod tests {
         assert_eq!(state_of(&streams, &on_s2, "old-key"), k2);
         // Already the right key: nothing to switch.
         assert_eq!(state_of(&streams, &on_s2, "k2"), LiveState::NoVideo);
+    }
+
+    #[test]
+    fn a_new_broadcast_looks_like_the_last() {
+        let last = serde_json::json!({
+            "snippet": { "title": "Ranked tonight" },
+            "status": { "privacyStatus": "unlisted" }
+        });
+        assert_eq!(
+            new_broadcast_look(Some(&last), "Me"),
+            ("Ranked tonight".into(), "unlisted".into())
+        );
+        assert_eq!(
+            new_broadcast_look(None, "Me"),
+            ("Me Live Stream".into(), "public".into())
+        );
     }
 
     #[test]

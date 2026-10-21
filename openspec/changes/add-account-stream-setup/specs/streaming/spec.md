@@ -38,6 +38,11 @@ key, or using a key that isn't the user's, and SHALL offer to start a broadcast 
 - **WHEN** the same happens after YouTube was live with the key
 - **THEN** Clutch says so and offers a button to switch, without reconnecting by itself
 
+#### Scenario: No broadcast to go live on
+- **WHEN** Clutch starts streaming to the user's YouTube stream and no broadcast is live or upcoming
+- **THEN** Clutch creates one titled and shared like the last broadcast, with auto-start and
+  auto-stop, binds it to the stream, says so, and starts it if auto-start hasn't within a while
+
 #### Scenario: Live
 - **WHEN** the broadcast goes live
 - **THEN** the YouTube row says it is live on YouTube

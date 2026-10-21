@@ -14,6 +14,8 @@
 - [x] 2.3 Start broadcast (transition to live) from the toast
 - [x] 2.4 Switch to the stream an open broadcast uses (alone before going live, with a button
       after); fill empty keys when an account connects
+- [x] 2.5 Create and bind a broadcast when none is live or upcoming (YouTube ends each one when the
+      stream stops); start it if auto-start doesn't
 
 ## 3. Docs and check
 - [x] 3.1 Website streaming page; testing guide

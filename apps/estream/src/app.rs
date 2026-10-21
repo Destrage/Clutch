@@ -232,11 +232,20 @@ enum ToastAction {
     UseYouTubeKey(usize, crate::youtube::StreamSetup),
 }
 
-/// Checks what YouTube does with the stream sent with `key`, in the background: every 20 seconds
-/// until it's live, then every 2 minutes. Dropping it stops the checks.
+/// What the YouTube checker found.
+enum YouTubeNews {
+    State(crate::youtube::LiveState),
+    /// It created a broadcast (none was there to go live on): its title.
+    Created(String),
+    Failed(String),
+}
+
+/// Checks what YouTube does with the stream sent with `key`, in the background: first makes sure
+/// there is a broadcast to go live on, then checks every 20 seconds until it's live, then every
+/// 2 minutes. Dropping it stops the checks.
 struct YouTubeWatch {
     key: String,
-    rx: std::sync::mpsc::Receiver<crate::youtube::LiveState>,
+    rx: std::sync::mpsc::Receiver<YouTubeNews>,
     state: Option<crate::youtube::LiveState>,
     /// Whether YouTube has been live with this key (then a key change isn't switched to alone).
     seen_live: bool,
@@ -252,11 +261,35 @@ impl YouTubeWatch {
         let _ = std::thread::Builder::new()
             .name("estream-youtube-status".into())
             .spawn(move || {
+                use crate::youtube::LiveState;
+                let mut created = match session.ensure_broadcast(&k) {
+                    Ok(Some((id, title))) => {
+                        let _ = tx.send(YouTubeNews::Created(title));
+                        Some((id, Instant::now()))
+                    }
+                    Ok(None) => None,
+                    Err(e) => {
+                        let _ = tx.send(YouTubeNews::Failed(e));
+                        None
+                    }
+                };
                 while !s.load(Ordering::Acquire) {
                     let state = session.live_state(&k);
-                    let live = state == Some(crate::youtube::LiveState::Live);
+                    let live = state == Some(LiveState::Live);
+                    // Auto-start acts when the video arrives; a broadcast made while the video
+                    // was already flowing may not see that, so start it if it hasn't by now.
+                    if state == Some(LiveState::Starting)
+                        && let Some((id, _)) =
+                            created.take_if(|(_, at)| at.elapsed() > Duration::from_secs(15))
+                        && let Err(e) = session.start_broadcast(&id)
+                    {
+                        tracing::warn!(error = %e, "couldn't start the new YouTube broadcast");
+                    }
+                    if live {
+                        created = None;
+                    }
                     if let Some(state) = state
-                        && tx.send(state).is_err()
+                        && tx.send(YouTubeNews::State(state)).is_err()
                     {
                         return;
                     }
@@ -1455,7 +1488,15 @@ impl App {
             return;
         };
         let mut changed = None;
-        while let Ok(state) = watch.rx.try_recv() {
+        let mut news = Vec::new();
+        while let Ok(n) = watch.rx.try_recv() {
+            let state = match n {
+                YouTubeNews::State(state) => state,
+                other => {
+                    news.push(other);
+                    continue;
+                }
+            };
             if watch.state.as_ref() != Some(&state) {
                 changed = Some(state.clone());
             }
@@ -1469,6 +1510,16 @@ impl App {
         {
             row.info = state.line().into();
             row.health = 2;
+        }
+        for n in news {
+            match n {
+                YouTubeNews::Created(title) => self.toast(
+                    format!("Created a YouTube broadcast to go live on: {title}"),
+                    false,
+                ),
+                YouTubeNews::Failed(e) => self.toast(e, true),
+                YouTubeNews::State(_) => {}
+            }
         }
         let Some(state) = changed else { return };
         match state {
