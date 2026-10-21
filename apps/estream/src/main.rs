@@ -7,6 +7,7 @@ mod actions;
 mod app;
 mod chat;
 mod clips;
+mod golive;
 mod http;
 mod interact;
 mod kick;

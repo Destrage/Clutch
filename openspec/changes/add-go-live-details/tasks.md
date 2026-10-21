@@ -10,9 +10,10 @@
 - [x] 1.5 A missing permission asks the user to connect again, as for stream keys
 
 ## 2. Details and settings
-- [ ] 2.1 `details` per destination and `stream.ask_details` in settings, with defaults; old
+- [x] 2.1 `details` per destination and `stream.ask_details` in settings, with defaults; old
       settings files load unchanged
-- [ ] 2.2 Pre-fill: saved details, else YouTube's last broadcast, else the channel's current details
+- [x] 2.2 Pre-fill: YouTube from the saved details, else the last broadcast; Twitch and Kick from
+      the channel as it is now, else the saved details
 
 ## 3. Go live window
 - [ ] 3.1 Slint window: one section per connected platform being streamed to, a list of

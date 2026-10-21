@@ -65,9 +65,13 @@ Each destination gets an optional `details` object, saved in settings.json:
 }
 ```
 
-A new setting, `stream.ask_details` (default on), controls whether the window opens. When a
-destination has no saved details, YouTube's are taken from the channel's last broadcast and
-Twitch's and Kick's from the channel as it is now.
+A new top-level setting, `ask_details` (default on), controls whether the window opens.
+
+Pre-filling:
+- **A new YouTube broadcast** uses the saved details, else the channel's last broadcast.
+- **Twitch and Kick** keep the title on the channel itself, which may have changed in their
+  dashboards since. So the window shows the channel as it is now, and falls back to the saved
+  details only when it can't be read.
 
 ## Edit while live
 The live panel's **Edit details** opens the same window in "live" mode:

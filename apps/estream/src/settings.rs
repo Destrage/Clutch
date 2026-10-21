@@ -169,6 +169,9 @@ pub struct Settings {
     pub kick: Option<crate::kick::KickAccount>,
     /// A chime when a follow, sub or other stream event arrives in the chat.
     pub chat_chime: bool,
+    /// Going live opens the Go live window (stream details per platform); off: the remembered
+    /// details are used without asking.
+    pub ask_details: bool,
     /// Single-stream settings from before multistream; read once, migrated, never written.
     #[serde(rename = "stream", skip_serializing)]
     legacy_stream: Option<estream_media::StreamSettings>,
@@ -187,6 +190,8 @@ pub struct DestinationConfig {
     pub key_protected: String,
     /// For the chat tab: the channel name (Kick, Twitch) or the live link (YouTube).
     pub channel: String,
+    /// The stream details used last time on this destination's platform (the Go live window).
+    pub details: StreamDetails,
 }
 
 impl Default for DestinationConfig {
@@ -197,8 +202,18 @@ impl Default for DestinationConfig {
             stream: estream_media::StreamSettings::default(),
             key_protected: String::new(),
             channel: String::new(),
+            details: StreamDetails::default(),
         }
     }
+}
+
+/// A destination's remembered stream details; only its platform's part is used.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StreamDetails {
+    pub youtube: Option<crate::youtube::BroadcastDetails>,
+    pub twitch: Option<crate::twitch::ChannelDetails>,
+    pub kick: Option<crate::kick::ChannelDetails>,
 }
 
 impl DestinationConfig {
@@ -473,6 +488,7 @@ impl Default for Settings {
             youtube: None,
             kick: None,
             chat_chime: true,
+            ask_details: true,
             legacy_stream: None,
             legacy_key: None,
         }
@@ -556,7 +572,7 @@ impl Settings {
             enabled: true,
             stream,
             key_protected: key,
-            channel: String::new(),
+            ..Default::default()
         });
     }
 
@@ -659,6 +675,28 @@ mod tests {
         if text.contains("AppsUseLightTheme") {
             assert_eq!(system_prefers_dark(), !text.contains("0x1"));
         }
+    }
+
+    #[test]
+    fn stream_details_load_from_old_files_and_round_trip() {
+        let old: Settings =
+            serde_json::from_str(r#"{ "destinations": [{ "name": "YouTube" }] }"#).unwrap();
+        assert!(old.ask_details);
+        assert_eq!(old.destinations[0].details, StreamDetails::default());
+        let mut s = Settings::default();
+        s.destinations.push(DestinationConfig {
+            details: StreamDetails {
+                youtube: Some(crate::youtube::BroadcastDetails {
+                    title: "Ranked".into(),
+                    latency: crate::youtube::Latency::UltraLow,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.destinations[0].details, s.destinations[0].details);
     }
 
     #[test]
