@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 pub const CLIENT_ID: &str = "5t3ur0gkcowdbgst7zo0415yo1quzo";
 /// The chatters list, replying from Clutch's chat, and follows, subs and cheers in it (viewer
 /// counts need no scope).
-const SCOPES: &str = "moderator:read:chatters user:write:chat moderator:read:followers channel:read:subscriptions bits:read";
+const SCOPES: &str = "moderator:read:chatters user:write:chat moderator:read:followers channel:read:subscriptions bits:read channel:read:stream_key";
 const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
 
 /// A connected Twitch account. The tokens live in memory only; they are saved encrypted.
@@ -248,6 +248,21 @@ impl Session {
             "chat/chatters?broadcaster_id={id}&moderator_id={id}&first=1000"
         ))?;
         chatter_list(&body)
+    }
+
+    /// The connected channel's stream key (the server stays Twitch's usual one).
+    pub fn stream_key(&self) -> Result<String, String> {
+        let account = self
+            .account()
+            .ok_or("Connect Twitch in Settings → Stream first")?;
+        let body = self
+            .helix(&format!("streams/key?broadcaster_id={}", account.user_id))
+            .ok_or("Connect Twitch again in Settings → Stream to get the stream key")?;
+        body.get("data")
+            .and_then(|d| d.get(0))
+            .map(|d| text(d, "stream_key"))
+            .filter(|k| !k.is_empty())
+            .ok_or_else(|| "Twitch didn't give a stream key".to_owned())
     }
 
     /// Sends a message to a channel's chat as the connected account.

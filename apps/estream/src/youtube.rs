@@ -314,9 +314,295 @@ fn concurrent_viewers(body: &Value) -> Option<u64> {
         .or_else(|| v.as_u64())
 }
 
+// ---- Stream details and live status ----
+
+/// Where to stream to YouTube and with which key.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StreamSetup {
+    pub server: String,
+    pub key: String,
+}
+
+/// What YouTube is doing with the stream Clutch sends (see [`Session::live_state`]).
+#[derive(Clone, Debug, PartialEq)]
+pub enum LiveState {
+    Live,
+    /// Starting the broadcast (auto-start, or a start in progress).
+    Starting,
+    /// Receiving video, but the broadcast waits to be started (auto-start is off).
+    WaitingToStart {
+        broadcast: String,
+    },
+    /// The stream exists but YouTube isn't getting video on it yet.
+    NoVideo,
+    /// No broadcast uses this stream.
+    NoBroadcast,
+    /// The key isn't one of the channel's streams.
+    NotYourKey,
+}
+
+impl LiveState {
+    /// One line for the YouTube row of the Live deck.
+    pub fn line(&self) -> &'static str {
+        match self {
+            LiveState::Live => "Live on YouTube",
+            LiveState::Starting => "YouTube is starting your broadcast…",
+            LiveState::WaitingToStart { .. } => "Waiting for you to start the broadcast",
+            LiveState::NoVideo => "YouTube isn't receiving video yet",
+            LiveState::NoBroadcast => "No YouTube broadcast uses this stream key",
+            LiveState::NotYourKey => "This stream key isn't one of your YouTube streams",
+        }
+    }
+}
+
+/// Broadcasts that are on or can still go on (not finished or removed), newest first as listed.
+fn open_broadcasts(broadcasts: &Value) -> Vec<&Value> {
+    broadcasts
+        .get("items")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter(|b| {
+                    let life = b["status"]["lifeCycleStatus"].as_str().unwrap_or_default();
+                    !matches!(life, "complete" | "revoked" | "")
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The stream to use: the one bound to a live (or else a ready) broadcast, else the channel's
+/// default stream, else the first.
+fn pick_stream<'a>(streams: &'a Value, broadcasts: &Value) -> Option<&'a Value> {
+    let items = streams.get("items")?.as_array()?;
+    let open = open_broadcasts(broadcasts);
+    let bound = open
+        .iter()
+        .find(|b| b["status"]["lifeCycleStatus"] == "live")
+        .or_else(|| open.first())
+        .and_then(|b| b["contentDetails"]["boundStreamId"].as_str());
+    bound
+        .and_then(|id| items.iter().find(|s| s["id"] == id))
+        .or_else(|| {
+            items.iter().find(|s| {
+                s["snippet"]["title"]
+                    .as_str()
+                    .is_some_and(|t| t.to_ascii_lowercase().contains("default"))
+            })
+        })
+        .or_else(|| items.first())
+}
+
+fn setup_of(stream: &Value) -> Option<StreamSetup> {
+    let info = &stream["cdn"]["ingestionInfo"];
+    let key = info["streamName"].as_str().filter(|k| !k.is_empty())?;
+    let server = info["ingestionAddress"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("rtmp://a.rtmp.youtube.com/live2");
+    Some(StreamSetup {
+        server: server.to_owned(),
+        key: key.to_owned(),
+    })
+}
+
+/// What YouTube is doing with the stream whose key is `key`.
+fn state_of(streams: &Value, broadcasts: &Value, key: &str) -> LiveState {
+    let stream = streams
+        .get("items")
+        .and_then(Value::as_array)
+        .and_then(|items| {
+            items
+                .iter()
+                .find(|s| s["cdn"]["ingestionInfo"]["streamName"].as_str() == Some(key))
+        });
+    let Some(stream) = stream else {
+        return LiveState::NotYourKey;
+    };
+    let id = stream["id"].as_str().unwrap_or_default();
+    let open = open_broadcasts(broadcasts);
+    let mine: Vec<&&Value> = open
+        .iter()
+        .filter(|b| b["contentDetails"]["boundStreamId"].as_str() == Some(id))
+        .collect();
+    if mine
+        .iter()
+        .any(|b| b["status"]["lifeCycleStatus"] == "live")
+    {
+        return LiveState::Live;
+    }
+    if stream["status"]["streamStatus"] != "active" {
+        return LiveState::NoVideo;
+    }
+    let Some(broadcast) = mine.first() else {
+        return LiveState::NoBroadcast;
+    };
+    match broadcast["status"]["lifeCycleStatus"]
+        .as_str()
+        .unwrap_or_default()
+    {
+        "liveStarting" | "testStarting" => LiveState::Starting,
+        _ if broadcast["contentDetails"]["enableAutoStart"] == true => LiveState::Starting,
+        _ => LiveState::WaitingToStart {
+            broadcast: broadcast["id"].as_str().unwrap_or_default().to_owned(),
+        },
+    }
+}
+
+impl Session {
+    fn streams_and_broadcasts(&self) -> Option<(Value, Value)> {
+        let broadcasts = self.api(
+            "liveBroadcasts?part=status,contentDetails&mine=true&broadcastType=all&maxResults=25",
+        )?;
+        let streams = self.api("liveStreams?part=cdn,snippet,status&mine=true&maxResults=50")?;
+        Some((streams, broadcasts))
+    }
+
+    /// The server and key of the channel's stream (see [`pick_stream`]).
+    pub fn stream_setup(&self) -> Result<StreamSetup, String> {
+        if self.account().is_none() {
+            return Err("Connect YouTube in Settings → Stream first".into());
+        }
+        let (streams, broadcasts) = self
+            .streams_and_broadcasts()
+            .ok_or("Couldn't read your YouTube streams. Connect YouTube again and retry.")?;
+        pick_stream(&streams, &broadcasts)
+            .and_then(setup_of)
+            .ok_or_else(|| {
+                "Your YouTube channel has no stream yet: open YouTube Studio → Go live once, then try again"
+                    .into()
+            })
+    }
+
+    /// What YouTube is doing with the stream Clutch sends with `key` (`None`: couldn't tell).
+    pub fn live_state(&self, key: &str) -> Option<LiveState> {
+        let (streams, broadcasts) = self.streams_and_broadcasts()?;
+        Some(state_of(&streams, &broadcasts, key))
+    }
+
+    /// Starts a broadcast that waits for it (auto-start off).
+    pub fn start_broadcast(&self, broadcast: &str) -> Result<(), String> {
+        let url = format!(
+            "{API}/liveBroadcasts/transition?broadcastStatus=live&id={broadcast}&part=status"
+        );
+        let token = self.token(false).ok_or("YouTube isn't connected")?;
+        let body = serde_json::json!({});
+        let (mut status, mut reply) =
+            post_json_bearer(&url, &token, &[], &body).ok_or("Couldn't reach YouTube")?;
+        if status == 401
+            && let Some(token) = self.token(true)
+        {
+            (status, reply) =
+                post_json_bearer(&url, &token, &[], &body).ok_or("Couldn't reach YouTube")?;
+        }
+        match status {
+            200 => Ok(()),
+            _ => Err(format!(
+                "YouTube didn't start the broadcast ({})",
+                crate::http::error_message(&reply)
+            )),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn stream(id: &str, title: &str, key: &str, status: &str) -> Value {
+        serde_json::json!({
+            "id": id,
+            "snippet": { "title": title },
+            "cdn": { "ingestionInfo": { "streamName": key,
+                "ingestionAddress": "rtmp://a.rtmp.youtube.com/live2" } },
+            "status": { "streamStatus": status }
+        })
+    }
+
+    fn broadcast(id: &str, life: &str, bound: &str, auto: bool) -> Value {
+        serde_json::json!({
+            "id": id,
+            "status": { "lifeCycleStatus": life },
+            "contentDetails": { "boundStreamId": bound, "enableAutoStart": auto }
+        })
+    }
+
+    #[test]
+    fn the_bound_stream_is_picked() {
+        let streams = serde_json::json!({ "items": [
+            stream("s1", "Default stream key", "aaaa-1111", "inactive"),
+            stream("s2", "Scheduled", "bbbb-2222", "inactive"),
+        ]});
+        let bound = serde_json::json!({ "items": [broadcast("b1", "ready", "s2", false)] });
+        assert_eq!(
+            pick_stream(&streams, &bound)
+                .and_then(setup_of)
+                .unwrap()
+                .key,
+            "bbbb-2222"
+        );
+        let none = serde_json::json!({ "items": [broadcast("b0", "complete", "s2", false)] });
+        assert_eq!(
+            pick_stream(&streams, &none).and_then(setup_of).unwrap().key,
+            "aaaa-1111"
+        );
+    }
+
+    #[test]
+    fn live_states() {
+        let streams = |status: &str| serde_json::json!({ "items": [stream("s1", "Default stream key", "k1", status)] });
+        let list = |b: Value| serde_json::json!({ "items": [b] });
+        assert_eq!(
+            state_of(
+                &streams("active"),
+                &list(broadcast("b", "ready", "s1", true)),
+                "nope"
+            ),
+            LiveState::NotYourKey
+        );
+        assert_eq!(
+            state_of(
+                &streams("inactive"),
+                &list(broadcast("b", "ready", "s1", true)),
+                "k1"
+            ),
+            LiveState::NoVideo
+        );
+        assert_eq!(
+            state_of(
+                &streams("active"),
+                &serde_json::json!({ "items": [] }),
+                "k1"
+            ),
+            LiveState::NoBroadcast
+        );
+        assert_eq!(
+            state_of(
+                &streams("active"),
+                &list(broadcast("b", "ready", "s1", false)),
+                "k1"
+            ),
+            LiveState::WaitingToStart {
+                broadcast: "b".into()
+            }
+        );
+        assert_eq!(
+            state_of(
+                &streams("active"),
+                &list(broadcast("b", "ready", "s1", true)),
+                "k1"
+            ),
+            LiveState::Starting
+        );
+        assert_eq!(
+            state_of(
+                &streams("active"),
+                &list(broadcast("b", "live", "s1", false)),
+                "k1"
+            ),
+            LiveState::Live
+        );
+    }
 
     #[test]
     fn viewers_are_read_from_the_live_details() {

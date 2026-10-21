@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 const CLIENT_ID: Option<&str> = option_env!("CLUTCH_KICK_CLIENT_ID");
-const SCOPES: &str = "user:read channel:read chat:write events:subscribe";
+const SCOPES: &str = "user:read channel:read chat:write events:subscribe streamkey:read";
 /// The events Clutch asks Kick to send to the relay (see `livechat::kick::events`).
 const EVENTS: [&str; 5] = [
     "channel.followed",
@@ -250,6 +250,37 @@ impl Session {
                 Err(false)
             }
         }
+    }
+
+    /// The connected channel's stream server and key: `(server, key)`.
+    pub fn stream_setup(&self) -> Result<(String, String), String> {
+        let account = self
+            .account()
+            .ok_or("Connect Kick in Settings → Stream first")?;
+        let url = format!("{API}/channels");
+        let (mut status, mut body) =
+            get_bearer(&url, &account.access, &[]).ok_or("Couldn't reach Kick")?;
+        if status == 401
+            && let Some(renewed) = self.renew(&account)
+        {
+            (status, body) = get_bearer(&url, &renewed.access, &[]).ok_or("Couldn't reach Kick")?;
+        }
+        if status == 401 || status == 403 {
+            return Err("Connect Kick again in Settings → Stream to get the stream key".into());
+        }
+        let stream = body
+            .get("data")
+            .and_then(|d| d.get(0))
+            .and_then(|c| c.get("stream"));
+        let (server, key) = stream
+            .map(|s| (text(s, "url"), text(s, "key")))
+            .unwrap_or_default();
+        if key.is_empty() {
+            return Err(
+                "Kick didn't give a stream key. Connect Kick again in Settings → Stream.".into(),
+            );
+        }
+        Ok((server, key))
     }
 
     /// Sends a message to a channel's chat as the connected account.

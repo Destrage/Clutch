@@ -172,6 +172,12 @@ pub struct App {
     /// The connected Kick account (replying to Kick chat), and a sign-in in progress.
     kick: crate::kick::Session,
     kick_connect: Option<crate::kick::Connecting>,
+    /// Filling a destination's stream key from its account: the destination and the result.
+    stream_fill: Option<(usize, std::sync::mpsc::Receiver<StreamFill>)>,
+    /// What YouTube does with the stream, while streaming to YouTube with it connected.
+    yt_watch: Option<YouTubeWatch>,
+    /// Starting a waiting YouTube broadcast.
+    yt_start: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
     /// Viewer counts while live.
     viewers: crate::viewers::ViewerCounts,
     /// The connected Twitch account, shared with the viewer counts (which renew its token).
@@ -210,13 +216,68 @@ pub struct App {
     update_installing: bool,
 }
 
+/// A destination's server (when the platform gives one) and stream key, or why not.
+type StreamFill = Result<(Option<String>, String), String>;
+
 /// What the toast's button does.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum ToastAction {
     /// Switch to a lighter performance profile.
     Profile(crate::performance::Profile),
     /// Download the update that was found.
     InstallUpdate,
+    /// Start the YouTube broadcast that waits for it (auto-start off).
+    StartYouTube(String),
+}
+
+/// Checks what YouTube does with the stream sent with `key`, in the background: every 20 seconds
+/// until it's live, then every 2 minutes. Dropping it stops the checks.
+struct YouTubeWatch {
+    key: String,
+    rx: std::sync::mpsc::Receiver<crate::youtube::LiveState>,
+    state: Option<crate::youtube::LiveState>,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl YouTubeWatch {
+    fn start(session: crate::youtube::Session, key: String) -> Self {
+        use std::sync::atomic::Ordering;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (s, k) = (stop.clone(), key.clone());
+        let _ = std::thread::Builder::new()
+            .name("estream-youtube-status".into())
+            .spawn(move || {
+                while !s.load(Ordering::Acquire) {
+                    let state = session.live_state(&k);
+                    let live = state == Some(crate::youtube::LiveState::Live);
+                    if let Some(state) = state
+                        && tx.send(state).is_err()
+                    {
+                        return;
+                    }
+                    let wait = if live { 120 } else { 20 };
+                    for _ in 0..wait * 5 {
+                        if s.load(Ordering::Acquire) {
+                            return;
+                        }
+                        std::thread::sleep(Duration::from_millis(200));
+                    }
+                }
+            });
+        Self {
+            key,
+            rx,
+            state: None,
+            stop,
+        }
+    }
+}
+
+impl Drop for YouTubeWatch {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Release);
+    }
 }
 
 /// What the shader editor dialog applies to.
@@ -647,6 +708,9 @@ impl App {
             chat_sending: None,
             kick,
             kick_connect: None,
+            stream_fill: None,
+            yt_watch: None,
+            yt_start: None,
             viewers: crate::viewers::ViewerCounts::start(crate::viewers::Accounts {
                 twitch: twitch.clone(),
                 youtube: youtube.clone(),
@@ -1276,6 +1340,163 @@ impl App {
         }
     }
 
+    // ---- Stream details from the account, and YouTube's live status ----
+
+    /// Fills the selected destination's server and key from its connected account (in the
+    /// background; [`Self::tick_stream_fill`] applies the result).
+    fn account_fill(&mut self) {
+        let Some(index) = self.dest_selected else {
+            return;
+        };
+        let Some(d) = self.settings.destinations.get(index) else {
+            return;
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let service = d.stream.service;
+        let (twitch, youtube, kick) =
+            (self.twitch.clone(), self.youtube.clone(), self.kick.clone());
+        let _ = std::thread::Builder::new()
+            .name("estream-stream-fill".into())
+            .spawn(move || {
+                let result = match service {
+                    Service::YouTube => youtube.stream_setup().map(|s| (Some(s.server), s.key)),
+                    Service::Twitch => twitch.stream_key().map(|k| (None, k)),
+                    Service::Kick => kick.stream_setup().map(|(s, k)| (Some(s), k)),
+                    _ => Err("This platform can't give its stream key to Clutch".into()),
+                };
+                let _ = tx.send(result);
+            });
+        self.stream_fill = Some((index, rx));
+        self.toast("Getting your stream key…".into(), false);
+    }
+
+    fn tick_stream_fill(&mut self) {
+        let Some((index, rx)) = &self.stream_fill else {
+            return;
+        };
+        let index = *index;
+        let result = match rx.try_recv() {
+            Ok(r) => r,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.stream_fill = None;
+                return;
+            }
+        };
+        self.stream_fill = None;
+        match result {
+            Ok((server, key)) => {
+                let Some(d) = self.settings.destinations.get_mut(index) else {
+                    return;
+                };
+                if let Some(server) = server.filter(|s| !s.trim().is_empty()) {
+                    d.stream.server = server.trim().to_owned();
+                }
+                d.set_key(&key);
+                let name = d.name.clone();
+                self.settings.save(&self.paths.settings());
+                self.refresh_settings_form();
+                self.toast(
+                    format!("Stream key for {name} filled in from your account"),
+                    false,
+                );
+            }
+            Err(e) => self.toast(e, true),
+        }
+    }
+
+    /// While streaming to YouTube with YouTube connected: checks what YouTube does with the
+    /// stream, shows it on the YouTube row, and says so when it changes.
+    fn youtube_status(&mut self, rows: &mut [LiveRow]) {
+        use crate::youtube::LiveState;
+        // The YouTube destination being streamed to, if any (one is checked).
+        let live = self
+            .settings
+            .destinations
+            .iter()
+            .zip(rows.iter())
+            .position(|(d, row)| d.stream.service == Service::YouTube && row.state == 2);
+        let wanted = live
+            .filter(|_| self.settings.youtube.is_some())
+            .map(|i| self.settings.destinations[i].stream.key.clone())
+            .filter(|k| !k.is_empty());
+        let Some(key) = wanted else {
+            self.yt_watch = None;
+            return;
+        };
+        if self.yt_watch.as_ref().is_none_or(|w| w.key != key) {
+            self.yt_watch = Some(YouTubeWatch::start(self.youtube.clone(), key));
+        }
+        let Some(watch) = &mut self.yt_watch else {
+            return;
+        };
+        let mut changed = None;
+        while let Ok(state) = watch.rx.try_recv() {
+            if watch.state.as_ref() != Some(&state) {
+                changed = Some(state.clone());
+            }
+            watch.state = Some(state);
+        }
+        if let (Some(i), Some(state)) = (live, &watch.state)
+            && let Some(row) = rows.get_mut(i)
+            && *state != LiveState::Live
+        {
+            row.info = state.line().into();
+            row.health = 2;
+        }
+        let Some(state) = changed else { return };
+        match state {
+            LiveState::Live => self.toast("Live on YouTube".into(), false),
+            LiveState::Starting => {}
+            LiveState::WaitingToStart { broadcast } => self.toast_with_action(
+                "YouTube is getting your video, but the broadcast waits to be started (auto-start is off)"
+                    .into(),
+                false,
+                "Start broadcast",
+                ToastAction::StartYouTube(broadcast),
+            ),
+            LiveState::NoVideo => {}
+            LiveState::NoBroadcast => self.toast(
+                "YouTube has no broadcast for this stream key: open YouTube Studio → Go live".into(),
+                true,
+            ),
+            LiveState::NotYourKey => self.toast(
+                "The YouTube stream key isn't one of your channel's streams. Use Get stream key in Settings → Stream."
+                    .into(),
+                true,
+            ),
+        }
+    }
+
+    /// Starts a YouTube broadcast that waits for it (from the toast's button).
+    fn start_youtube_broadcast(&mut self, broadcast: String) {
+        let youtube = self.youtube.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _ = std::thread::Builder::new()
+            .name("estream-youtube-start".into())
+            .spawn(move || {
+                let _ = tx.send(youtube.start_broadcast(&broadcast));
+            });
+        self.yt_start = Some(rx);
+        self.toast("Starting your YouTube broadcast…".into(), false);
+    }
+
+    fn tick_youtube_start(&mut self) {
+        let Some(rx) = &self.yt_start else { return };
+        match rx.try_recv() {
+            Ok(Ok(())) => {
+                self.yt_start = None;
+                self.toast("YouTube is starting your broadcast".into(), false);
+            }
+            Ok(Err(e)) => {
+                self.yt_start = None;
+                self.toast(e, true);
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => self.yt_start = None,
+        }
+    }
+
     // ---- Kick account ----
 
     /// Starts connecting Kick. Kick's sign-in opens in the default browser, which hands the
@@ -1410,6 +1631,7 @@ impl App {
                     self.toast(format!("Couldn't open your browser: {e}"), true);
                 }
             }
+            (Some(_), "fill") => self.account_fill(),
             (Some(Service::Kick), "connect") => self.kick_connect(),
             (Some(Service::Kick), "disconnect") => self.kick_disconnect(),
             (Some(Service::Kick), "cancel") => {
@@ -1940,6 +2162,8 @@ impl App {
         self.tick_youtube();
         self.tick_kick();
         self.tick_chat_send();
+        self.tick_stream_fill();
+        self.tick_youtube_start();
         if let Some(engine) = &self.engine {
             let image = |frame: estream_engine::CanvasFrame<'_>| {
                 slint::Image::try_from(frame.preview.clone())
@@ -2134,6 +2358,7 @@ impl App {
         match self.toast_action.take() {
             Some(ToastAction::Profile(p)) => self.apply_profile(p),
             Some(ToastAction::InstallUpdate) => self.update_download(),
+            Some(ToastAction::StartYouTube(broadcast)) => self.start_youtube_broadcast(broadcast),
             None => return,
         }
         if let Some(w) = self.window() {
@@ -4571,6 +4796,7 @@ impl App {
                 }
             }
         }
+        self.youtube_status(&mut rows);
         // Viewer counts for the live destinations (where the platform reports them).
         let targets = self
             .settings

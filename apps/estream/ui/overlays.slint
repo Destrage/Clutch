@@ -630,6 +630,13 @@ component DestinationEditor inherits VerticalLayout {
                 horizontal-stretch: 1;
             }
             if root.form.account-name != "": Button {
+                text: "Get stream key";
+                has-icon: true;
+                icon: Icons.refresh;
+                tooltip: "Fill in this destination's server and stream key from your " + account-row.platform + " account";
+                clicked => { root.set("account-fill", 0); }
+            }
+            if root.form.account-name != "": Button {
                 text: "Disconnect";
                 kind: "ghost";
                 clicked => { root.set("account-disconnect", 0); }
