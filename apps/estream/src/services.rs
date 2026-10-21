@@ -52,7 +52,11 @@ pub fn events_socket(path: &str) -> String {
 
 /// A page on Clutch's website (`path` starts with `/`).
 pub fn site_url(path: &str) -> String {
-    let base = setting("CLUTCH_SITE_URL", option_env!("CLUTCH_SITE_URL"), SITE_DEFAULT);
+    let base = setting(
+        "CLUTCH_SITE_URL",
+        option_env!("CLUTCH_SITE_URL"),
+        SITE_DEFAULT,
+    );
     format!("{}{path}", base.trim_end_matches('/'))
 }
 

@@ -498,7 +498,9 @@ impl Settings {
             d.stream.key = crate::secret::unprotect(&d.key_protected);
             // A custom server on Kick's own ingest is Kick (set up before the Kick preset, or by
             // pasting Kick's URL): treat it as Kick so its chat and Connect Kick work.
-            if d.stream.service == estream_media::Service::Custom && is_kick_ingest(&d.stream.server) {
+            if d.stream.service == estream_media::Service::Custom
+                && is_kick_ingest(&d.stream.server)
+            {
                 d.stream.service = estream_media::Service::Kick;
             }
         }
@@ -627,11 +629,14 @@ mod tests {
 
     /// The registry read agrees with what `reg.exe` reports.
     #[cfg(windows)]
-
     #[test]
     fn kick_ingest_is_recognised() {
-        assert!(is_kick_ingest("rtmps://fa723fc1b171.global-contribute.live-video.net/app/"));
-        assert!(!is_kick_ingest("rtmps://abc123.global-contribute.live-video.net/app/"));
+        assert!(is_kick_ingest(
+            "rtmps://fa723fc1b171.global-contribute.live-video.net/app/"
+        ));
+        assert!(!is_kick_ingest(
+            "rtmps://abc123.global-contribute.live-video.net/app/"
+        ));
         assert!(!is_kick_ingest("rtmp://live.twitch.tv/app/"));
     }
     #[test]
