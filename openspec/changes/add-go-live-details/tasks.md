@@ -39,9 +39,10 @@
       without reconnecting; YouTube's latency and auto-start/auto-stop read-only
 
 ## 6. Docs and check
-- [ ] 6.1 Website streaming page (going live, details per platform, reconnecting Twitch and Kick);
+- [ ] 6.1 Website streaming page (going live, details per platform, reconnecting Twitch and Kick)
+      (written in clutch-site, not pushed until the release);
       testing guide
-- [ ] 6.2 Spec: drop the "No broadcast to go live on" scenario from `add-account-stream-setup`
+- [x] 6.2 Spec: drop the "No broadcast to go live on" scenario from `add-account-stream-setup`
 - [ ] 6.3 In-app check:
   - YouTube with none, one and two upcoming broadcasts;
   - YouTube with auto-start off;
