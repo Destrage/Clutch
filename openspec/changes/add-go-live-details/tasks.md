@@ -3,7 +3,7 @@
       for the channel's region; tests on recorded replies
 - [x] 1.2 YouTube: create (insert, then the video's category and made-for-kids), update, and bind;
       read one broadcast; delete only when it never went live; tests for that check
-- [ ] 1.3 Twitch: read and update channel details; search categories; tag checks; add
+- [x] 1.3 Twitch: read and update channel details; search categories; tag checks; add
       `channel:manage:broadcast` to the sign-in
 - [ ] 1.4 Kick: read and update channel details; search categories; add `channel:write` to the
       sign-in (and on the Kick app)

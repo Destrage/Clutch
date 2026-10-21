@@ -3,7 +3,7 @@
 //! Clutch is a public client: the Client ID ships in the app and there is no client secret.
 //! Tokens are saved encrypted (see [`crate::secret`]) and renewed in the background.
 
-use crate::http::{agent, get_bearer, post_form, post_json_bearer, text};
+use crate::http::{agent, get_bearer, post_form, post_json_bearer, send_json_bearer, text};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,9 +11,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 pub const CLIENT_ID: &str = "5t3ur0gkcowdbgst7zo0415yo1quzo";
-/// The chatters list, replying from Clutch's chat, and follows, subs and cheers in it (viewer
-/// counts need no scope).
-const SCOPES: &str = "moderator:read:chatters user:write:chat moderator:read:followers channel:read:subscriptions bits:read channel:read:stream_key";
+/// The chatters list, replying from Clutch's chat, follows, subs and cheers in it, and the title
+/// and category from the Go live window (viewer counts need no scope).
+const SCOPES: &str = "moderator:read:chatters user:write:chat moderator:read:followers channel:read:subscriptions bits:read channel:read:stream_key channel:manage:broadcast";
 const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
 
 /// A connected Twitch account. The tokens live in memory only; they are saved encrypted.
@@ -386,6 +386,144 @@ impl Session {
             .filter(|l| !l.is_empty())
             .map(|l| l.to_ascii_lowercase())
     }
+
+    /// The connected channel's title, category, tags and language.
+    pub fn channel_details(&self) -> Result<ChannelDetails, String> {
+        let account = self
+            .account()
+            .ok_or("Connect Twitch in Settings → Stream first")?;
+        let body = self
+            .helix(&format!("channels?broadcaster_id={}", account.user_id))
+            .ok_or("Couldn't read your Twitch channel")?;
+        details_of(&body).ok_or_else(|| "Couldn't read your Twitch channel".into())
+    }
+
+    /// Saves the connected channel's title, category, tags and language.
+    pub fn set_channel_details(&self, details: &ChannelDetails) -> Result<(), String> {
+        let account = self
+            .account()
+            .ok_or("Connect Twitch in Settings → Stream first")?;
+        if let Some(problem) = details.tags.iter().find_map(|t| tag_problem(t)) {
+            return Err(problem.into());
+        }
+        let url = format!(
+            "https://api.twitch.tv/helix/channels?broadcaster_id={}",
+            account.user_id
+        );
+        let headers = [("Client-Id", CLIENT_ID)];
+        let body = channel_update(details);
+        let (mut status, mut reply) =
+            send_json_bearer("PATCH", &url, &account.access, &headers, &body)
+                .ok_or("Couldn't reach Twitch")?;
+        if status == 401
+            && let Some(renewed) = self.renew(&account)
+        {
+            (status, reply) = send_json_bearer("PATCH", &url, &renewed.access, &headers, &body)
+                .ok_or("Couldn't reach Twitch")?;
+        }
+        match status {
+            200..=299 => Ok(()),
+            401 | 403 => Err(
+                "Connect Twitch again in Settings → Stream to change your title from Clutch".into(),
+            ),
+            _ => Err(format!(
+                "Twitch didn't save the title ({})",
+                crate::http::error_message(&reply)
+            )),
+        }
+    }
+
+    /// Twitch categories (games) matching `query`: (id, name).
+    pub fn search_categories(&self, query: &str) -> Result<Vec<(String, String)>, String> {
+        if query.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        let body = self
+            .helix(&format!(
+                "search/categories?query={}&first=20",
+                crate::oauth::encode(query.trim())
+            ))
+            .ok_or("Couldn't search Twitch's categories")?;
+        Ok(categories_of(&body))
+    }
+}
+
+// ---- Channel details (the Go live window) ----
+
+/// What viewers see about the channel's stream.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChannelDetails {
+    pub title: String,
+    /// Twitch's category (game) id and name; "" for none.
+    pub category_id: String,
+    pub category: String,
+    pub tags: Vec<String>,
+    /// The broadcaster language, as an ISO 639-1 code ("en"), or "other".
+    pub language: String,
+}
+
+/// Twitch takes at most 10 tags.
+pub const MAX_TAGS: usize = 10;
+
+/// What's wrong with a tag, if anything: at most 25 characters, letters and digits only.
+pub fn tag_problem(tag: &str) -> Option<String> {
+    if tag.is_empty() {
+        Some("A Twitch tag can't be empty".into())
+    } else if tag.chars().count() > 25 {
+        Some(format!(
+            "The Twitch tag \"{tag}\" is longer than 25 characters"
+        ))
+    } else if !tag.chars().all(char::is_alphanumeric) {
+        Some(format!(
+            "The Twitch tag \"{tag}\" can only have letters and numbers"
+        ))
+    } else {
+        None
+    }
+}
+
+fn details_of(body: &Value) -> Option<ChannelDetails> {
+    let c = body.get("data")?.get(0)?;
+    Some(ChannelDetails {
+        title: text(c, "title"),
+        category_id: text(c, "game_id"),
+        category: text(c, "game_name"),
+        tags: c["tags"]
+            .as_array()
+            .map(|t| {
+                t.iter()
+                    .filter_map(|t| t.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        language: text(c, "broadcaster_language"),
+    })
+}
+
+fn channel_update(details: &ChannelDetails) -> Value {
+    let mut body = serde_json::json!({
+        "title": details.title,
+        "game_id": details.category_id,
+        "tags": details.tags.iter().take(MAX_TAGS).collect::<Vec<_>>(),
+    });
+    if !details.language.is_empty() {
+        body["broadcaster_language"] = details.language.clone().into();
+    }
+    body
+}
+
+fn categories_of(body: &Value) -> Vec<(String, String)> {
+    body["data"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .map(|c| (text(c, "id"), text(c, "name")))
+                .filter(|(id, _)| !id.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn stream_viewers(body: &Value) -> Option<u64> {
@@ -440,5 +578,52 @@ mod tests {
         account.set_tokens("access-token", "refresh-token");
         let json = serde_json::to_string(&account).unwrap();
         assert!(!json.contains("access-token") && !json.contains("refresh-token"));
+    }
+
+    #[test]
+    fn channel_details_are_read_and_written() {
+        let body = serde_json::json!({ "data": [{
+            "broadcaster_id": "1", "title": "Ranked", "game_id": "509658",
+            "game_name": "Just Chatting", "tags": ["English", "Chill"],
+            "broadcaster_language": "en"
+        }]});
+        let details = details_of(&body).unwrap();
+        assert_eq!(
+            details,
+            ChannelDetails {
+                title: "Ranked".into(),
+                category_id: "509658".into(),
+                category: "Just Chatting".into(),
+                tags: vec!["English".into(), "Chill".into()],
+                language: "en".into(),
+            }
+        );
+        let update = channel_update(&details);
+        assert_eq!(update["game_id"], "509658");
+        assert_eq!(update["tags"][1], "Chill");
+        assert_eq!(update["broadcaster_language"], "en");
+        assert!(update.get("game_name").is_none());
+    }
+
+    #[test]
+    fn tags_are_checked() {
+        assert_eq!(tag_problem("English"), None);
+        assert_eq!(tag_problem("日本語"), None);
+        assert!(tag_problem("two words").is_some());
+        assert!(tag_problem("no-dash").is_some());
+        assert!(tag_problem(&"a".repeat(26)).is_some());
+        assert!(tag_problem("").is_some());
+    }
+
+    #[test]
+    fn categories_come_from_the_search() {
+        let body = serde_json::json!({ "data": [
+            { "id": "32982", "name": "Grand Theft Auto V" },
+            { "id": "", "name": "broken" }
+        ]});
+        assert_eq!(
+            categories_of(&body),
+            vec![("32982".into(), "Grand Theft Auto V".into())]
+        );
     }
 }
