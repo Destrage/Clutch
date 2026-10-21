@@ -452,9 +452,20 @@ fn state_of(streams: &Value, broadcasts: &Value, key: &str) -> LiveState {
 
 impl Session {
     fn streams_and_broadcasts(&self) -> Option<(Value, Value)> {
-        let broadcasts = self.api(
-            "liveBroadcasts?part=status,contentDetails&mine=true&broadcastType=all&maxResults=25",
-        )?;
+        // Only broadcasts that are on or about to be: a plain "mine" list also holds every finished
+        // one, which on a busy channel pushes the current broadcast out of the first page.
+        let list = |status: &str| {
+            self.api(&format!(
+                "liveBroadcasts?part=status,contentDetails&broadcastStatus={status}&broadcastType=all&maxResults=50"
+            ))
+        };
+        let mut items = Vec::new();
+        for status in ["active", "upcoming"] {
+            if let Some(Value::Array(found)) = list(status).and_then(|b| b.get("items").cloned()) {
+                items.extend(found);
+            }
+        }
+        let broadcasts = serde_json::json!({ "items": items });
         let streams = self.api("liveStreams?part=cdn,snippet,status&mine=true&maxResults=50")?;
         Some((streams, broadcasts))
     }
