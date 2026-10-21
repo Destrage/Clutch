@@ -110,7 +110,11 @@ pub fn events(cx: &Context<'_>, session: &crate::twitch::Session) {
             EventsEnd::Moved(next) => url = next,
             EventsEnd::NoPermission => {
                 tracing::info!("Twitch events need the account connected again (new permissions)");
-                return;
+                // Try again once the user connects again (a new sign-in).
+                let before = session.account().map(|a| a.access);
+                if !super::wait_for_change(cx, || session.account().map(|a| a.access), before) {
+                    return;
+                }
             }
             EventsEnd::Dropped => {
                 url = EVENTSUB.to_owned();

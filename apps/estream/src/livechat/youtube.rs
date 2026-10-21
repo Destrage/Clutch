@@ -19,7 +19,11 @@ pub fn read(cx: &Context<'_>, session: &crate::youtube::Session) {
             cx.state(State::Waiting(
                 "Connect YouTube in Settings → Stream to see its chat here".into(),
             ));
-            return;
+            // Keep checking: connecting again (or after a disconnect) picks up from here.
+            if !cx.pause(Duration::from_secs(3)) {
+                return;
+            }
+            continue;
         }
         cx.state(State::Connecting);
         let Some(chat) = session.live_chat_id() else {

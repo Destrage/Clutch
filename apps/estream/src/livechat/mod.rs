@@ -322,6 +322,19 @@ impl Context<'_> {
     }
 }
 
+/// Waits until `now()` differs from `before` (for example a new sign-in after the user connects
+/// again), checking every few seconds. `false` when the reader is stopped meanwhile.
+fn wait_for_change<T: PartialEq>(cx: &Context<'_>, now: impl Fn() -> T, before: T) -> bool {
+    loop {
+        if !cx.pause(Duration::from_secs(3)) {
+            return false;
+        }
+        if now() != before {
+            return true;
+        }
+    }
+}
+
 /// The pause before reconnecting after `failures` attempts in a row (2 s doubling to a minute).
 fn backoff(failures: u32) -> Duration {
     Duration::from_secs((2u64 << failures.min(5)).min(60))

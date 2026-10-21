@@ -494,6 +494,11 @@ impl Settings {
         if settings.accent.eq_ignore_ascii_case("#6c8cff") {
             settings.accent = DEFAULT_ACCENT.into();
         }
+        // Recordings named before the rename ("eStream 2026-…") get Clutch's name from now on.
+        // The folder stays as chosen: earlier recordings and clips live there.
+        if let Some(rest) = settings.recording.filename.strip_prefix("eStream ") {
+            settings.recording.filename = format!("Clutch {rest}");
+        }
         for d in &mut settings.destinations {
             d.stream.key = crate::secret::unprotect(&d.key_protected);
             // A custom server on Kick's own ingest is Kick (set up before the Kick preset, or by

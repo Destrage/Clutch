@@ -198,33 +198,47 @@ enum RelayEnd {
 /// Receives the connected Kick channel's events while the chat is open. Quiet: problems only
 /// reach the log, and the chat keeps working without them.
 pub fn events(cx: &Context<'_>, session: &crate::kick::Session) {
-    match session.subscribe_events() {
-        Ok(()) => {}
-        Err(true) => {
-            tracing::info!("Kick events need the account connected again (new permissions)");
-            return;
-        }
-        // Kick may be briefly unavailable; the relay link still works for any earlier ones.
-        Err(false) => {}
-    }
-    let mut failures = 0;
-    let mut renewed = false;
+    let sign_in = || session.account().map(|a| a.access);
     while !cx.stopped() {
-        let Some(token) = session.token(renewed) else {
-            return;
-        };
-        match relay_connection(cx, &token) {
-            RelayEnd::Stopped => return,
-            RelayEnd::Refused if renewed => {
-                tracing::warn!("Clutch's events relay refused the Kick sign-in");
+        // Waits for a new sign-in (connecting again) when this one can't be used.
+        let wait_for_new_sign_in = || super::wait_for_change(cx, sign_in, sign_in());
+        if session.account().is_none() {
+            if !wait_for_new_sign_in() {
                 return;
             }
-            RelayEnd::Refused => renewed = true,
-            RelayEnd::Dropped => {
-                renewed = false;
-                failures += 1;
-                if !cx.pause(backoff(failures)) {
+            continue;
+        }
+        match session.subscribe_events() {
+            Ok(()) => {}
+            Err(true) => {
+                tracing::info!("Kick events need the account connected again (new permissions)");
+                if !wait_for_new_sign_in() {
                     return;
+                }
+                continue;
+            }
+            // Kick may be briefly unavailable; the relay link still works for earlier ones.
+            Err(false) => {}
+        }
+        let mut failures = 0;
+        let mut renewed = false;
+        while let Some(token) = session.token(renewed) {
+            match relay_connection(cx, &token) {
+                RelayEnd::Stopped => return,
+                RelayEnd::Refused if renewed => {
+                    tracing::warn!("Clutch's events relay refused the Kick sign-in");
+                    if !wait_for_new_sign_in() {
+                        return;
+                    }
+                    break;
+                }
+                RelayEnd::Refused => renewed = true,
+                RelayEnd::Dropped => {
+                    renewed = false;
+                    failures += 1;
+                    if !cx.pause(backoff(failures)) {
+                        return;
+                    }
                 }
             }
         }
