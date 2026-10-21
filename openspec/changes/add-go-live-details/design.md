@@ -37,7 +37,11 @@ report back over channels polled by the UI tick, like the YouTube status checker
   first, Clutch reads the broadcast once more and deletes it only if its `lifeCycleStatus` is still
   `created`, `ready` or `testing`, and it has no `actualStartTime`.
 - Beta 2's `ensure_broadcast` inside the status checker and the reconnect after it are removed.
-  The checker goes back to only reporting.
+  The checker goes back to reporting. It keeps one safety net: if a broadcast Clutch created
+  still says "starting" 15 seconds in, Clutch asks YouTube to start it, until it's live.
+- **Before a broadcast is chosen:** when one is already waiting on the destination's key (as
+  Studio's Stream page makes), the window preselects it instead of New broadcast. Going live
+  without the window does the same, so neither path makes a second broadcast for the same key.
 
 ## Twitch
 - Read: `GET helix/channels?broadcaster_id=` gives `title`, `game_id`, `game_name`, `tags` and

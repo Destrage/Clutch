@@ -1,9 +1,266 @@
 // Go Live in two steps: pick the platform, paste the key. Clutch picks everything else.
+// Also the Go live window: each connected platform's stream details before going live.
 
 import { Theme, Platform } from "theme.slint";
 import { Icons } from "icons.slint";
-import { Button, Icon, TextField } from "widgets.slint";
+import { Button, Icon, TextField, TextArea, Toggle, Select } from "widgets.slint";
 import { Modal } from "overlays.slint";
+
+/// One platform's section of the Go live window.
+export struct DetailsSection {
+    /// "youtube" | "twitch" | "kick"
+    kind: string,
+    /// The destination's name.
+    name: string,
+    /// 0 loading, 1 ready, 2 couldn't load, 3 couldn't apply (see error)
+    state: int,
+    error: string,
+    /// YouTube: "New broadcast", then each live or upcoming broadcast.
+    broadcasts: [string],
+    /// YouTube: the chosen entry of `broadcasts` (0 is a new broadcast).
+    broadcast: int,
+    title: string,
+    description: string,
+    /// YouTube: categories to pick from; Twitch and Kick: search results.
+    categories: [string],
+    /// YouTube: the chosen category (-1 none).
+    category-index: int,
+    /// Twitch and Kick: the chosen category's name ("" none).
+    category: string,
+    /// YouTube: 0 public, 1 unlisted, 2 private.
+    privacy: int,
+    kids: bool,
+    /// YouTube: 0 normal, 1 low, 2 ultra-low.
+    latency: int,
+    auto-start: bool,
+    auto-stop: bool,
+    /// YouTube: latency and auto-start/stop can no longer change (the broadcast is live).
+    locked: bool,
+    /// Twitch: tags separated by commas.
+    tags: string,
+    /// Twitch: languages to pick from, and the chosen one.
+    languages: [string],
+    language: int,
+}
+
+/// Each connected platform's stream details, applied before the video starts.
+export component StreamDetailsDialog inherits Modal {
+    in property <[DetailsSection]> sections;
+    /// Destinations streamed with their key only (no connected account).
+    in property <string> keys-only;
+    /// Editing while live: Save instead of Go live, and no broadcast choice.
+    in property <bool> live;
+    /// Applying the details (the button says what's happening).
+    in property <string> busy;
+    in property <bool> ask: true;
+    callback text(int, string, string);
+    callback flag(int, string, bool);
+    callback choose(int, string, int);
+    callback retry(int);
+    callback skip(int);
+    callback set-ask(bool);
+    callback go();
+
+    card-width: 620px;
+
+    FocusScope {
+        height: 0px;
+        key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                root.dismiss();
+                return EventResult.accept;
+            }
+            return EventResult.reject;
+        }
+    }
+    VerticalLayout {
+        padding: 22px;
+        spacing: 14px;
+        HorizontalLayout {
+            spacing: 12px;
+            Rectangle {
+                width: 40px;
+                height: 40px;
+                border-radius: 11px;
+                background: Theme.live;
+                Icon { source: Icons.radio; size: 20px; tint: #ffffff; }
+            }
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                Text { text: root.live ? "Stream details" : "Go live"; color: Theme.text; font-size: Theme.font-xl; font-weight: 700; }
+                Text {
+                    text: root.live ? "Changes show on each platform right away; the stream keeps running."
+                        : "What viewers see on each platform. Clutch sets it up before your video starts.";
+                    color: Theme.text-muted;
+                    font-size: Theme.font-s;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        scroller := Flickable {
+            height: min(content.preferred-height, 520px);
+            content-height: content.preferred-height;
+            content := VerticalLayout {
+                spacing: 12px;
+                alignment: start;
+                for s[i] in root.sections: Rectangle {
+                    border-radius: Theme.radius-m;
+                    border-width: 1px;
+                    border-color: s.state >= 2 ? Theme.live : Theme.border;
+                    background: Theme.surface-2;
+                    height: body.preferred-height;
+                    body := VerticalLayout {
+                        padding: 14px;
+                        spacing: 10px;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Text {
+                                text: s.kind == "youtube" ? "YouTube" : s.kind == "twitch" ? "Twitch" : "Kick";
+                                color: Theme.text;
+                                font-size: Theme.font-m;
+                                font-weight: 700;
+                            }
+                            Text { text: s.name; color: Theme.text-faint; font-size: Theme.font-s; vertical-alignment: center; horizontal-stretch: 1; }
+                            if s.state == 0: Text { text: "Loading…"; color: Theme.text-faint; font-size: Theme.font-s; vertical-alignment: center; }
+                        }
+                        if s.state >= 2: Text { text: s.error; color: Theme.live; font-size: Theme.font-s; wrap: word-wrap; }
+                        if s.state >= 2: HorizontalLayout {
+                            spacing: 8px;
+                            alignment: start;
+                            Button { text: "Try again"; kind: "ghost"; clicked => { root.retry(i); } }
+                            if !root.live: Button { text: "Go live without " + (s.kind == "youtube" ? "YouTube" : s.kind == "twitch" ? "Twitch" : "Kick"); kind: "ghost"; clicked => { root.skip(i); } }
+                        }
+
+                        if s.state == 1 || s.state == 3: VerticalLayout {
+                            spacing: 10px;
+                            if s.kind == "youtube" && !root.live: Select {
+                                label: "Broadcast";
+                                options: s.broadcasts;
+                                current-index: s.broadcast;
+                                selected(v) => { root.choose(i, "broadcast", v); }
+                            }
+                            TextField {
+                                label: "Title";
+                                placeholder: "Title";
+                                text: s.title;
+                                edited(t) => { root.text(i, "title", t); }
+                            }
+                            if s.kind == "youtube": TextArea {
+                                label: "Description";
+                                text: s.description;
+                                edited(t) => { root.text(i, "description", t); }
+                            }
+                            if s.kind == "youtube": HorizontalLayout {
+                                spacing: 8px;
+                                Select {
+                                    label: "Privacy";
+                                    horizontal-stretch: 1;
+                                    options: ["Public", "Unlisted", "Private"];
+                                    current-index: s.privacy;
+                                    selected(v) => { root.choose(i, "privacy", v); }
+                                }
+                                Select {
+                                    label: "Category";
+                                    horizontal-stretch: 1;
+                                    options: s.categories;
+                                    current-index: s.category-index;
+                                    selected(v) => { root.choose(i, "category", v); }
+                                }
+                            }
+                            if s.kind == "youtube": HorizontalLayout {
+                                spacing: 8px;
+                                Select {
+                                    label: "Latency";
+                                    horizontal-stretch: 1;
+                                    options: ["Normal latency", "Low latency", "Ultra-low latency"];
+                                    current-index: s.latency;
+                                    selected(v) => { if (!s.locked) { root.choose(i, "latency", v); } }
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                            }
+                            if s.kind == "youtube": HorizontalLayout {
+                                spacing: 18px;
+                                alignment: start;
+                                Toggle { label: "Made for kids"; checked: s.kids; toggled(v) => { root.flag(i, "kids", v); } }
+                                Toggle { label: "Auto-start"; enabled: !s.locked; checked: s.auto-start; toggled(v) => { root.flag(i, "auto-start", v); } }
+                                Toggle { label: "Auto-stop"; enabled: !s.locked; checked: s.auto-stop; toggled(v) => { root.flag(i, "auto-stop", v); } }
+                            }
+                            if s.kind == "youtube" && !s.auto-start: Text {
+                                text: "With auto-start off, Clutch asks you to start the broadcast once YouTube gets your video.";
+                                color: Theme.text-faint;
+                                font-size: Theme.font-xs;
+                                wrap: word-wrap;
+                            }
+                            if s.kind != "youtube": TextField {
+                                label: "Category";
+                                placeholder: s.category == "" ? "Search for a category" : s.category;
+                                edited(t) => { root.text(i, "category-search", t); }
+                            }
+                            if s.kind != "youtube" && s.categories.length > 0: Select {
+                                label: "Matching categories";
+                                options: s.categories;
+                                current-index: -1;
+                                selected(v) => { root.choose(i, "category", v); }
+                            }
+                            if s.kind != "youtube" && s.category != "": Text {
+                                text: "Category: " + s.category;
+                                color: Theme.text-muted;
+                                font-size: Theme.font-s;
+                            }
+                            if s.kind == "twitch": HorizontalLayout {
+                                spacing: 8px;
+                                TextField {
+                                    label: "Tags";
+                                    horizontal-stretch: 2;
+                                    placeholder: "Tags, separated by commas (up to 10)";
+                                    text: s.tags;
+                                    edited(t) => { root.text(i, "tags", t); }
+                                }
+                                Select {
+                                    label: "Language";
+                                    horizontal-stretch: 1;
+                                    options: s.languages;
+                                    current-index: s.language;
+                                    selected(v) => { root.choose(i, "language", v); }
+                                }
+                            }
+                        }
+                    }
+                }
+                if root.keys-only != "": Text {
+                    text: "Also streams with its key: " + root.keys-only;
+                    color: Theme.text-faint;
+                    font-size: Theme.font-s;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            if !root.live: VerticalLayout {
+                alignment: center;
+                Toggle {
+                    label: "Ask before going live";
+                    checked: root.ask;
+                    toggled(v) => { root.set-ask(v); }
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Button { text: "Cancel"; kind: "ghost"; clicked => { root.dismiss(); } }
+            Button {
+                text: root.busy != "" ? root.busy : root.live ? "Save" : "Go Live";
+                kind: root.live ? "primary" : "live";
+                has-icon: !root.live;
+                icon: Icons.radio;
+                enabled: root.busy == "";
+                clicked => { root.go(); }
+            }
+        }
+    }
+}
 
 export component GoLiveDialog inherits Modal {
     in property <[string]> platforms;

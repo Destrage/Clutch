@@ -18,7 +18,7 @@ import { LiveDeck } from "deck.slint";
 import { Sidebar } from "sidebar.slint";
 import { SceneStrip } from "stage.slint";
 import { ChatPanel, ChatTabRow, ChatLive, ChatLine, ChatStateRow, SignInDialog } from "chat.slint";
-import { GoLiveDialog } from "golive.slint";
+import { GoLiveDialog, StreamDetailsDialog, DetailsSection } from "golive.slint";
 
 export { Theme, Platform }
 
@@ -234,6 +234,23 @@ export component AppWindow inherits Window {
     callback golive-go();
     callback golive-more();
     callback golive-key-edited(string);
+    // The Go live window (stream details per connected platform).
+    in-out property <bool> details-open;
+    in property <[DetailsSection]> details-sections;
+    in property <string> details-keys-only;
+    in property <bool> details-live;
+    in property <string> details-busy;
+    in property <bool> details-ask: true;
+    callback details-text(int, string, string);
+    callback details-flag(int, string, bool);
+    callback details-choose(int, string, int);
+    callback details-retry(int);
+    callback details-skip(int);
+    callback details-set-ask(bool);
+    callback details-go();
+    callback details-closed();
+    /// The Go Live button (hotkeys and remote control use the "stream.toggle" action).
+    callback go-live-clicked();
     in property <StatsForm> stats-form;
     in property <int> health;
     in property <string> health-text: "Healthy";
@@ -391,7 +408,7 @@ export component AppWindow inherits Window {
                 open-clips => { root.action("clips.open"); }
                 stream-state: root.stream-state;
                 stream-time: root.stream-time;
-                toggle-stream => { root.action("stream.toggle"); }
+                toggle-stream => { root.go-live-clicked(); }
                 show-deck => { root.deck-edit = false; main-keys.focus(); }
                 live-panel-open: root.live-panel-open;
                 open-destinations => { root.live-panel-open = !root.live-panel-open; }
@@ -711,6 +728,8 @@ export component AppWindow inherits Window {
         width: parent.width;
         height: parent.height;
         rows: root.live-rows;
+        streaming: root.stream-state != 0;
+        edit-details => { root.live-panel-open = false; root.action("stream.details"); }
         toggle(i) => { root.live-toggle(i); }
         manage => { root.live-panel-open = false; root.settings-page = 1; root.action("settings"); }
         add-platform => { root.live-panel-open = false; root.action("go-live-setup"); }
@@ -764,6 +783,26 @@ export component AppWindow inherits Window {
         more-options => { root.golive-more(); }
         dismiss => {
             root.golive-open = false;
+            main-keys.focus();
+        }
+    }
+
+    if root.details-open: StreamDetailsDialog {
+        sections: root.details-sections;
+        keys-only: root.details-keys-only;
+        live: root.details-live;
+        busy: root.details-busy;
+        ask: root.details-ask;
+        text(i, field, value) => { root.details-text(i, field, value); }
+        flag(i, field, value) => { root.details-flag(i, field, value); }
+        choose(i, field, value) => { root.details-choose(i, field, value); }
+        retry(i) => { root.details-retry(i); }
+        skip(i) => { root.details-skip(i); }
+        set-ask(v) => { root.details-set-ask(v); }
+        go => { root.details-go(); }
+        // Rust closes it (it stays open while the details are being applied).
+        dismiss => {
+            root.details-closed();
             main-keys.focus();
         }
     }

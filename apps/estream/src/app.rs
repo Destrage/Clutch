@@ -179,6 +179,11 @@ pub struct App {
     /// The YouTube broadcast Clutch created for this stream while it isn't live yet: its id and
     /// when it was made. Deleted when the stream ends before it goes live.
     yt_created: Option<(String, Instant)>,
+    /// Setting up the stream details before going live (the Go live window, or the same work
+    /// without it).
+    details: Option<crate::golive::Window>,
+    /// `details` is shown as the Go live window.
+    details_shown: bool,
     /// Starting a waiting YouTube broadcast.
     yt_start: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
     /// Viewer counts while live.
@@ -233,22 +238,15 @@ enum ToastAction {
     StartYouTube(String),
     /// Switch a YouTube destination (by settings index) to the stream its broadcast uses.
     UseYouTubeKey(usize, crate::youtube::StreamSetup),
+    /// Open a page (the YouTube broadcast Clutch set up).
+    OpenUrl(String),
 }
 
-/// What the YouTube checker found.
-enum YouTubeNews {
-    State(crate::youtube::LiveState),
-    /// It created a broadcast (none was there to go live on): its id and title.
-    Created(String, String),
-    Failed(String),
-}
-
-/// Checks what YouTube does with the stream sent with `key`, in the background: first makes sure
-/// there is a broadcast to go live on, then checks every 20 seconds until it's live, then every
-/// 2 minutes. Dropping it stops the checks.
+/// Checks what YouTube does with the stream sent with `key`, in the background: every 20 seconds
+/// until it's live, then every 2 minutes. Dropping it stops the checks.
 struct YouTubeWatch {
     key: String,
-    rx: std::sync::mpsc::Receiver<YouTubeNews>,
+    rx: std::sync::mpsc::Receiver<crate::youtube::LiveState>,
     state: Option<crate::youtube::LiveState>,
     /// Whether YouTube has been live with this key (then a key change isn't switched to alone).
     seen_live: bool,
@@ -256,8 +254,8 @@ struct YouTubeWatch {
 }
 
 impl YouTubeWatch {
-    /// `created`: the broadcast Clutch created for this stream that isn't live yet (from an
-    /// earlier watch, before a reconnect), with when it was made.
+    /// `created`: the broadcast Clutch created for this stream that isn't live yet, with when it
+    /// was made.
     fn start(
         session: crate::youtube::Session,
         key: String,
@@ -272,24 +270,11 @@ impl YouTubeWatch {
             .spawn(move || {
                 use crate::youtube::LiveState;
                 let mut created = created;
-                if created.is_none() {
-                    match session.ensure_broadcast(&k) {
-                        Ok(Some((id, title))) => {
-                            let _ = tx.send(YouTubeNews::Created(id.clone(), title));
-                            created = Some((id, Instant::now()));
-                        }
-                        Ok(None) => {}
-                        Err(e) => {
-                            let _ = tx.send(YouTubeNews::Failed(e));
-                        }
-                    }
-                }
                 while !s.load(Ordering::Acquire) {
                     let state = session.live_state(&k);
                     let live = state == Some(LiveState::Live);
-                    // Auto-start acts when the video arrives on the bound stream (the app
-                    // reconnects for that); if it hasn't by now, start the broadcast, until it's
-                    // live (YouTube refuses while it doesn't see the video yet).
+                    // The broadcast was bound before the video started, so auto-start should
+                    // act; if it hasn't by now, start it, until it's live.
                     if state == Some(LiveState::Starting)
                         && let Some((id, at)) = &created
                         && at.elapsed() > Duration::from_secs(15)
@@ -301,7 +286,7 @@ impl YouTubeWatch {
                         created = None;
                     }
                     if let Some(state) = state
-                        && tx.send(YouTubeNews::State(state)).is_err()
+                        && tx.send(state).is_err()
                     {
                         return;
                     }
@@ -761,6 +746,8 @@ impl App {
             stream_fill: Vec::new(),
             yt_watch: None,
             yt_created: None,
+            details: None,
+            details_shown: false,
             yt_start: None,
             viewers: crate::viewers::ViewerCounts::start(crate::viewers::Accounts {
                 twitch: twitch.clone(),
@@ -1505,15 +1492,7 @@ impl App {
             return;
         };
         let mut changed = None;
-        let mut news = Vec::new();
-        while let Ok(n) = watch.rx.try_recv() {
-            let state = match n {
-                YouTubeNews::State(state) => state,
-                other => {
-                    news.push(other);
-                    continue;
-                }
-            };
+        while let Ok(state) = watch.rx.try_recv() {
             if watch.state.as_ref() != Some(&state) {
                 changed = Some(state.clone());
             }
@@ -1531,30 +1510,6 @@ impl App {
         {
             row.info = state.line().into();
             row.health = 2;
-        }
-        for n in news {
-            match n {
-                YouTubeNews::Created(id, title) => {
-                    self.yt_created = Some((id, Instant::now()));
-                    // YouTube only notices video that starts after the stream is bound to a
-                    // broadcast (auto-start and starting it both wait for that), so reconnect.
-                    // Nothing is live yet, so nobody sees the short gap.
-                    if let (Some(i), Some(engine), Some(stream)) =
-                        (live, &self.engine, &mut self.stream)
-                        && let Some(k) = self.stream_dests.iter().position(|d| d.config == i)
-                    {
-                        let dest = self.settings.destinations[i].to_destination();
-                        stream.restart_destination(engine, k, &dest);
-                        self.stream_dests[k] = LiveDest::new(i);
-                    }
-                    self.toast(
-                        format!("Created a YouTube broadcast to go live on: {title}"),
-                        false,
-                    );
-                }
-                YouTubeNews::Failed(e) => self.toast(e, true),
-                YouTubeNews::State(_) => {}
-            }
         }
         let Some(state) = changed else { return };
         match state {
@@ -1628,8 +1583,13 @@ impl App {
         let _ = std::thread::Builder::new()
             .name("estream-youtube-delete".into())
             .spawn(move || {
-                if let Err(e) = youtube.delete_broadcast(&id) {
-                    tracing::warn!(error = %e, "couldn't delete the unused YouTube broadcast");
+                // Only if YouTube says it never went live: a short stream's recording stays.
+                match youtube.delete_if_never_live(&id) {
+                    Ok(true) => tracing::info!(%id, "deleted the unused YouTube broadcast"),
+                    Ok(false) => {}
+                    Err(e) => {
+                        tracing::warn!(error = %e, "couldn't delete the unused YouTube broadcast");
+                    }
                 }
             });
     }
@@ -2331,6 +2291,7 @@ impl App {
         self.tick_chat_send();
         self.tick_stream_fill();
         self.tick_youtube_start();
+        self.tick_details();
         if let Some(engine) = &self.engine {
             let image = |frame: estream_engine::CanvasFrame<'_>| {
                 slint::Image::try_from(frame.preview.clone())
@@ -2527,6 +2488,11 @@ impl App {
             Some(ToastAction::InstallUpdate) => self.update_download(),
             Some(ToastAction::StartYouTube(broadcast)) => self.start_youtube_broadcast(broadcast),
             Some(ToastAction::UseYouTubeKey(config, setup)) => self.use_youtube_key(config, setup),
+            Some(ToastAction::OpenUrl(url)) => {
+                if let Err(e) = crate::shell::open_url(&url) {
+                    tracing::warn!(error = %e, %url, "couldn't open the page");
+                }
+            }
             None => return,
         }
         if let Some(w) = self.window() {
@@ -3896,7 +3862,9 @@ impl App {
         }
     }
 
-    /// Go Live on every enabled destination, or end the stream everywhere.
+    /// Go Live on every enabled destination, or end the stream everywhere. From a hotkey, macro,
+    /// the command palette or remote control: the remembered stream details are used without
+    /// asking.
     fn toggle_stream(&mut self) {
         let Some(engine) = &self.engine else { return };
         if let Some(stream) = self.stream.take() {
@@ -3907,16 +3875,87 @@ impl App {
             self.update_outputs();
             return;
         }
+        self.go_live(false);
+    }
+
+    /// The Go Live button: ends the stream, or opens the Go live window (unless the user chose
+    /// to go live without asking).
+    pub fn go_live_clicked(&mut self) {
+        if self.stream.is_some() {
+            self.toggle_stream();
+        } else {
+            self.go_live(self.settings.ask_details);
+        }
+    }
+
+    /// Sets up each connected platform's stream details, then starts the video: in the Go live
+    /// window (`ask`), or with the remembered details.
+    fn go_live(&mut self, ask: bool) {
         let enabled = self.settings.enabled_destinations();
         if enabled.is_empty() {
             self.open_golive();
+            return;
+        }
+        if self.details.is_some() {
+            // Already setting up; the window (or the toast) says so.
+            self.show_details();
+            return;
+        }
+        let dests: Vec<(usize, &crate::settings::DestinationConfig)> = enabled
+            .iter()
+            .map(|(i, _)| (*i, &self.settings.destinations[*i]))
+            .collect();
+        let sessions = self.golive_sessions();
+        let window = if ask {
+            crate::golive::Window::open(&dests, sessions, false)
+        } else {
+            crate::golive::Window::remembered(&dests, sessions)
+        };
+        if !window.has_sections() {
+            self.start_stream(&[], Vec::new());
+            return;
+        }
+        self.details_shown = ask;
+        self.details = Some(window);
+        if ask {
+            self.show_details();
+        } else {
+            self.toast("Setting up your stream details…".into(), false);
+        }
+    }
+
+    fn golive_sessions(&self) -> crate::golive::Sessions {
+        crate::golive::Sessions {
+            youtube: self.youtube.clone(),
+            twitch: self.twitch.clone(),
+            kick: self.kick.clone(),
+        }
+    }
+
+    /// Starts the video on every enabled destination except `skip` (settings indices), and says
+    /// what was set up on each platform (`lines`).
+    fn start_stream(&mut self, skip: &[usize], lines: Vec<String>) {
+        let Some(engine) = &self.engine else { return };
+        let enabled: Vec<_> = self
+            .settings
+            .enabled_destinations()
+            .into_iter()
+            .filter(|(i, _)| !skip.contains(i))
+            .collect();
+        if enabled.is_empty() {
+            self.toast("Nothing to go live on".into(), true);
             return;
         }
         let dests: Vec<_> = enabled.iter().map(|(_, d)| d.clone()).collect();
         match estream_media::MultiStream::start(engine, &dests) {
             Ok(stream) => {
                 let names: Vec<&str> = dests.iter().map(|d| d.name.as_str()).collect();
-                self.toast(format!("Going live on {}", names.join(", ")), false);
+                let mut text = format!("Going live on {}", names.join(", "));
+                for line in lines {
+                    text.push('\n');
+                    text.push_str(&line);
+                }
+                self.toast(text, false);
                 self.stream_dests = enabled.iter().map(|(i, _)| LiveDest::new(*i)).collect();
                 self.stream = Some(stream);
             }
@@ -3926,6 +3965,181 @@ impl App {
             }
         }
         self.update_outputs();
+    }
+
+    /// Live panel's Edit details: the Go live window for the platforms being streamed to,
+    /// saving without reconnecting.
+    pub fn edit_details(&mut self) {
+        if self.stream.is_none() || self.details.is_some() {
+            return;
+        }
+        let dests: Vec<(usize, &crate::settings::DestinationConfig)> = self
+            .stream_dests
+            .iter()
+            .filter_map(|d| Some((d.config, self.settings.destinations.get(d.config)?)))
+            .collect();
+        let window = crate::golive::Window::open(&dests, self.golive_sessions(), true);
+        if !window.has_sections() {
+            self.toast(
+                "Connect YouTube, Twitch or Kick in Settings → Stream to change your stream details from Clutch"
+                    .into(),
+                false,
+            );
+            return;
+        }
+        self.details_shown = true;
+        self.details = Some(window);
+        self.show_details();
+    }
+
+    /// Puts the Go live window's sections on screen.
+    fn show_details(&mut self) {
+        let (Some(w), Some(d)) = (self.window(), &self.details) else {
+            return;
+        };
+        if !self.details_shown {
+            return;
+        }
+        w.set_details_sections(ModelRc::new(VecModel::from(d.rows())));
+        w.set_details_keys_only(d.keys_only.join(", ").into());
+        w.set_details_live(d.live);
+        w.set_details_busy(d.busy().unwrap_or_default().into());
+        w.set_details_ask(self.settings.ask_details);
+        w.set_details_open(true);
+    }
+
+    /// Takes in the Go live window's background results.
+    fn tick_details(&mut self) {
+        let Some(d) = &mut self.details else { return };
+        match d.poll() {
+            None => {}
+            Some(crate::golive::Outcome::Changed) => self.show_details(),
+            Some(crate::golive::Outcome::Done(applied)) => self.details_done(applied),
+        }
+    }
+
+    /// Every platform is set up: remember the details, switch keys where the chosen broadcast
+    /// needs it, and start the video (or, while live, just say it's saved).
+    fn details_done(&mut self, applied: Vec<(usize, crate::golive::Applied)>) {
+        let Some(window) = self.details.take() else {
+            return;
+        };
+        if let Some(w) = self.window() {
+            w.set_details_open(false);
+        }
+        let mut lines = Vec::new();
+        let mut link = None;
+        for (config, a) in applied {
+            if let Some(d) = self.settings.destinations.get_mut(config) {
+                let saved = &mut d.details;
+                saved.youtube = a.details.youtube.or(saved.youtube.take());
+                saved.twitch = a.details.twitch.or(saved.twitch.take());
+                saved.kick = a.details.kick.or(saved.kick.take());
+                if let Some(setup) = a.switch {
+                    d.stream.server = setup.server;
+                    d.set_key(&setup.key);
+                }
+            }
+            if let Some(id) = a.created {
+                self.yt_created = Some((id, Instant::now()));
+            }
+            link = link.or(a.link);
+            lines.push(a.message);
+        }
+        self.settings.save(&self.paths.settings());
+        if !window.errors.is_empty() {
+            // Without the window: going live anyway, with what went wrong.
+            lines.extend(window.errors.iter().cloned());
+        }
+        if window.live {
+            self.toast(format!("Saved\n{}", lines.join("\n")), false);
+            return;
+        }
+        self.start_stream(&window.skipped(), lines);
+        if !window.errors.is_empty() {
+            self.toast(window.errors.join("\n"), true);
+        } else if let Some(url) = link
+            && let Some(text) = self.window().map(|w| w.get_toast_text().to_string())
+        {
+            self.toast_with_action(text, false, "Open on YouTube", ToastAction::OpenUrl(url));
+        }
+    }
+
+    pub fn details_text(&mut self, row: i32, field: &str, value: &str) {
+        if let Some(d) = &mut self.details
+            && let Some(i) = d.section_of_row(row)
+        {
+            d.text(i, field, value);
+        }
+    }
+
+    pub fn details_flag(&mut self, row: i32, field: &str, value: bool) {
+        if let Some(d) = &mut self.details
+            && let Some(i) = d.section_of_row(row)
+        {
+            d.flag(i, field, value);
+        }
+        self.show_details();
+    }
+
+    pub fn details_choose(&mut self, row: i32, field: &str, index: i32) {
+        if let Some(d) = &mut self.details
+            && let Some(i) = d.section_of_row(row)
+        {
+            d.choose(i, field, index);
+        }
+        self.show_details();
+    }
+
+    pub fn details_retry(&mut self, row: i32) {
+        if let Some(d) = &mut self.details
+            && let Some(i) = d.section_of_row(row)
+        {
+            d.retry(i);
+        }
+        self.show_details();
+    }
+
+    /// "Go live without <platform>".
+    pub fn details_skip(&mut self, row: i32) {
+        if let Some(d) = &mut self.details
+            && let Some(i) = d.section_of_row(row)
+        {
+            d.skip(i);
+            if d.busy().is_none() {
+                d.apply();
+            }
+        }
+        self.show_details();
+    }
+
+    pub fn details_set_ask(&mut self, ask: bool) {
+        self.settings.ask_details = ask;
+        self.settings.save(&self.paths.settings());
+    }
+
+    /// Go Live (or Save) in the window.
+    pub fn details_go(&mut self) {
+        let Some(d) = &mut self.details else { return };
+        if d.busy().is_some() {
+            return;
+        }
+        if !d.apply() {
+            self.toast("Still loading your stream details…".into(), false);
+        }
+        self.show_details();
+    }
+
+    /// The window was closed (Cancel, Escape). While details are being applied it stays open,
+    /// so a broadcast isn't made with nobody going live on it.
+    pub fn details_closed(&mut self) {
+        if self.details.as_ref().is_some_and(|d| d.busy().is_some()) {
+            return;
+        }
+        self.details = None;
+        if let Some(w) = self.window() {
+            w.set_details_open(false);
+        }
     }
 
     /// Start or stop one destination (by settings index) from the live panel.
@@ -5100,6 +5314,7 @@ impl App {
                 .dest_selected
                 .and_then(|i| self.settings.destinations.get(i))
                 .map_or(0, |d| index_of(d.stream.canvas)),
+            ask_details: self.settings.ask_details,
             remote_enabled: self.settings.remote.enabled,
             remote_port: self.settings.remote.port as f32,
             remote_auth: self.settings.remote.auth,
@@ -5788,6 +6003,7 @@ impl App {
                 r.all_canvases = i >= ids.len();
                 r.canvas = ids.get(i).copied();
             }
+            "ask-details" => self.settings.ask_details = value > 0.5,
             "remote-enable" => {
                 self.settings.remote.enabled = value > 0.5;
                 self.remote_restart_at = Some(Instant::now());
@@ -8542,6 +8758,7 @@ impl App {
                 self.refresh_settings_form();
             }
             Action::GoLiveSetup => self.open_golive(),
+            Action::EditStreamDetails => self.edit_details(),
             Action::OpenSettings => {
                 self.refresh_settings_form();
                 w.set_settings_open(true);
@@ -9465,6 +9682,18 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     on!(on_golive_open_key_page, |a| a.golive_open_key_page());
     on!(on_golive_go, |a| a.golive_go());
     on!(on_golive_more, |a| a.golive_more());
+    on!(on_go_live_clicked, |a| a.go_live_clicked());
+    on!(on_details_text, |a, i, field, value| a
+        .details_text(i, &field, &value));
+    on!(on_details_flag, |a, i, field, value| a
+        .details_flag(i, &field, value));
+    on!(on_details_choose, |a, i, field, value| a
+        .details_choose(i, &field, value));
+    on!(on_details_retry, |a, i| a.details_retry(i));
+    on!(on_details_skip, |a, i| a.details_skip(i));
+    on!(on_details_set_ask, |a, v| a.details_set_ask(v));
+    on!(on_details_go, |a| a.details_go());
+    on!(on_details_closed, |a| a.details_closed());
     on!(on_recovery_restore, |a| a.recovery(true));
     on!(on_recovery_discard, |a| a.recovery(false));
     on!(on_toggle_theme, |a| a.toggle_theme());

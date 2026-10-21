@@ -1024,6 +1024,14 @@ export component SettingsDialog inherits Modal {
                         wrap: word-wrap;
                         width: scroller.page-width - 36px;
                     }
+                    SettingRow {
+                        label: "Ask before going live";
+                        hint: "Title, category and the YouTube broadcast on each connected platform. Off: last time's details are used.";
+                        HorizontalLayout {
+                            alignment: start;
+                            Toggle { checked: root.form.ask-details; toggled(v) => { root.set("ask-details", v ? 1 : 0); } }
+                        }
+                    }
                     for d[i] in root.form.destinations: Rectangle {
                         height: 36px;
                         border-radius: Theme.radius-s;
@@ -1577,6 +1585,9 @@ export component SettingsDialog inherits Modal {
 /// Live destinations, opened from the chevron next to Go Live.
 export component LivePanel inherits Rectangle {
     in property <[LiveRow]> rows;
+    /// Live: the stream details can be edited.
+    in property <bool> streaming;
+    callback edit-details();
     callback toggle(int);
     callback manage();
     callback add-platform();
@@ -1606,6 +1617,7 @@ export component LivePanel inherits Rectangle {
             spacing: 6px;
             HorizontalLayout {
                 Text { text: "Destinations"; color: Theme.text; font-size: Theme.font-m; font-weight: 700; vertical-alignment: center; horizontal-stretch: 1; }
+                if root.streaming: Button { text: "Edit details"; kind: "ghost"; tooltip: "Title, category and more on each platform, without reconnecting"; clicked => { root.edit-details(); } }
                 Button { text: "Add platform"; kind: "ghost"; clicked => { root.add-platform(); } }
                 Button { text: "Manage…"; kind: "ghost"; clicked => { root.manage(); } }
             }

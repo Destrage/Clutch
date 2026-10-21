@@ -404,7 +404,7 @@ impl Session {
             .account()
             .ok_or("Connect Twitch in Settings → Stream first")?;
         if let Some(problem) = details.tags.iter().find_map(|t| tag_problem(t)) {
-            return Err(problem.into());
+            return Err(problem);
         }
         let url = format!(
             "https://api.twitch.tv/helix/channels?broadcaster_id={}",

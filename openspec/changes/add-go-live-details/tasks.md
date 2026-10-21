@@ -16,26 +16,26 @@
       the channel as it is now, else the saved details
 
 ## 3. Go live window
-- [ ] 3.1 Slint window: one section per connected platform being streamed to, a list of
+- [x] 3.1 Slint window: one section per connected platform being streamed to, a list of
       destinations streamed with a key only, per-section loading and errors
-- [ ] 3.2 YouTube section: broadcast list with "uses this key" marks, New broadcast, the details
+- [x] 3.2 YouTube section: broadcast list with "uses this key" marks, New broadcast, the details
       form (title, description, privacy, category, made for kids, latency, auto-start, auto-stop)
-- [ ] 3.3 Twitch section (title, category search, tags, language); Kick section (title, category
+- [x] 3.3 Twitch section (title, category search, tags, language); Kick section (title, category
       search)
-- [ ] 3.4 "Go live without asking" in the window and in Settings → Stream
+- [x] 3.4 "Go live without asking" in the window and in Settings → Stream
 
 ## 4. Going live
-- [ ] 4.1 Apply the details per platform on worker threads, then start the video; on a failure
+- [x] 4.1 Apply the details per platform on worker threads, then start the video; on a failure
       keep the window open with Try again and Go live without <platform>
-- [ ] 4.2 Choosing a YouTube broadcast bound to another stream switches the destination's key first
-- [ ] 4.3 Hotkey, macro and remote "start stream" use the remembered details without the window,
+- [x] 4.2 Choosing a YouTube broadcast bound to another stream switches the destination's key first
+- [x] 4.3 Hotkey, macro and remote "start stream" use the remembered details without the window,
       and toast failures
-- [ ] 4.4 A message per platform after going live, with a link to the YouTube broadcast
-- [ ] 4.5 Remove beta 2's create-in-the-checker and the reconnect after it; the checker only reports
-- [ ] 4.6 Cleanup of a created broadcast that never went live, checked against YouTube first
+- [x] 4.4 A message per platform after going live, with a link to the YouTube broadcast
+- [x] 4.5 Remove beta 2's create-in-the-checker and the reconnect after it; the checker only reports
+- [x] 4.6 Cleanup of a created broadcast that never went live, checked against YouTube first
 
 ## 5. While live
-- [ ] 5.1 Edit details in the live panel: the same window without the broadcast choice; saved
+- [x] 5.1 Edit details in the live panel: the same window without the broadcast choice; saved
       without reconnecting; YouTube's latency and auto-start/auto-stop read-only
 
 ## 6. Docs and check
