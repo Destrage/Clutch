@@ -12,6 +12,8 @@
 - [x] 2.2 Checker while streaming (20 s, 2 min once live); Live deck row text and colour; toast on
       change
 - [x] 2.3 Start broadcast (transition to live) from the toast
+- [x] 2.4 Switch to the stream an open broadcast uses (alone before going live, with a button
+      after); fill empty keys when an account connects
 
 ## 3. Docs and check
 - [x] 3.1 Website streaming page; testing guide

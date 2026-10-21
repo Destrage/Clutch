@@ -173,7 +173,7 @@ pub struct App {
     kick: crate::kick::Session,
     kick_connect: Option<crate::kick::Connecting>,
     /// Filling a destination's stream key from its account: the destination and the result.
-    stream_fill: Option<(usize, std::sync::mpsc::Receiver<StreamFill>)>,
+    stream_fill: Vec<(usize, std::sync::mpsc::Receiver<StreamFill>)>,
     /// What YouTube does with the stream, while streaming to YouTube with it connected.
     yt_watch: Option<YouTubeWatch>,
     /// Starting a waiting YouTube broadcast.
@@ -228,6 +228,8 @@ enum ToastAction {
     InstallUpdate,
     /// Start the YouTube broadcast that waits for it (auto-start off).
     StartYouTube(String),
+    /// Switch a YouTube destination (by settings index) to the stream its broadcast uses.
+    UseYouTubeKey(usize, crate::youtube::StreamSetup),
 }
 
 /// Checks what YouTube does with the stream sent with `key`, in the background: every 20 seconds
@@ -236,6 +238,8 @@ struct YouTubeWatch {
     key: String,
     rx: std::sync::mpsc::Receiver<crate::youtube::LiveState>,
     state: Option<crate::youtube::LiveState>,
+    /// Whether YouTube has been live with this key (then a key change isn't switched to alone).
+    seen_live: bool,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -269,6 +273,7 @@ impl YouTubeWatch {
             key,
             rx,
             state: None,
+            seen_live: false,
             stop,
         }
     }
@@ -708,7 +713,7 @@ impl App {
             chat_sending: None,
             kick,
             kick_connect: None,
-            stream_fill: None,
+            stream_fill: Vec::new(),
             yt_watch: None,
             yt_start: None,
             viewers: crate::viewers::ViewerCounts::start(crate::viewers::Accounts {
@@ -1247,6 +1252,7 @@ impl App {
                 // The chat tab picks up the login made in the dialog.
                 self.chat.reload_service(Service::Twitch);
                 self.refresh_settings_form();
+                self.fill_empty_keys(Service::Twitch);
             }
             Connect::Failed(e) => {
                 self.twitch_connect = None;
@@ -1331,6 +1337,7 @@ impl App {
                 self.settings.save(&self.paths.settings());
                 self.viewers.refresh();
                 self.refresh_settings_form();
+                self.fill_empty_keys(Service::YouTube);
             }
             Connect::Failed(e) => {
                 self.youtube_connect = None;
@@ -1342,12 +1349,28 @@ impl App {
 
     // ---- Stream details from the account, and YouTube's live status ----
 
-    /// Fills the selected destination's server and key from its connected account (in the
-    /// background; [`Self::tick_stream_fill`] applies the result).
+    /// Fills the selected destination's server and key from its connected account.
     fn account_fill(&mut self) {
-        let Some(index) = self.dest_selected else {
-            return;
-        };
+        if let Some(index) = self.dest_selected {
+            self.fill_from_account(index);
+            self.toast("Getting your stream key…".into(), false);
+        }
+    }
+
+    /// After connecting an account: fills the key of that platform's destinations that have none.
+    fn fill_empty_keys(&mut self, service: Service) {
+        let empty: Vec<usize> = (self.settings.destinations.iter().enumerate())
+            .filter(|(_, d)| d.stream.service == service && d.stream.key.trim().is_empty())
+            .map(|(i, _)| i)
+            .collect();
+        for index in empty {
+            self.fill_from_account(index);
+        }
+    }
+
+    /// Fills a destination's server and key from its connected account (in the background;
+    /// [`Self::tick_stream_fill`] applies the result).
+    fn fill_from_account(&mut self, index: usize) {
         let Some(d) = self.settings.destinations.get(index) else {
             return;
         };
@@ -1366,24 +1389,25 @@ impl App {
                 };
                 let _ = tx.send(result);
             });
-        self.stream_fill = Some((index, rx));
-        self.toast("Getting your stream key…".into(), false);
+        self.stream_fill.push((index, rx));
     }
 
     fn tick_stream_fill(&mut self) {
-        let Some((index, rx)) = &self.stream_fill else {
-            return;
-        };
-        let index = *index;
-        let result = match rx.try_recv() {
-            Ok(r) => r,
-            Err(std::sync::mpsc::TryRecvError::Empty) => return,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                self.stream_fill = None;
-                return;
+        let mut done = Vec::new();
+        self.stream_fill.retain(|(index, rx)| match rx.try_recv() {
+            Ok(r) => {
+                done.push((*index, r));
+                false
             }
-        };
-        self.stream_fill = None;
+            Err(std::sync::mpsc::TryRecvError::Empty) => true,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => false,
+        });
+        for (index, result) in done {
+            self.apply_stream_fill(index, result);
+        }
+    }
+
+    fn apply_stream_fill(&mut self, index: usize, result: StreamFill) {
         match result {
             Ok((server, key)) => {
                 let Some(d) = self.settings.destinations.get_mut(index) else {
@@ -1435,8 +1459,10 @@ impl App {
             if watch.state.as_ref() != Some(&state) {
                 changed = Some(state.clone());
             }
+            watch.seen_live |= state == LiveState::Live;
             watch.state = Some(state);
         }
+        let seen_live = watch.seen_live;
         if let (Some(i), Some(state)) = (live, &watch.state)
             && let Some(row) = rows.get_mut(i)
             && *state != LiveState::Live
@@ -1465,7 +1491,45 @@ impl App {
                     .into(),
                 true,
             ),
+            // Nothing is live on YouTube yet, so reconnecting with the right key loses nothing.
+            LiveState::OtherKey(setup) if !seen_live => {
+                if let Some(i) = live {
+                    self.use_youtube_key(i, setup);
+                }
+            }
+            LiveState::OtherKey(setup) => {
+                if let Some(i) = live {
+                    self.toast_with_action(
+                        "Your YouTube broadcast now uses a different stream key".into(),
+                        true,
+                        "Use that key",
+                        ToastAction::UseYouTubeKey(i, setup),
+                    );
+                }
+            }
         }
+    }
+
+    /// Saves `setup` as destination `config`'s server and key, and reconnects it if it's live.
+    fn use_youtube_key(&mut self, config: usize, setup: crate::youtube::StreamSetup) {
+        let Some(d) = self.settings.destinations.get_mut(config) else {
+            return;
+        };
+        d.stream.server = setup.server;
+        d.set_key(&setup.key);
+        let (name, dest) = (d.name.clone(), d.to_destination());
+        self.settings.save(&self.paths.settings());
+        self.refresh_settings_form();
+        if let (Some(engine), Some(stream)) = (&self.engine, &mut self.stream)
+            && let Some(k) = self.stream_dests.iter().position(|d| d.config == config)
+        {
+            stream.restart_destination(engine, k, &dest);
+            self.stream_dests[k] = LiveDest::new(config);
+        }
+        self.toast(
+            format!("Your YouTube broadcast uses a different stream key: {name} switched to it"),
+            false,
+        );
     }
 
     /// Starts a YouTube broadcast that waits for it (from the toast's button).
@@ -1554,6 +1618,7 @@ impl App {
                 self.settings.kick = Some(account);
                 self.settings.save(&self.paths.settings());
                 self.refresh_settings_form();
+                self.fill_empty_keys(Service::Kick);
             }
             Connect::Failed(e) => {
                 self.kick_connect = None;
@@ -2359,6 +2424,7 @@ impl App {
             Some(ToastAction::Profile(p)) => self.apply_profile(p),
             Some(ToastAction::InstallUpdate) => self.update_download(),
             Some(ToastAction::StartYouTube(broadcast)) => self.start_youtube_broadcast(broadcast),
+            Some(ToastAction::UseYouTubeKey(config, setup)) => self.use_youtube_key(config, setup),
             None => return,
         }
         if let Some(w) = self.window() {

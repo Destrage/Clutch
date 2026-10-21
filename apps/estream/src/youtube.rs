@@ -339,6 +339,9 @@ pub enum LiveState {
     NoBroadcast,
     /// The key isn't one of the channel's streams.
     NotYourKey,
+    /// No broadcast uses this key, but an open broadcast uses another of the channel's streams:
+    /// its server and key.
+    OtherKey(StreamSetup),
 }
 
 impl LiveState {
@@ -351,6 +354,7 @@ impl LiveState {
             LiveState::NoVideo => "YouTube isn't receiving video yet",
             LiveState::NoBroadcast => "No YouTube broadcast uses this stream key",
             LiveState::NotYourKey => "This stream key isn't one of your YouTube streams",
+            LiveState::OtherKey(_) => "Your YouTube broadcast uses a different stream key",
         }
     }
 }
@@ -375,6 +379,11 @@ fn open_broadcasts(broadcasts: &Value) -> Vec<&Value> {
 /// The stream to use: the one bound to a live (or else a ready) broadcast, else the channel's
 /// default stream, else the first.
 fn pick_stream<'a>(streams: &'a Value, broadcasts: &Value) -> Option<&'a Value> {
+    pick_stream_of(streams, broadcasts, true)
+}
+
+/// [`pick_stream`], with or without the default stream when no open broadcast uses one.
+fn pick_stream_of<'a>(streams: &'a Value, broadcasts: &Value, fallback: bool) -> Option<&'a Value> {
     let items = streams.get("items")?.as_array()?;
     let open = open_broadcasts(broadcasts);
     let bound = open
@@ -382,8 +391,11 @@ fn pick_stream<'a>(streams: &'a Value, broadcasts: &Value) -> Option<&'a Value> 
         .find(|b| b["status"]["lifeCycleStatus"] == "live")
         .or_else(|| open.first())
         .and_then(|b| b["contentDetails"]["boundStreamId"].as_str());
+    let bound = bound.and_then(|id| items.iter().find(|s| s["id"] == id));
+    if !fallback {
+        return bound;
+    }
     bound
-        .and_then(|id| items.iter().find(|s| s["id"] == id))
         .or_else(|| {
             items.iter().find(|s| {
                 s["snippet"]["title"]
@@ -417,8 +429,14 @@ fn state_of(streams: &Value, broadcasts: &Value, key: &str) -> LiveState {
                 .iter()
                 .find(|s| s["cdn"]["ingestionInfo"]["streamName"].as_str() == Some(key))
         });
+    // The stream an open broadcast uses (as in `pick_stream`), when its key isn't `key`.
+    let other = || {
+        pick_stream_of(streams, broadcasts, false)
+            .and_then(setup_of)
+            .filter(|setup| setup.key != key)
+    };
     let Some(stream) = stream else {
-        return LiveState::NotYourKey;
+        return other().map_or(LiveState::NotYourKey, LiveState::OtherKey);
     };
     let id = stream["id"].as_str().unwrap_or_default();
     let open = open_broadcasts(broadcasts);
@@ -431,6 +449,11 @@ fn state_of(streams: &Value, broadcasts: &Value, key: &str) -> LiveState {
         .any(|b| b["status"]["lifeCycleStatus"] == "live")
     {
         return LiveState::Live;
+    }
+    if mine.is_empty()
+        && let Some(setup) = other()
+    {
+        return LiveState::OtherKey(setup);
     }
     if stream["status"]["streamStatus"] != "active" {
         return LiveState::NoVideo;
@@ -566,7 +589,7 @@ mod tests {
         assert_eq!(
             state_of(
                 &streams("active"),
-                &list(broadcast("b", "ready", "s1", true)),
+                &list(broadcast("b", "complete", "s1", true)),
                 "nope"
             ),
             LiveState::NotYourKey
@@ -613,6 +636,23 @@ mod tests {
             ),
             LiveState::Live
         );
+    }
+
+    #[test]
+    fn a_broadcast_on_another_stream_gives_its_key() {
+        let streams = serde_json::json!({ "items": [
+            stream("s1", "Default stream key", "k1", "active"),
+            stream("s2", "Variable", "k2", "inactive"),
+        ]});
+        let on_s2 = serde_json::json!({ "items": [broadcast("b", "ready", "s2", true)] });
+        let k2 = LiveState::OtherKey(StreamSetup {
+            server: "rtmp://a.rtmp.youtube.com/live2".into(),
+            key: "k2".into(),
+        });
+        assert_eq!(state_of(&streams, &on_s2, "k1"), k2);
+        assert_eq!(state_of(&streams, &on_s2, "old-key"), k2);
+        // Already the right key: nothing to switch.
+        assert_eq!(state_of(&streams, &on_s2, "k2"), LiveState::NoVideo);
     }
 
     #[test]

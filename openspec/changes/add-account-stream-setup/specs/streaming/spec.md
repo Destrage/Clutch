@@ -8,6 +8,10 @@ from that account (YouTube, Twitch, Kick).
 - **WHEN** the user clicks Get stream key on a YouTube destination with YouTube connected
 - **THEN** the server and key of their YouTube stream are filled in and saved, and a toast says so
 
+#### Scenario: Filled in on connect
+- **WHEN** the user connects an account and a destination of that platform has no stream key
+- **THEN** its server and key are filled in from the account without clicking Get stream key
+
 #### Scenario: Missing permission
 - **WHEN** the sign-in lacks the permission to read the stream key
 - **THEN** Clutch asks the user to connect the account again
@@ -24,6 +28,15 @@ key, or using a key that isn't the user's, and SHALL offer to start a broadcast 
 #### Scenario: Wrong key
 - **WHEN** the key Clutch streams with is not one of the user's YouTube streams
 - **THEN** Clutch says so and points to Get stream key
+
+#### Scenario: The broadcast uses another of the user's streams
+- **WHEN** no open broadcast uses the key Clutch streams with, but an open broadcast uses another
+  of the user's streams, and YouTube hasn't been live with this key yet
+- **THEN** Clutch saves that stream's server and key, reconnects YouTube with them, and says so
+
+#### Scenario: The broadcast changes key while live
+- **WHEN** the same happens after YouTube was live with the key
+- **THEN** Clutch says so and offers a button to switch, without reconnecting by itself
 
 #### Scenario: Live
 - **WHEN** the broadcast goes live
