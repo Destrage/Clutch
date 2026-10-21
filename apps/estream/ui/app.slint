@@ -115,6 +115,8 @@ export component AppWindow inherits Window {
     callback setup-cancel();
     callback wizard-cancel();
     in property <string> gpu-info;
+    /// This build, shown at the bottom right ("Clutch 0.4.0 beta 1").
+    in property <string> app-version;
     in property <bool> dirty;
     in property <bool> can-undo;
     in property <bool> can-redo;
@@ -606,7 +608,9 @@ export component AppWindow inherits Window {
                 stream-health: root.stream-health;
                 health: root.health;
                 health-text: root.health-text;
+                version: root.app-version;
                 open-stats => { root.action("stats"); }
+                open-about => { root.action("about"); }
             }
         }
         }

@@ -697,6 +697,7 @@ impl App {
         self.apply_layout(self.settings.layout);
         let info = &self.gpu.info;
         w.set_gpu_info(format!("{} · {:?}", info.name, info.backend).into());
+        w.set_app_version(format!("Clutch {}", crate::update::current().label()).into());
         // Settings → Performance needs the encoders and the machine; probing opens each
         // encoder once, so it runs off the UI thread.
         let gpu = info.name.clone();
@@ -5149,6 +5150,20 @@ impl App {
             // Restart to update when one is downloaded, otherwise Install (download) it.
             "upd-action" if self.update_ready_file().is_some() => self.update_restart(),
             "upd-action" => self.update_download(),
+            // Settings → About links.
+            "about-open" => {
+                let url = match value as i32 {
+                    0 => crate::services::site_url("/"),
+                    1 => crate::services::site_url("/docs/install/"),
+                    2 => crate::services::site_url("/changelog/"),
+                    3 => crate::services::issues_url(),
+                    4 => crate::services::site_url("/privacy/"),
+                    _ => crate::services::site_url("/licenses/"),
+                };
+                if let Err(e) = crate::shell::open_url(&url) {
+                    self.toast(format!("Couldn't open your browser: {e}"), true);
+                }
+            }
             "upd-notes" => {
                 let page = match &*self.update_phase.lock().unwrap_or_else(|e| e.into_inner()) {
                     Phase::Available(r) | Phase::Downloading(r) | Phase::Ready(r, _) => {
@@ -7939,6 +7954,12 @@ impl App {
     pub fn run_id(&mut self, id: &str) {
         if id == "update-restart" {
             self.update_restart();
+        } else if id == "about" {
+            self.refresh_settings_form();
+            if let Some(w) = self.window() {
+                w.set_settings_page(8);
+                w.set_settings_open(true);
+            }
         } else if let Some(scene) = id.strip_prefix("scene:") {
             self.scene_activate(scene);
         } else if let Some(item) = id.strip_prefix("item:") {

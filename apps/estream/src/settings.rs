@@ -496,6 +496,11 @@ impl Settings {
         }
         for d in &mut settings.destinations {
             d.stream.key = crate::secret::unprotect(&d.key_protected);
+            // A custom server on Kick's own ingest is Kick (set up before the Kick preset, or by
+            // pasting Kick's URL): treat it as Kick so its chat and Connect Kick work.
+            if d.stream.service == estream_media::Service::Custom && is_kick_ingest(&d.stream.server) {
+                d.stream.service = estream_media::Service::Kick;
+            }
         }
         settings.remote.password = crate::secret::unprotect(&settings.remote.password_protected);
         if let Some(t) = &mut settings.twitch {
@@ -610,12 +615,25 @@ pub fn system_prefers_dark() -> bool {
     true
 }
 
+/// Kick's own ingest address (its account on Amazon IVS; other IVS users have other prefixes).
+fn is_kick_ingest(server: &str) -> bool {
+    let rest = server.split_once("://").map_or(server, |(_, r)| r);
+    rest.to_ascii_lowercase().starts_with("fa723fc1b171.")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// The registry read agrees with what `reg.exe` reports.
     #[cfg(windows)]
+
+    #[test]
+    fn kick_ingest_is_recognised() {
+        assert!(is_kick_ingest("rtmps://fa723fc1b171.global-contribute.live-video.net/app/"));
+        assert!(!is_kick_ingest("rtmps://abc123.global-contribute.live-video.net/app/"));
+        assert!(!is_kick_ingest("rtmp://live.twitch.tv/app/"));
+    }
     #[test]
     fn system_theme_matches_the_registry() {
         let out = std::process::Command::new("reg")

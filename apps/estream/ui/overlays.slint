@@ -814,6 +814,7 @@ export component SettingsDialog inherits Modal {
         { icon: Icons.globe, label: "Remote control" },
         { icon: Icons.palette, label: "Appearance" },
         { icon: Icons.refresh, label: "Updates" },
+        { icon: Icons.sparkles, label: "About" },
     ];
     callback set(string, float);
     callback set-text(string, string);
@@ -1440,6 +1441,49 @@ export component SettingsDialog inherits Modal {
                     Text { text: root.form.ffmpeg; color: Theme.text-faint; font-size: Theme.font-xs; }
                 }
 
+                if root.page == 8: VerticalLayout {
+                    spacing: 14px;
+                    SectionTitle { text: "ABOUT"; }
+                    HorizontalLayout {
+                        spacing: 14px;
+                        alignment: start;
+                        Image { source: Icons.logo; width: 56px; height: 56px; }
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 2px;
+                            Text { text: "Clutch"; color: Theme.text; font-family: Theme.font-display; font-size: 24px; font-weight: 600; }
+                            Text { text: "Version " + root.form.upd-version; color: Theme.text-muted; font-size: Theme.font-m; }
+                        }
+                    }
+                    Text {
+                        text: "Stream, record and clip your best moments, then cut them into montages to the beat. A Destrosphere project.";
+                        color: Theme.text-muted;
+                        font-size: Theme.font-m;
+                        wrap: word-wrap;
+                        width: scroller.page-width - 36px;
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        Button { text: "Website"; kind: "ghost"; has-icon: true; icon: Icons.globe; clicked => { root.set("about-open", 0); } }
+                        Button { text: "Guide"; kind: "ghost"; clicked => { root.set("about-open", 1); } }
+                        Button { text: "What's new"; kind: "ghost"; clicked => { root.set("about-open", 2); } }
+                        Button { text: "Report a bug"; kind: "ghost"; clicked => { root.set("about-open", 3); } }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        Button { text: "Privacy"; kind: "ghost"; clicked => { root.set("about-open", 4); } }
+                        Button { text: "Licenses"; kind: "ghost"; clicked => { root.set("about-open", 5); } }
+                    }
+                    Text {
+                        text: "Clutch uses FFmpeg, Chromium (CEF) and Slint, among others; Licenses lists them all.";
+                        color: Theme.text-faint;
+                        font-size: Theme.font-s;
+                        wrap: word-wrap;
+                        width: scroller.page-width - 36px;
+                    }
+                }
                 if root.page == 7: VerticalLayout {
                     spacing: 12px;
                     SectionTitle { text: "UPDATES"; }

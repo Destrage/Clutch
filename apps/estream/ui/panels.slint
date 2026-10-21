@@ -1581,7 +1581,10 @@ export component StatusBar inherits Rectangle {
     /// Overall health: 0 good, 1 warning, 2 problem; `health-text` is the main alert.
     in property <int> health;
     in property <string> health-text;
+    /// "Clutch 0.4.0 beta 1", at the far right.
+    in property <string> version;
     callback open-stats();
+    callback open-about();
 
     height: 28px;
     background: Theme.bg;
@@ -1645,6 +1648,18 @@ export component StatusBar inherits Rectangle {
             }
         }
         Text { text: root.message; color: Theme.text-faint; font-size: Theme.font-xs; vertical-alignment: center; }
+        if root.version != "": Text {
+            text: root.version;
+            color: Theme.text-faint;
+            font-size: Theme.font-xs;
+            vertical-alignment: center;
+            accessible-role: button;
+            accessible-label: root.version + ", about Clutch";
+            TouchArea {
+                mouse-cursor: MouseCursor.pointer;
+                clicked => { root.open-about(); }
+            }
+        }
     }
 }
 

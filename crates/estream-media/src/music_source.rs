@@ -73,9 +73,11 @@ pub fn schema() -> PropertySchema {
         ),
         Property::text("tags", "Or your own tags", false, "")
             .hint("Used instead of the genre, e.g. piano chillout"),
-        Property::bool("safe", "Safe for monetized streams", true).hint(
-            "Only licenses that allow commercial use. Off adds NonCommercial tracks, which are \
-             for non-monetized streams only",
+        // The key stays "safe" so saved settings keep working.
+        Property::bool("safe", "Commercial-use licenses only", true).hint(
+            "Only tracks whose license allows monetized streams. YouTube may still claim some \
+             (Jamendo registers many with Content ID): a claim isn't a strike, and the credit is \
+             your proof when you dispute it. Off adds NonCommercial tracks",
         ),
         Property::button("skip", "Track", "Skip").hint(&credit_hint()),
     ])

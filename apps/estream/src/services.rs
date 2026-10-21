@@ -1,12 +1,14 @@
 //! Where Clutch's own online services are. Each address has a default, and can be changed without
-//! touching the code: when building (`CLUTCH_EVENTS_URL` / `CLUTCH_RELEASES_REPO` in the
+//! touching the code: when building (`CLUTCH_EVENTS_URL`, `CLUTCH_RELEASES_REPO`, `CLUTCH_SITE_URL` in the
 //! environment or `.secrets/clutch.env`, see build.rs) or when running (the same variables in the
 //! environment, for testing against a staging relay or after a move).
 
 /// The events relay (Kick sign-in swaps and Kick events, see `services/events-relay`).
 const EVENTS_DEFAULT: &str = "https://events.destrosphere.com";
-/// The GitHub repository whose releases are Clutch's updates.
+/// The GitHub repository whose releases are Clutch's updates (and where bugs are reported).
 const RELEASES_DEFAULT: &str = "Destrage/clutch-beta";
+/// Clutch's website (docs, downloads, changelog).
+const SITE_DEFAULT: &str = "https://clutch.destrosphere.com";
 
 /// A setting from the running environment, else the build's, else the default.
 fn setting(name: &str, built: Option<&'static str>, default: &'static str) -> String {
@@ -46,6 +48,17 @@ pub fn events_socket(path: &str) -> String {
         })
         .unwrap_or(base);
     format!("{socket}{path}")
+}
+
+/// A page on Clutch's website (`path` starts with `/`).
+pub fn site_url(path: &str) -> String {
+    let base = setting("CLUTCH_SITE_URL", option_env!("CLUTCH_SITE_URL"), SITE_DEFAULT);
+    format!("{}{path}", base.trim_end_matches('/'))
+}
+
+/// Where people report bugs and suggest things.
+pub fn issues_url() -> String {
+    format!("https://github.com/{}/issues/new/choose", releases_repo())
 }
 
 /// The GitHub repository updates come from (`owner/name`).

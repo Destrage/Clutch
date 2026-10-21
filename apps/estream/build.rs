@@ -17,6 +17,7 @@ fn main() {
         // Clutch's own services, when not the defaults in services.rs.
         "CLUTCH_EVENTS_URL",
         "CLUTCH_RELEASES_REPO",
+        "CLUTCH_SITE_URL",
     ] {
         println!("cargo:rerun-if-env-changed={key}");
         let value = std::env::var(key).ok().or_else(|| {
