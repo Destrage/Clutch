@@ -8,6 +8,10 @@ workers_dev = false
 preview_urls = false
 routes = [{ pattern = "events.destrosphere.com", custom_domain = true }]
 
+# Clutch's Kick app (public). Its secret is set with: npx wrangler secret put KICK_CLIENT_SECRET
+[vars]
+KICK_CLIENT_ID = "01M5DQAWSH2G2VEC4ERGDHNJXY"
+
 [[durable_objects.bindings]]
 name = "CHANNELS"
 class_name = "Channel"

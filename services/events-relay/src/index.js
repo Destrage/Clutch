@@ -8,10 +8,16 @@
 //   GET  /kick/live      Clutch → relay, a WebSocket; `Authorization: Bearer <Kick access token>`.
 //                        The token is checked with Kick, so a connection only ever gets the
 //                        events of the channel that signed in.
+//
+// Only Clutch can use it: a sign-in must have been made through Clutch's Kick app (KICK_CLIENT_ID),
+// and an event must come from one of that app's own subscriptions (listed with the app's secret,
+// KICK_CLIENT_SECRET). Other Kick apps pointing their webhooks here, or their users' sign-ins,
+// are refused.
 
 import { importKey, verify, broadcasterOf, fresh } from "./kick.js";
 
 const KICK_API = "https://api.kick.com/public/v1";
+const KICK_ID = "https://id.kick.com/oauth";
 
 // Kick's public key, cached (Kick may rotate it, so it is fetched, not hardcoded).
 let keyCache = null; // { key, at }
@@ -27,13 +33,60 @@ async function kickKey(refresh = false) {
   return keyCache.key;
 }
 
-// Which channel a Kick access token belongs to, cached briefly.
+// Clutch's own event subscriptions (ids), from Kick with an app token, cached and refreshed when
+// an unknown id arrives (at most every 30 s, so unknown ids can't make it hammer Kick).
+let appToken = null; // { token, until }
+let subscriptions = null; // { ids: Set, at }
+const SUBS_TTL_MS = 10 * 60 * 1000;
+const SUBS_MIN_REFRESH_MS = 30 * 1000;
+
+async function kickAppToken(env) {
+  if (appToken && Date.now() < appToken.until) return appToken.token;
+  const res = await fetch(`${KICK_ID}/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "client_credentials",
+      client_id: env.KICK_CLIENT_ID,
+      client_secret: env.KICK_CLIENT_SECRET,
+    }),
+  });
+  if (!res.ok) throw new Error(`app token: ${res.status}`);
+  const body = await res.json();
+  appToken = { token: body.access_token, until: Date.now() + Math.max(60, (body.expires_in ?? 3600) - 60) * 1000 };
+  return appToken.token;
+}
+
+async function ourSubscription(env, id) {
+  if (!id) return false;
+  const age = subscriptions ? Date.now() - subscriptions.at : Infinity;
+  // Known and recent: yes. Unknown but just refreshed: no (a new one waits for the next refresh).
+  if (subscriptions?.ids.has(id) && age < SUBS_TTL_MS) return true;
+  if (age < SUBS_MIN_REFRESH_MS) return false;
+  const res = await fetch(`${KICK_API}/events/subscriptions`, {
+    headers: { Authorization: `Bearer ${await kickAppToken(env)}` },
+  });
+  if (!res.ok) throw new Error(`subscriptions: ${res.status}`);
+  const list = (await res.json())?.data ?? [];
+  subscriptions = { ids: new Set(list.map((s) => s.id)), at: Date.now() };
+  return subscriptions.ids.has(id);
+}
+
+// Which channel a Kick access token belongs to, cached briefly. Only sign-ins made through
+// Clutch's Kick app count.
 const tokenCache = new Map(); // token → { id, at }
 const TOKEN_TTL_MS = 10 * 60 * 1000;
 
-async function channelOfToken(token) {
+async function channelOfToken(env, token) {
   const hit = tokenCache.get(token);
   if (hit && Date.now() - hit.at < TOKEN_TTL_MS) return hit.id;
+  const check = await fetch(`${KICK_ID}/token/introspect`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!check.ok) return null;
+  const info = (await check.json())?.data;
+  if (!info?.active || info.token_type !== "user" || info.client_id !== env.KICK_CLIENT_ID) return null;
   const res = await fetch(`${KICK_API}/users`, { headers: { Authorization: `Bearer ${token}` } });
   if (!res.ok) return null;
   const id = (await res.json())?.data?.[0]?.user_id;
@@ -54,6 +107,10 @@ async function webhook(request, env) {
   // A failure right after Kick rotates its key: fetch it again once.
   if (!ok) ok = await verify(await kickKey(true), messageId, timestamp, body, signature);
   if (!ok) return new Response("bad signature", { status: 401 });
+  // Signed by Kick, but for another Kick app's subscription: not ours to pass on.
+  if (!(await ourSubscription(env, request.headers.get("Kick-Event-Subscription-Id")))) {
+    return new Response("not a Clutch subscription", { status: 403 });
+  }
 
   let event;
   try {
@@ -76,7 +133,7 @@ async function live(request, env) {
     return new Response("expected a WebSocket", { status: 426 });
   }
   const token = request.headers.get("Authorization")?.replace(/^Bearer\s+/i, "");
-  const channel = token ? await channelOfToken(token) : null;
+  const channel = token ? await channelOfToken(env, token) : null;
   if (!channel) return new Response("sign in to Kick", { status: 401 });
   const stub = env.CHANNELS.get(env.CHANNELS.idFromName(channel));
   return stub.fetch("https://relay/connect", { headers: { Upgrade: "websocket" } });

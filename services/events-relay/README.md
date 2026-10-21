@@ -10,6 +10,11 @@ by webhook to one public address per app, which a desktop app can't receive itse
   `Authorization` header. The relay asks Kick whose sign-in it is and connects it to that
   channel only.
 
+Only Clutch can use it: a sign-in must come from Clutch's Kick app (checked with Kick's token
+introspection against `KICK_CLIENT_ID`), and an event must belong to one of that app's own
+subscriptions (listed with an app token made from `KICK_CLIENT_SECRET`). Another developer's
+Kick app pointing its webhooks here, or its users' sign-ins, are refused.
+
 Each channel is a Durable Object holding its open connections. Nothing is stored; an event with
 no connection is dropped.
 
@@ -24,9 +29,11 @@ npm test
 1. `npm install`
 2. `npx wrangler login` (opens Cloudflare in the browser; use the account that has
    destrosphere.com)
-3. `npx wrangler deploy`. This creates `events.destrosphere.com` (a custom domain on the
+3. `npx wrangler secret put KICK_CLIENT_SECRET` and paste the Kick app's client secret when
+   asked (it is stored encrypted by Cloudflare, never in this repo).
+4. `npx wrangler deploy`. This creates `events.destrosphere.com` (a custom domain on the
    destrosphere.com zone) and the Durable Object.
-4. On the Kick app (kick.com/settings/developer → the app → Edit): tick **Subscribe to
+5. On the Kick app (kick.com/settings/developer → the app → Edit): tick **Subscribe to
    events**, turn on **Enable webhooks**, and set the URL to
    `https://events.destrosphere.com/kick/webhook`.
 
