@@ -15,6 +15,11 @@ introspection against `KICK_CLIENT_ID`), and an event must belong to one of that
 subscriptions (listed with an app token made from `KICK_CLIENT_SECRET`). Another developer's
 Kick app pointing its webhooks here, or its users' sign-ins, are refused.
 
+Abuse costs little: a forged webhook fails the signature check without asking Kick anything (the
+key is fetched again at most once a minute), each address gets 10 connection attempts a minute
+on `/kick/live` before getting 429, and refused sign-ins are remembered for 10 minutes. There is
+no permanent IP blocking: addresses change easily and are often shared by many people.
+
 Each channel is a Durable Object holding its open connections. Nothing is stored; an event with
 no connection is dropped.
 

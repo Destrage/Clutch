@@ -12,6 +12,13 @@ routes = [{ pattern = "events.destrosphere.com", custom_domain = true }]
 [vars]
 KICK_CLIENT_ID = "01M5DQAWSH2G2VEC4ERGDHNJXY"
 
+# Connection attempts to /kick/live per address: Clutch connects once and reconnects with growing
+# pauses, so 10 a minute is plenty; beyond that the relay answers 429 at once.
+[[ratelimits]]
+name = "LIVE_LIMIT"
+namespace_id = "1001"
+simple = { limit = 10, period = 60 }
+
 [[durable_objects.bindings]]
 name = "CHANNELS"
 class_name = "Channel"

@@ -24,7 +24,10 @@ let keyCache = null; // { key, at }
 const KEY_TTL_MS = 60 * 60 * 1000;
 
 async function kickKey(refresh = false) {
-  if (!refresh && keyCache && Date.now() - keyCache.at < KEY_TTL_MS) return keyCache.key;
+  const age = keyCache ? Date.now() - keyCache.at : Infinity;
+  // A refresh after a failed check happens at most once a minute, so forged webhooks can't make
+  // the relay keep asking Kick for its key.
+  if (keyCache && age < (refresh ? 60 * 1000 : KEY_TTL_MS)) return keyCache.key;
   const res = await fetch(`${KICK_API}/public-key`);
   if (!res.ok) throw new Error(`public key: ${res.status}`);
   const pem = (await res.json())?.data?.public_key;
@@ -76,10 +79,28 @@ async function ourSubscription(env, id) {
 // Clutch's Kick app count.
 const tokenCache = new Map(); // token → { id, at }
 const TOKEN_TTL_MS = 10 * 60 * 1000;
+// Refused sign-ins, remembered so trying the same one again costs nothing.
+const refused = new Map(); // token → at
+const REFUSED_TTL_MS = 10 * 60 * 1000;
 
 async function channelOfToken(env, token) {
   const hit = tokenCache.get(token);
   if (hit && Date.now() - hit.at < TOKEN_TTL_MS) return hit.id;
+  const no = refused.get(token);
+  if (no && Date.now() - no < REFUSED_TTL_MS) return null;
+  const id = await askKick(env, token);
+  if (id) {
+    if (tokenCache.size > 1000) tokenCache.clear();
+    tokenCache.set(token, { id, at: Date.now() });
+  } else {
+    if (refused.size > 5000) refused.clear();
+    refused.set(token, Date.now());
+  }
+  return id;
+}
+
+/** The channel of a sign-in made through Clutch's Kick app, or null. */
+async function askKick(env, token) {
   const check = await fetch(`${KICK_ID}/token/introspect`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },
@@ -91,8 +112,6 @@ async function channelOfToken(env, token) {
   if (!res.ok) return null;
   const id = (await res.json())?.data?.[0]?.user_id;
   if (!Number.isSafeInteger(id) || id <= 0) return null;
-  if (tokenCache.size > 1000) tokenCache.clear();
-  tokenCache.set(token, { id: String(id), at: Date.now() });
   return String(id);
 }
 
@@ -132,6 +151,10 @@ async function live(request, env) {
   if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
     return new Response("expected a WebSocket", { status: 426 });
   }
+  // Each address gets a few tries a minute; more are turned away before Kick is asked anything.
+  const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
+  const { success } = await env.LIVE_LIMIT.limit({ key: ip });
+  if (!success) return new Response("too many attempts, try again in a minute", { status: 429 });
   const token = request.headers.get("Authorization")?.replace(/^Bearer\s+/i, "");
   const channel = token ? await channelOfToken(env, token) : null;
   if (!channel) return new Response("sign in to Kick", { status: 401 });
