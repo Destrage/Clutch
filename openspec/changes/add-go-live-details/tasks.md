@@ -10,7 +10,7 @@
 - [x] 1.5 A missing permission asks the user to connect again, as for stream keys
 
 ## 2. Details and settings
-- [x] 2.1 `details` per destination and `stream.ask_details` in settings, with defaults; old
+- [x] 2.1 `details` per destination and `ask_details` in settings, with defaults; old
       settings files load unchanged
 - [x] 2.2 Pre-fill: YouTube from the saved details, else the last broadcast; Twitch and Kick from
       the channel as it is now, else the saved details
