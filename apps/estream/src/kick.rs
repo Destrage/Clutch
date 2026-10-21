@@ -1,10 +1,13 @@
 //! Kick account: OAuth 2.1 sign-in in the user's browser (PKCE, loopback redirect) and Kick's
 //! public API, used to reply in chat. Reading chat needs no account (see `livechat::kick`).
 //!
-//! The client ID and secret are compiled in from `.secrets/clutch.env` (see build.rs). Kick only
-//! accepts the exact redirect registered for the app, so the loopback port is fixed.
+//! The client ID is compiled in from `.secrets/clutch.env` (see build.rs). The app's secret is not
+//! in Clutch at all: the sign-in code and renewals go to Clutch's relay, which adds the secret and
+//! asks Kick for tokens (`services/events-relay`), so the secret can be changed without a new
+//! Clutch. Kick only accepts the exact redirect registered for the app, so the loopback port is
+//! fixed.
 
-use crate::http::{get_bearer, post_form, post_json_bearer, text};
+use crate::http::{get_bearer, post_json, post_json_bearer, text};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::net::TcpListener;
@@ -12,7 +15,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 const CLIENT_ID: Option<&str> = option_env!("CLUTCH_KICK_CLIENT_ID");
-const CLIENT_SECRET: Option<&str> = option_env!("CLUTCH_KICK_CLIENT_SECRET");
 const SCOPES: &str = "user:read channel:read chat:write events:subscribe";
 /// The events Clutch asks Kick to send to the relay (see `livechat::kick::events`).
 const EVENTS: [&str; 5] = [
@@ -23,7 +25,6 @@ const EVENTS: [&str; 5] = [
     "kicks.gifted",
 ];
 const API: &str = "https://api.kick.com/public/v1";
-const TOKEN_URL: &str = "https://id.kick.com/oauth/token";
 /// Registered with the Kick app; Kick refuses any other.
 const PORT: u16 = 47615;
 const REDIRECT: &str = "http://localhost:47615/callback";
@@ -57,9 +58,9 @@ impl KickAccount {
     }
 }
 
-/// Whether this build can connect Kick (it has the app's ID and secret).
+/// Whether this build can connect Kick (it has the app's ID).
 pub fn available() -> bool {
-    CLIENT_ID.is_some() && CLIENT_SECRET.is_some()
+    CLIENT_ID.is_some()
 }
 
 // ---- Connecting ----
@@ -142,20 +143,13 @@ impl Drop for Connecting {
 
 /// Trades the code for tokens and finds who signed in.
 fn exchange(code: &str, verifier: &str) -> Result<KickAccount, String> {
-    let (Some(client_id), Some(secret)) = (CLIENT_ID, CLIENT_SECRET) else {
-        return Err("Connecting Kick isn't available in this build".into());
-    };
-    let (status, body) = post_form(
-        TOKEN_URL,
-        &[
-            ("grant_type", "authorization_code"),
-            ("code", code),
-            ("client_id", client_id),
-            ("client_secret", secret),
-            ("redirect_uri", REDIRECT),
-            ("code_verifier", verifier),
-        ],
-    )?;
+    let request = serde_json::json!({
+        "code": code,
+        "code_verifier": verifier,
+        "redirect_uri": REDIRECT,
+    });
+    let (status, body) = post_json(&crate::services::events_url("/kick/token"), &request)
+        .ok_or("Couldn't reach Clutch's sign-in service")?;
     let access = text(&body, "access_token");
     if status != 200 || access.is_empty() {
         return Err(format!(
@@ -185,19 +179,8 @@ pub type Session = crate::account::Session<KickAccount>;
 
 impl Session {
     fn renew(&self, old: &KickAccount) -> Option<KickAccount> {
-        let (Some(client_id), Some(secret)) = (CLIENT_ID, CLIENT_SECRET) else {
-            return None;
-        };
-        let (status, body) = post_form(
-            TOKEN_URL,
-            &[
-                ("grant_type", "refresh_token"),
-                ("client_id", client_id),
-                ("client_secret", secret),
-                ("refresh_token", &old.refresh),
-            ],
-        )
-        .ok()?;
+        let request = serde_json::json!({ "refresh_token": old.refresh });
+        let (status, body) = post_json(&crate::services::events_url("/kick/refresh"), &request)?;
         let renewed = if status == 200 {
             let mut account = old.clone();
             let refresh = Some(text(&body, "refresh_token"))

@@ -10,6 +10,12 @@ by webhook to one public address per app, which a desktop app can't receive itse
   `Authorization` header. The relay asks Kick whose sign-in it is and connects it to that
   channel only.
 
+- `POST /kick/token`, `POST /kick/refresh`: Clutch signs in to Kick in the browser (PKCE) and
+  hands the one-time code, or later a refresh token, to the relay, which adds the app's secret
+  and asks Kick for tokens. The secret lives only here, so it can be changed without a new
+  Clutch: **Regenerate** it on the Kick app page, then `npx wrangler secret put
+  KICK_CLIENT_SECRET`.
+
 Only Clutch can use it: a sign-in must come from Clutch's Kick app (checked with Kick's token
 introspection against `KICK_CLIENT_ID`), and an event must belong to one of that app's own
 subscriptions (listed with an app token made from `KICK_CLIENT_SECRET`). Another developer's

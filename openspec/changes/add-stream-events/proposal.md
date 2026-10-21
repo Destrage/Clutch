@@ -26,6 +26,14 @@ platform they stream to, without watching each platform's dashboard. Chat alone 
     a WebSocket for Clutch: the first message carries the streamer's Kick access token, which the
     relay checks with Kick to learn the channel, so a connection only ever gets its own channel's
     events. Nothing is stored; events with no listener are dropped.
+  - **Kick sign-in tokens:** `POST /kick/token` and `/kick/refresh` swap Clutch's sign-in code
+    and refresh tokens for tokens, adding the app's secret, which lives only in the relay (a
+    Worker secret). Changing it is: Regenerate on the Kick app page, then `wrangler secret put`.
+  - Only Clutch can use the relay: sign-ins must come from Clutch's Kick app (token
+    introspection), webhooks must belong to the app's own subscriptions, and connection and
+    token attempts are rate-limited per address.
+  - Clutch's service addresses (relay, update repository) have one default each and can be set
+    at build or run time (`CLUTCH_EVENTS_URL`, `CLUTCH_RELEASES_REPO`).
   - **Clutch:** with Kick connected, subscribes the channel to `channel.followed`,
     `channel.subscription.new`, `channel.subscription.renewal`, `channel.subscription.gifts` and
     `kicks.gifted` (skipping ones it already has), and keeps a connection to the relay with

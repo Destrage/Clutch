@@ -32,7 +32,10 @@ asked for everything in one list, and to answer from there, the way multistream 
   - YouTube: `liveChatMessages.insert`. The YouTube sign-in moves from `youtube.readonly` to
     `youtube.force-ssl` (which also covers reading); connected users connect again once.
   - Kick: new **Connect Kick** in Settings → Stream (OAuth 2.1 with PKCE in the system browser,
-    loopback redirect), then `POST /public/v1/chat` (`chat:write`).
+    loopback redirect), then `POST /public/v1/chat` (`chat:write`). The app's client secret is
+    not in Clutch: the sign-in code and renewals go to the events relay (`/kick/token`,
+    `/kick/refresh`, see add-stream-events), which adds the secret, so it can be changed without
+    a new release.
 - Facebook Live keeps no chat (its API needs Meta's app review).
 - Moderation (delete, timeout, ban) is out of scope.
 

@@ -12,8 +12,11 @@ fn main() {
         "CLUTCH_YOUTUBE_CLIENT_ID",
         "CLUTCH_YOUTUBE_CLIENT_SECRET",
         "CLUTCH_JAMENDO_CLIENT_ID",
+        // The Kick secret is never built in: it lives in the events relay (services/events-relay).
         "CLUTCH_KICK_CLIENT_ID",
-        "CLUTCH_KICK_CLIENT_SECRET",
+        // Clutch's own services, when not the defaults in services.rs.
+        "CLUTCH_EVENTS_URL",
+        "CLUTCH_RELEASES_REPO",
     ] {
         println!("cargo:rerun-if-env-changed={key}");
         let value = std::env::var(key).ok().or_else(|| {

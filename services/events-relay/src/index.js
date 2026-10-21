@@ -162,9 +162,58 @@ async function live(request, env) {
   return stub.fetch("https://relay/connect", { headers: { Upgrade: "websocket" } });
 }
 
+// ---- Kick sign-in tokens ----
+//
+// Clutch signs in to Kick with PKCE in the user's browser, then hands the one-time code (or later
+// a refresh token) to the relay, which adds the app's secret and asks Kick for tokens. The secret
+// lives only here (a Worker secret), so it can be changed at any time without a new Clutch.
+
+/** The only redirect Clutch's Kick app uses; anything else isn't Clutch. */
+const KICK_REDIRECT = "http://localhost:47615/callback";
+
+async function kickToken(request, env, grant) {
+  const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
+  const { success } = await env.TOKEN_LIMIT.limit({ key: ip });
+  if (!success) return new Response("too many attempts, try again in a minute", { status: 429 });
+  let input;
+  try {
+    input = await request.json();
+  } catch {
+    return new Response("bad body", { status: 400 });
+  }
+  const form = { client_id: env.KICK_CLIENT_ID, client_secret: env.KICK_CLIENT_SECRET };
+  if (grant === "authorization_code") {
+    const { code, code_verifier, redirect_uri } = input ?? {};
+    if (typeof code !== "string" || typeof code_verifier !== "string" || redirect_uri !== KICK_REDIRECT) {
+      return new Response("bad request", { status: 400 });
+    }
+    Object.assign(form, { grant_type: grant, code, code_verifier, redirect_uri });
+  } else {
+    const { refresh_token } = input ?? {};
+    if (typeof refresh_token !== "string") return new Response("bad request", { status: 400 });
+    Object.assign(form, { grant_type: "refresh_token", refresh_token });
+  }
+  const res = await fetch(`${KICK_ID}/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams(form),
+  });
+  // Kick's answer goes back as it is (tokens, or the error), never logged.
+  return new Response(await res.text(), {
+    status: res.status,
+    headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+  });
+}
+
 export default {
   async fetch(request, env) {
     const { pathname } = new URL(request.url);
+    if (pathname === "/kick/token" && request.method === "POST") {
+      return kickToken(request, env, "authorization_code");
+    }
+    if (pathname === "/kick/refresh" && request.method === "POST") {
+      return kickToken(request, env, "refresh_token");
+    }
     if (pathname === "/kick/webhook" && request.method === "POST") return webhook(request, env);
     if (pathname === "/kick/live") return live(request, env);
     if (pathname === "/") return new Response("Clutch events relay");

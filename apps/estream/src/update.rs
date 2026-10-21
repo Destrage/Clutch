@@ -9,9 +9,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// The public repo whose releases Clutch updates from.
-pub const RELEASES_REPO: &str = "Destrage/clutch-beta";
-
 /// This build's version, beta number included (e.g. `0.3.5-beta.4`).
 pub const CURRENT: &str = env!("CARGO_PKG_VERSION");
 
@@ -164,7 +161,10 @@ fn agent(timeout: Duration) -> ureq::Agent {
 
 /// Asks GitHub for the newest release for this platform.
 pub fn check(betas: bool) -> Result<Option<Release>, String> {
-    let url = format!("https://api.github.com/repos/{RELEASES_REPO}/releases?per_page=30");
+    let url = format!(
+        "https://api.github.com/repos/{}/releases?per_page=30",
+        crate::services::releases_repo()
+    );
     let mut response = agent(Duration::from_secs(20))
         .get(&url)
         .header("Accept", "application/vnd.github+json")

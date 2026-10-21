@@ -185,9 +185,6 @@ fn connect(cx: &Context<'_>, key: &str, chatroom: u64, index: usize) -> End {
 
 // ---- Follows, subs, gifts and Kicks (through Clutch's events relay) ----
 
-/// Clutch's events relay (`services/events-relay`): Kick sends events to it by webhook, and it
-/// passes each channel's events to that channel's open connections.
-const RELAY: &str = "wss://events.destrosphere.com/kick/live";
 /// Ask the relay for a pong this often; no reply for twice as long means the link is dead.
 const RELAY_PING: Duration = Duration::from_secs(30);
 
@@ -236,11 +233,12 @@ pub fn events(cx: &Context<'_>, session: &crate::kick::Session) {
 
 fn relay_connection(cx: &Context<'_>, token: &str) -> RelayEnd {
     // The relay checks the sign-in with Kick and connects us to that channel only.
-    let mut socket = match ws::connect_authorized(RELAY, token) {
-        Ok(s) => s,
-        Err(Some(401 | 403)) => return RelayEnd::Refused,
-        Err(_) => return RelayEnd::Dropped,
-    };
+    let mut socket =
+        match ws::connect_authorized(&crate::services::events_socket("/kick/live"), token) {
+            Ok(s) => s,
+            Err(Some(401 | 403)) => return RelayEnd::Refused,
+            Err(_) => return RelayEnd::Dropped,
+        };
     let mut pinged = Instant::now();
     let mut heard = Instant::now();
     loop {

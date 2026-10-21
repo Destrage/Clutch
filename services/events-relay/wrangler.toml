@@ -19,6 +19,12 @@ name = "LIVE_LIMIT"
 namespace_id = "1001"
 simple = { limit = 10, period = 60 }
 
+# Sign-in code and renewal swaps (/kick/token, /kick/refresh) per address.
+[[ratelimits]]
+name = "TOKEN_LIMIT"
+namespace_id = "1002"
+simple = { limit = 20, period = 60 }
+
 [[durable_objects.bindings]]
 name = "CHANNELS"
 class_name = "Channel"

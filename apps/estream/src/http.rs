@@ -46,6 +46,21 @@ pub fn get_bearer(url: &str, token: &str, headers: &[(&str, &str)]) -> Option<(u
     Some((status, body))
 }
 
+/// POSTs JSON: `(status, body)` (`Null` when the reply isn't JSON).
+pub fn post_json(url: &str, json: &Value) -> Option<(u16, Value)> {
+    let mut response = agent()
+        .post(url)
+        .send_json(json)
+        .map_err(|e| tracing::debug!(error = %e, url, "platform API"))
+        .ok()?;
+    let status = response.status().as_u16();
+    let body = response
+        .body_mut()
+        .read_json::<Value>()
+        .unwrap_or(Value::Null);
+    Some((status, body))
+}
+
 /// POSTs JSON with a bearer token: `(status, body)` (`Null` when the reply isn't JSON).
 pub fn post_json_bearer(
     url: &str,

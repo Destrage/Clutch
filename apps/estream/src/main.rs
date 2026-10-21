@@ -16,6 +16,7 @@ mod oauth;
 mod performance;
 mod presets;
 mod secret;
+mod services;
 mod settings;
 mod shell;
 mod twitch;
