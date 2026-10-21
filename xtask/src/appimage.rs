@@ -26,8 +26,10 @@ fn wanted(name: &str) -> bool {
 
 pub fn package() -> Result<()> {
     let root = root();
-    let release = root.join("target/release");
-    let out = root.join("target/package");
+    // CARGO_TARGET_DIR when set (as for a build in WSL next to the Windows one), else `target`.
+    let target = root.join(std::env::var_os("CARGO_TARGET_DIR").unwrap_or("target".into()));
+    let release = target.join("release");
+    let out = target.join("package");
     let appdir = out.join("Clutch.AppDir");
     let bin = appdir.join("usr/bin");
 
