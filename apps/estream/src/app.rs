@@ -4,7 +4,7 @@
 use crate::actions::{self, Action, Key};
 use crate::interact::{self, Corner, Drag, DragKind, Handle, ItemGeom, Modifiers};
 use crate::presets::{self, PRESETS};
-use crate::settings::{PanelLayout, Paths, Settings, ThemeMode, WindowState};
+use crate::settings::{GameAudio, PanelLayout, Paths, Settings, ThemeMode, WindowState};
 use crate::ui::{
     AppWindow, AudioInspect, CanvasBox, CanvasTab, DestinationRow, FilterParamRow, FilterRow,
     Guide, Inspect, LayerRow, LiveRow, MediaInspect, MixerStrip, PaletteEntry, Platform, Preset,
@@ -3135,6 +3135,29 @@ impl App {
     }
 
     pub fn add_source(&mut self, kind: &str) {
+        self.add_source_with(kind, None);
+    }
+
+    /// The answer to "Capture the game's sound too?": adds the Game capture, and with
+    /// `remember` later ones follow the answer without asking.
+    pub fn game_audio_answer(&mut self, capture: bool, remember: bool) {
+        if let Some(w) = self.window() {
+            w.set_game_audio_open(false);
+        }
+        if remember {
+            self.settings.game_audio = if capture {
+                GameAudio::Capture
+            } else {
+                GameAudio::Skip
+            };
+            self.settings.save(&self.paths.settings());
+        }
+        self.add_source_with("game_capture", Some(capture));
+    }
+
+    /// `game_audio`: whether a Game capture captures the game's sound (`None` = decide, asking
+    /// when Desktop or Application audio already plays it).
+    fn add_source_with(&mut self, kind: &str, game_audio: Option<bool>) {
         let Some((snapshot, _, Some(scene))) = self.canvas_and_scene() else {
             self.toast("Create a scene first".into(), true);
             return;
@@ -3155,6 +3178,27 @@ impl App {
         let mut settings = source_type
             .schema(&serde_json::json!({}))
             .with_defaults(&serde_json::json!({}));
+        if kind == "game_capture" {
+            let heard_by = snapshot
+                .sources
+                .iter()
+                .find(|s| matches!(s.kind.as_str(), "audio_output" | "app_audio"));
+            let capture = match (game_audio, heard_by, self.settings.game_audio) {
+                (Some(on), ..) => on,
+                // Nothing else plays the game, so the capture brings its sound.
+                (None, None, _) => true,
+                (None, Some(_), GameAudio::Capture) => true,
+                (None, Some(_), GameAudio::Skip) => false,
+                (None, Some(heard_by), GameAudio::Ask) => {
+                    if let Some(w) = self.window() {
+                        w.set_game_audio_heard_by(heard_by.name.clone().into());
+                        w.set_game_audio_open(true);
+                    }
+                    return;
+                }
+            };
+            settings["audio"] = capture.into();
+        }
         let transform = match kind {
             "color" => {
                 let (w, h) = (canvas.width / 3, canvas.height / 3);
@@ -5315,6 +5359,11 @@ impl App {
                 .and_then(|i| self.settings.destinations.get(i))
                 .map_or(0, |d| index_of(d.stream.canvas)),
             ask_details: self.settings.ask_details,
+            game_audio: match self.settings.game_audio {
+                GameAudio::Ask => 0,
+                GameAudio::Capture => 1,
+                GameAudio::Skip => 2,
+            },
             remote_enabled: self.settings.remote.enabled,
             remote_port: self.settings.remote.port as f32,
             remote_auth: self.settings.remote.auth,
@@ -6004,6 +6053,13 @@ impl App {
                 r.canvas = ids.get(i).copied();
             }
             "ask-details" => self.settings.ask_details = value > 0.5,
+            "game-audio" => {
+                self.settings.game_audio = match i {
+                    1 => GameAudio::Capture,
+                    2 => GameAudio::Skip,
+                    _ => GameAudio::Ask,
+                };
+            }
             "remote-enable" => {
                 self.settings.remote.enabled = value > 0.5;
                 self.remote_restart_at = Some(Instant::now());
@@ -9638,6 +9694,8 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     on!(on_palette_query_changed, |a, q| a.palette_filter(&q));
     on!(on_palette_run, |a, id| a.run_id(&id));
     on!(on_add_source_pick, |a, kind| a.add_source(&kind));
+    on!(on_game_audio_answer, |a, capture, remember| a
+        .game_audio_answer(capture, remember));
     on!(on_wizard_create, |a| a.wizard_create());
     on!(on_wizard_cancel, |a| a.wizard_cancel());
     on!(on_chat_select, |a, i| a.chat_select(i));

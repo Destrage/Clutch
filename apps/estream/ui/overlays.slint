@@ -492,6 +492,58 @@ export component RecoveryPrompt inherits Modal {
     }
 }
 
+// Adding a Game capture while another source already plays the game's sound.
+export component GameAudioPrompt inherits Modal {
+    /// The source that already plays the game (e.g. "Desktop Audio").
+    in property <string> heard-by;
+    property <bool> remember: false;
+    callback answer(bool /* capture */, bool /* remember */);
+
+    card-width: 460px;
+    dismissable: false;
+    VerticalLayout {
+        padding: 24px;
+        spacing: 14px;
+        HorizontalLayout {
+            spacing: 12px;
+            VerticalLayout {
+                alignment: start;
+                Rectangle {
+                    width: 36px;
+                    height: 36px;
+                    border-radius: 18px;
+                    background: Theme.accent-soft;
+                    Icon { source: Icons.gamepad; size: 18px; tint: Theme.accent; }
+                }
+            }
+            VerticalLayout {
+                spacing: 6px;
+                Text { text: "Capture the game's sound too?"; color: Theme.text; font-size: Theme.font-l; font-weight: 700; }
+                Text {
+                    text: root.heard-by + " already plays the game's sound. Capture it here as well to give the game its own fader; it's still heard only once.";
+                    color: Theme.text-muted;
+                    font-size: Theme.font-m;
+                    wrap: word-wrap;
+                }
+            }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            VerticalLayout {
+                alignment: center;
+                Toggle {
+                    label: "Don't ask again";
+                    checked: root.remember;
+                    toggled(v) => { root.remember = v; }
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Button { text: "Leave it off"; kind: "ghost"; clicked => { root.answer(false, root.remember); } }
+            Button { text: "Capture sound"; kind: "primary"; clicked => { root.answer(true, root.remember); } }
+        }
+    }
+}
+
 export component Toast inherits Rectangle {
     in property <string> text;
     in property <bool> error;
@@ -1451,6 +1503,17 @@ export component SettingsDialog inherits Modal {
                             options: ["Dark", "Light", "Follow system"];
                             current-index: root.form.theme;
                             selected(i) => { root.set("theme", i); }
+                        }
+                    }
+                    SectionTitle { text: "SOURCES"; }
+                    SettingRow {
+                        label: "Game capture sound";
+                        hint: "When you add a Game capture and Desktop or Application audio already plays the game.";
+                        Select {
+                            label: "Game capture sound";
+                            options: ["Ask", "Always capture", "Leave off"];
+                            current-index: root.form.game-audio;
+                            selected(i) => { root.set("game-audio", i); }
                         }
                     }
                     Text { text: root.form.ffmpeg; color: Theme.text-faint; font-size: Theme.font-xs; }

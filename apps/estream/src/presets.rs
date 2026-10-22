@@ -217,7 +217,8 @@ pub fn build_project(purpose: Purpose, preset: CanvasPreset, d: &Detected) -> Pr
                     &mut project,
                     "Game",
                     "game_capture",
-                    serde_json::json!({ "mode": "auto", "cursor": false }),
+                    // Desktop audio carries the game.
+                    serde_json::json!({ "mode": "auto", "cursor": false, "audio": false }),
                     fit(BoundsMode::Fit),
                 );
             }

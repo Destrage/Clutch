@@ -322,7 +322,7 @@ pub fn source_types() -> Vec<SourceType> {
                 )
                 .hint("Re-attaches automatically when the app restarts"),
                 Property::bool("cursor", "Capture cursor", true),
-                audio_property("The app's sound, on its own fader"),
+                audio_property("The app's sound, on its own fader", true),
             ])
         },
         |ctx, settings| {
@@ -359,7 +359,7 @@ pub fn source_types() -> Vec<SourceType> {
                 )
                 .hint("Used in “Specific window” mode"),
                 Property::bool("cursor", "Capture cursor", false),
-                audio_property("The game's sound, on its own fader"),
+                audio_property("The game's sound, on its own fader", false),
             ])
         },
         |ctx, settings| {
@@ -391,15 +391,16 @@ pub fn source_types() -> Vec<SourceType> {
             Property::select("mode", "Mode", vec![], "auto"),
             Property::select("window", "Window", vec![], ""),
             Property::bool("cursor", "Capture cursor", false),
-            Property::bool("audio", "Capture audio", true),
+            Property::bool("audio", "Capture audio", false),
         ])
     });
     vec![display, window, game]
 }
 
-/// The "Capture audio" switch of Game and Window capture.
-fn audio_property(what: &str) -> Property {
-    Property::bool("audio", "Capture audio", true).hint(&format!(
+/// The "Capture audio" switch of Game and Window capture. New Game captures start with it off (the
+/// app asks when the game is already heard elsewhere).
+fn audio_property(what: &str, default: bool) -> Property {
+    Property::bool("audio", "Capture audio", default).hint(&format!(
         "{what}. Desktop audio leaves it out, so you never hear it twice."
     ))
 }

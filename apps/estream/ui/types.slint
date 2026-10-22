@@ -299,6 +299,8 @@ export struct SettingsForm {
     stream-reconnect: bool,
     // Going live opens the Go live window (stream details per platform).
     ask-details: bool,
+    // Game capture sound when the game is already heard: 0 ask, 1 always capture, 2 leave off.
+    game-audio: int,
     // Remote control (obs-websocket)
     remote-enabled: bool,
     remote-port: float,

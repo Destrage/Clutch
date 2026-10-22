@@ -9,7 +9,7 @@ import { CanvasTab, SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry,
 import { VSplitter, HSplitter, TooltipLayer, Hint } from "widgets.slint";
 import { Preview } from "preview.slint";
 import { TopBar, ScenesPanel, SourcesPanel, InspectorPanel, MixerPanel, StatusBar, TransitionColumn, ProgramView, CanvasTabs } from "panels.slint";
-import { CommandPalette, AddSourceDialog, SetupWizard, SetupDialog, RecoveryPrompt, Toast, SettingsDialog, LivePanel, ShaderDialog } from "overlays.slint";
+import { CommandPalette, AddSourceDialog, SetupWizard, SetupDialog, RecoveryPrompt, GameAudioPrompt, Toast, SettingsDialog, LivePanel, ShaderDialog } from "overlays.slint";
 import { AutomationDialog } from "automation.slint";
 import { StatsDialog } from "stats.slint";
 import { ClipsDialog } from "clips.slint";
@@ -132,6 +132,10 @@ export component AppWindow inherits Window {
     in-out property <string> palette-query;
     in-out property <int> palette-current;
     in-out property <bool> add-source-open;
+    // "Capture the game's sound too?" when adding a Game capture.
+    in-out property <bool> game-audio-open;
+    in property <string> game-audio-heard-by;
+    callback game-audio-answer(bool, bool);
     in property <[SourceType]> source-types;
     in property <[Preset]> presets;
     in property <[Preset]> wizard-purposes;
@@ -710,6 +714,15 @@ export component AppWindow inherits Window {
         }
         dismiss => {
             root.add-source-open = false;
+            main-keys.focus();
+        }
+    }
+
+    if root.game-audio-open: GameAudioPrompt {
+        heard-by: root.game-audio-heard-by;
+        // Rust closes it and adds the Game capture.
+        answer(capture, remember) => {
+            root.game-audio-answer(capture, remember);
             main-keys.focus();
         }
     }

@@ -111,6 +111,17 @@ pub enum ThemeMode {
     System,
 }
 
+/// Whether a new Game capture captures the game's sound when Desktop or Application audio
+/// already plays it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GameAudio {
+    #[default]
+    Ask,
+    Capture,
+    Skip,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WindowState {
     pub x: i32,
@@ -172,6 +183,8 @@ pub struct Settings {
     /// Going live opens the Go live window (stream details per platform); off: the remembered
     /// details are used without asking.
     pub ask_details: bool,
+    /// Adding a Game capture while the game is already heard: ask, or the remembered answer.
+    pub game_audio: GameAudio,
     /// Single-stream settings from before multistream; read once, migrated, never written.
     #[serde(rename = "stream", skip_serializing)]
     legacy_stream: Option<estream_media::StreamSettings>,
@@ -489,6 +502,7 @@ impl Default for Settings {
             kick: None,
             chat_chime: true,
             ask_details: true,
+            game_audio: GameAudio::Ask,
             legacy_stream: None,
             legacy_key: None,
         }
@@ -682,6 +696,7 @@ mod tests {
         let old: Settings =
             serde_json::from_str(r#"{ "destinations": [{ "name": "YouTube" }] }"#).unwrap();
         assert!(old.ask_details);
+        assert_eq!(old.game_audio, GameAudio::Ask);
         assert_eq!(old.destinations[0].details, StreamDetails::default());
         let mut s = Settings::default();
         s.destinations.push(DestinationConfig {
