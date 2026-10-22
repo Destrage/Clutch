@@ -364,7 +364,10 @@ pub fn install_after_exit(file: &Path, restart: bool) -> Result<(), String> {
 fn install_script(file: &Path, exe: &Path, pid: u32, restart: bool) -> String {
     let quote = |p: &Path| p.display().to_string().replace('\'', "''");
     let restart = if restart {
-        format!("if ($p.ExitCode -eq 0) {{ Start-Process '{}' }}; ", quote(exe))
+        format!(
+            "if ($p.ExitCode -eq 0) {{ Start-Process '{}' }}; ",
+            quote(exe)
+        )
     } else {
         String::new()
     };
