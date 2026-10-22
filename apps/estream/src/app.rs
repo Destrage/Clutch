@@ -68,6 +68,10 @@ pub struct App {
     /// A source picked in the mixer that has no item in the active scene.
     selected_source: Option<SourceId>,
     mixer_model: Rc<VecModel<MixerStrip>>,
+    /// The destinations panel's rows, updated in place: replacing them every refresh rebuilt
+    /// the Start buttons, and a click whose press and release straddled that was lost.
+    live_model: Rc<VecModel<LiveRow>>,
+    live_active_model: Rc<VecModel<LiveRow>>,
     meter_holds: HashMap<SourceId, [(f32, Instant); 2]>,
     mixer_at: Instant,
     hover: Option<ItemId>,
@@ -186,6 +190,8 @@ pub struct App {
     details: Option<crate::golive::Window>,
     /// `details` is shown as the Go live window.
     details_shown: bool,
+    /// `details` was opened by one destination's Start (settings index): only it starts.
+    details_only: Option<usize>,
     /// Starting a waiting YouTube broadcast.
     yt_start: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
     /// Viewer counts while live.
@@ -335,6 +341,7 @@ struct LiveDest {
     /// Last bitrate sample: (time, bytes sent, kbps).
     rate: (Instant, u64, f64),
     error_shown: bool,
+    started: Instant,
 }
 
 impl LiveDest {
@@ -343,9 +350,13 @@ impl LiveDest {
             config,
             rate: (Instant::now(), 0, 0.0),
             error_shown: false,
+            started: Instant::now(),
         }
     }
 }
+
+/// A destination's Stop is ignored this long after its Start (the same button: a double-click).
+const STOP_GRACE: Duration = Duration::from_secs(2);
 
 /// Short transport label for a destination, e.g. "RTMPS" or "SRT".
 fn protocol_label(s: &estream_media::StreamSettings, long: bool) -> String {
@@ -684,6 +695,8 @@ impl App {
             selection: None,
             selected_source: None,
             mixer_model: Rc::new(VecModel::default()),
+            live_model: Rc::new(VecModel::default()),
+            live_active_model: Rc::new(VecModel::default()),
             meter_holds: HashMap::new(),
             mixer_at: Instant::now(),
             hover: None,
@@ -752,6 +765,7 @@ impl App {
             yt_created: None,
             details: None,
             details_shown: false,
+            details_only: None,
             yt_start: None,
             viewers: crate::viewers::ViewerCounts::start(crate::viewers::Accounts {
                 twitch: twitch.clone(),
@@ -784,6 +798,8 @@ impl App {
         window.set_palette_entries(ModelRc::from(app.palette_model.clone()));
         window.set_props(ModelRc::from(app.props_model.clone()));
         window.set_mixer_strips(ModelRc::from(app.mixer_model.clone()));
+        window.set_live_rows(ModelRc::from(app.live_model.clone()));
+        window.set_live_active_rows(ModelRc::from(app.live_active_model.clone()));
         Rc::new(RefCell::new(app))
     }
 
@@ -3452,7 +3468,7 @@ impl App {
         let already_live = self.stream_dests.iter().any(|d| d.config == index);
         if self.stream.is_some() {
             if !already_live {
-                self.live_toggle(index);
+                self.start_destination(index, Vec::new());
             }
             self.update_outputs();
         } else {
@@ -3981,6 +3997,7 @@ impl App {
             return;
         }
         self.details_shown = ask;
+        self.details_only = None;
         self.details = Some(window);
         if ask {
             self.show_details();
@@ -4053,6 +4070,7 @@ impl App {
             return;
         }
         self.details_shown = true;
+        self.details_only = None;
         self.details = Some(window);
         self.show_details();
     }
@@ -4065,10 +4083,13 @@ impl App {
         if !self.details_shown {
             return;
         }
-        w.set_details_sections(ModelRc::new(VecModel::from(d.rows())));
+        let emotes = &mut self.chat_emotes;
+        let rows = d.rows(&mut |url| emotes.picture(url));
+        w.set_details_sections(ModelRc::new(VecModel::from(rows)));
         w.set_details_keys_only(d.keys_only.join(", ").into());
         w.set_details_live(d.live);
         w.set_details_busy(d.busy().unwrap_or_default().into());
+        w.set_details_loading(d.loading());
         w.set_details_ask(self.settings.ask_details);
         w.set_details_open(true);
     }
@@ -4076,7 +4097,12 @@ impl App {
     /// Takes in the Go live window's background results.
     fn tick_details(&mut self) {
         let Some(d) = &mut self.details else { return };
-        match d.poll() {
+        let outcome = d.poll();
+        // Category pictures that arrived: show them.
+        if self.details_shown && self.chat_emotes.poll() {
+            self.show_details();
+        }
+        match outcome {
             None => {}
             Some(crate::golive::Outcome::Changed) => self.show_details(),
             Some(crate::golive::Outcome::Done(applied)) => self.details_done(applied),
@@ -4118,6 +4144,16 @@ impl App {
         }
         if window.live {
             self.toast(format!("Saved\n{}", lines.join("\n")), false);
+            return;
+        }
+        // Opened by one destination's Start: start just that one (unless it was skipped).
+        if let Some(config) = self.details_only.take() {
+            if !window.skipped().contains(&config) {
+                self.start_destination(config, lines);
+            }
+            if !window.errors.is_empty() {
+                self.toast(window.errors.join("\n"), true);
+            }
             return;
         }
         self.start_stream(&window.skipped(), lines);
@@ -4202,13 +4238,66 @@ impl App {
             return;
         }
         self.details = None;
+        self.details_only = None;
         if let Some(w) = self.window() {
-            w.set_details_open(false);
+            // Closed after the Cancel click has finished: removing the window during its own
+            // click left the pointer stuck on it, and the next clicks (the destinations panel's
+            // Start) went nowhere until the mouse moved away.
+            let w = w.as_weak();
+            slint::Timer::single_shot(Duration::ZERO, move || {
+                if let Some(w) = w.upgrade() {
+                    w.set_details_open(false);
+                }
+            });
         }
     }
 
-    /// Start or stop one destination (by settings index) from the live panel.
+    /// Start or stop one destination (by settings index) from the live panel. Starting one whose
+    /// platform account is connected sets up its details first, as Go Live does.
     pub fn live_toggle(&mut self, config: usize) {
+        let Some(dest) = self.settings.destinations.get(config) else {
+            return;
+        };
+        let live = self.stream_dests.iter().position(|d| d.config == config);
+        let active = match (&self.stream, live) {
+            (Some(stream), Some(k)) => stream.destinations()[k].is_active(),
+            _ => false,
+        };
+        if active {
+            // Start and Stop share the button: a second click right after Start is a
+            // double-click, not a request to end the stream.
+            if live.is_some_and(|k| self.stream_dests[k].started.elapsed() < STOP_GRACE) {
+                return;
+            }
+            self.stop_destination(config);
+            return;
+        }
+        if self.details.is_some() {
+            self.show_details();
+            return;
+        }
+        let window = if self.settings.ask_details {
+            crate::golive::Window::open(&[(config, dest)], self.golive_sessions(), false)
+        } else {
+            crate::golive::Window::remembered(&[(config, dest)], self.golive_sessions())
+        };
+        if !window.has_sections() {
+            self.start_destination(config, Vec::new());
+            return;
+        }
+        self.details_shown = self.settings.ask_details;
+        self.details_only = Some(config);
+        self.details = Some(window);
+        if self.details_shown {
+            self.show_details();
+        } else {
+            self.toast("Setting up your stream details…".into(), false);
+        }
+    }
+
+    /// Starts one destination (by settings index), next to any already live; `lines` says what
+    /// was set up on its platform.
+    fn start_destination(&mut self, config: usize, lines: Vec<String>) {
         let Some(engine) = &self.engine else { return };
         let Some(dest) = self
             .settings
@@ -4220,19 +4309,17 @@ impl App {
         };
         let live = self.stream_dests.iter().position(|d| d.config == config);
         match (&mut self.stream, live) {
-            (None, _) => match estream_media::MultiStream::start(engine, &[dest]) {
-                Ok(stream) => {
-                    self.stream = Some(stream);
-                    self.stream_dests = vec![LiveDest::new(config)];
+            (None, _) => {
+                match estream_media::MultiStream::start(engine, std::slice::from_ref(&dest)) {
+                    Ok(stream) => {
+                        self.stream = Some(stream);
+                        self.stream_dests = vec![LiveDest::new(config)];
+                    }
+                    Err(e) => {
+                        self.toast(format!("Couldn't go live: {e}"), true);
+                        return;
+                    }
                 }
-                Err(e) => self.toast(format!("Couldn't go live: {e}"), true),
-            },
-            (Some(stream), Some(k)) if stream.destinations()[k].is_active() => {
-                stream.stop_destination(engine, k);
-                if self.settings.destinations[config].stream.service == Service::YouTube {
-                    self.drop_unused_broadcast();
-                }
-                self.toast(format!("Ended the stream on {}", dest.name), false);
             }
             (Some(stream), Some(k)) => {
                 stream.restart_destination(engine, k, &dest);
@@ -4243,6 +4330,29 @@ impl App {
                 self.stream_dests.push(LiveDest::new(config));
             }
         }
+        let mut text = format!("Going live on {}", dest.name);
+        for line in lines {
+            text.push('\n');
+            text.push_str(&line);
+        }
+        self.toast(text, false);
+        self.update_outputs();
+    }
+
+    fn stop_destination(&mut self, config: usize) {
+        let Some(engine) = &self.engine else { return };
+        let (Some(stream), Some(k)) = (
+            &mut self.stream,
+            self.stream_dests.iter().position(|d| d.config == config),
+        ) else {
+            return;
+        };
+        stream.stop_destination(engine, k);
+        if self.settings.destinations[config].stream.service == Service::YouTube {
+            self.drop_unused_broadcast();
+        }
+        let name = self.settings.destinations[config].name.clone();
+        self.toast(format!("Ended the stream on {name}"), false);
         self.update_outputs();
     }
 
@@ -5268,7 +5378,9 @@ impl App {
             }
         }
         w.set_viewers_total(total.map_or(-1, |n| n.min(i32::MAX as u64) as i32));
-        w.set_live_rows(ModelRc::new(VecModel::from(rows)));
+        let active: Vec<LiveRow> = rows.iter().filter(|r| r.state != 0).cloned().collect();
+        sync_model(&self.live_active_model, active);
+        sync_model(&self.live_model, rows);
 
         let Some(stream) = &self.stream else {
             w.set_stream_state(0);

@@ -360,7 +360,7 @@ impl Session {
     }
 
     /// Kick categories matching `query`: (id, name).
-    pub fn search_categories(&self, query: &str) -> Result<Vec<(u64, String)>, String> {
+    pub fn search_categories(&self, query: &str) -> Result<Vec<(u64, String, String)>, String> {
         if query.trim().is_empty() {
             return Ok(Vec::new());
         }
@@ -404,13 +404,14 @@ fn channel_update(details: &ChannelDetails) -> Value {
     body
 }
 
-fn categories_of(body: &Value) -> Vec<(u64, String)> {
+/// `(id, name, thumbnail address)` for each category found.
+fn categories_of(body: &Value) -> Vec<(u64, String, String)> {
     body["data"]
         .as_array()
         .map(|items| {
             items
                 .iter()
-                .filter_map(|c| Some((c["id"].as_u64()?, text(c, "name"))))
+                .filter_map(|c| Some((c["id"].as_u64()?, text(c, "name"), text(c, "thumbnail"))))
                 .collect()
         })
         .unwrap_or_default()
@@ -459,12 +460,17 @@ mod tests {
     #[test]
     fn categories_come_from_the_search() {
         let body = serde_json::json!({ "data": [
-            { "id": 28, "name": "Grand Theft Auto V" },
+            { "id": 28, "name": "Grand Theft Auto V",
+              "thumbnail": "https://files.kick.com/images/subcategories/28/banner/a.jpg" },
             { "name": "no id" }
         ]});
         assert_eq!(
             categories_of(&body),
-            vec![(28, "Grand Theft Auto V".into())]
+            vec![(
+                28,
+                "Grand Theft Auto V".into(),
+                "https://files.kick.com/images/subcategories/28/banner/a.jpg".into()
+            )]
         );
     }
 }

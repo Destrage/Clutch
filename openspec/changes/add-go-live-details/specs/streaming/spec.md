@@ -19,6 +19,14 @@ apply the details on every platform before it starts the video.
 - **THEN** the window stays open with the error on that platform, Try again, and Go live without
   that platform
 
+#### Scenario: Starting one destination
+- **WHEN** the user clicks Start on one destination whose platform account is connected
+- **THEN** the window opens for that platform only, and Go live there starts only that destination
+
+#### Scenario: Double-click on Start
+- **WHEN** the user clicks a destination's Start and then the same button again within 2 seconds
+- **THEN** the destination keeps streaming
+
 ### Requirement: YouTube broadcast choice
 The YouTube section SHALL list the channel's upcoming and ready broadcasts and SHALL always offer a
 new broadcast, preselected when none exists. A new broadcast SHALL have a title, description,
@@ -45,7 +53,13 @@ SHALL be editable.
 ### Requirement: Twitch and Kick channel details
 The Twitch section SHALL show and edit the channel's title, category, tags and language. The Kick
 section SHALL show and edit the title and category. Changes SHALL be saved to the channel when
-going live.
+going live. Where the platform reports no title or category (Kick while offline), the section
+SHALL show the details used last time.
+
+#### Scenario: Category from the platform's list
+- **WHEN** the user types part of a category name
+- **THEN** the matching categories are listed under the field, and only picking one of them
+  changes the category
 
 #### Scenario: New title on Twitch
 - **WHEN** the user changes the Twitch title and category and clicks Go live

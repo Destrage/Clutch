@@ -891,6 +891,11 @@ fn updated_broadcast(mut current: Value, details: &BroadcastDetails) -> (Value, 
     content["enableAutoStart"] = details.auto_start.into();
     content["enableAutoStop"] = details.auto_stop.into();
     content["latencyPreference"] = details.latency.api().into();
+    // The older on/off form of the latency: YouTube rejects it next to ultra-low ("Latency
+    // preference not supported with other options selected"), and latencyPreference covers it.
+    if let Some(content) = content.as_object_mut() {
+        content.remove("enableLowLatency");
+    }
     (current, "id,snippet,status,contentDetails")
 }
 
@@ -915,7 +920,9 @@ fn updated_video(current: &Value, details: &BroadcastDetails) -> Value {
         },
     });
     for keep in ["tags", "defaultLanguage", "defaultAudioLanguage"] {
-        if !snippet[keep].is_null() {
+        // YouTube gives new live videos the audio language "zxx" (no linguistic content) but
+        // rejects it in an update ("The request metadata is invalid").
+        if !snippet[keep].is_null() && snippet[keep] != "zxx" {
             body["snippet"][keep] = snippet[keep].clone();
         }
     }
@@ -1155,6 +1162,26 @@ mod tests {
     }
 
     #[test]
+    fn the_update_leaves_out_the_old_latency_switch() {
+        // As YouTube returns a broadcast it made: ultra-low with the old switch off.
+        let current = serde_json::json!({
+            "id": "b1",
+            "snippet": { "title": "Old" },
+            "status": { "lifeCycleStatus": "ready", "privacyStatus": "public" },
+            "contentDetails": { "latencyPreference": "ultraLow", "enableLowLatency": false,
+                "enableDvr": true }
+        });
+        let details = BroadcastDetails {
+            latency: Latency::UltraLow,
+            ..Default::default()
+        };
+        let (body, _) = updated_broadcast(current, &details);
+        assert!(body["contentDetails"].get("enableLowLatency").is_none());
+        assert_eq!(body["contentDetails"]["latencyPreference"], "ultraLow");
+        assert_eq!(body["contentDetails"]["enableDvr"], true);
+    }
+
+    #[test]
     fn the_video_update_keeps_tags_and_category() {
         let current = serde_json::json!({
             "id": "b1",
@@ -1177,6 +1204,12 @@ mod tests {
             updated_video(&current, &gaming)["snippet"]["categoryId"],
             "20"
         );
+        // A new live video's "zxx" audio language is left out (YouTube rejects it back).
+        let live = serde_json::json!({ "id": "b2", "snippet": { "categoryId": "24",
+            "defaultLanguage": "en", "defaultAudioLanguage": "zxx" } });
+        let body = updated_video(&live, &gaming);
+        assert_eq!(body["snippet"]["defaultLanguage"], "en");
+        assert!(body["snippet"].get("defaultAudioLanguage").is_none());
     }
 
     #[test]

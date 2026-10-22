@@ -44,12 +44,16 @@ pub fn load_twitch(
     prefill(session.channel_details(), saved)
 }
 
-/// Loads the Kick section: the channel as it is now, else the saved details.
+/// Loads the Kick section: the channel as it is now, else the saved details. Kick reports an
+/// empty title and no category while the channel is offline, so those count as unknown too.
 pub fn load_kick(
     session: &crate::kick::Session,
     saved: Option<&crate::kick::ChannelDetails>,
 ) -> Result<crate::kick::ChannelDetails, String> {
-    prefill(session.channel_details(), saved)
+    match session.channel_details() {
+        Ok(d) if d.title.is_empty() && d.category_id == 0 => Ok(saved.cloned().unwrap_or(d)),
+        current => prefill(current, saved),
+    }
 }
 
 /// The channel's current details (they may have changed on the platform since), else the saved
@@ -132,14 +136,22 @@ pub enum Form {
     },
     Twitch {
         details: crate::twitch::ChannelDetails,
-        results: Vec<(String, String)>,
+        results: Vec<(String, String, String)>,
         /// A search waiting for typing to pause: the text and when it was typed.
         search: Option<(String, Instant)>,
+        /// The search sent to the platform; its results count only while it's still wanted
+        /// (picking a category drops it).
+        asked: Option<String>,
+        /// What is typed in the search field (kept when the window redraws).
+        typed: String,
     },
     Kick {
         details: crate::kick::ChannelDetails,
-        results: Vec<(u64, String)>,
+        results: Vec<(u64, String, String)>,
         search: Option<(String, Instant)>,
+        asked: Option<String>,
+        /// What is typed in the search field (kept when the window redraws).
+        typed: String,
     },
 }
 
@@ -183,8 +195,8 @@ enum Event {
     YouTube(usize, Result<YouTubeLoaded, String>),
     Twitch(usize, Result<crate::twitch::ChannelDetails, String>),
     Kick(usize, Result<crate::kick::ChannelDetails, String>),
-    TwitchFound(usize, String, Vec<(String, String)>),
-    KickFound(usize, String, Vec<(u64, String)>),
+    TwitchFound(usize, String, Vec<(String, String, String)>),
+    KickFound(usize, String, Vec<(u64, String, String)>),
     Applied(usize, Box<Result<Applied, String>>),
 }
 
@@ -284,11 +296,15 @@ impl Window {
                     details: d.details.twitch.clone().unwrap_or_default(),
                     results: Vec::new(),
                     search: None,
+                    asked: None,
+                    typed: String::new(),
                 },
                 _ => Form::Kick {
                     details: d.details.kick.clone().unwrap_or_default(),
                     results: Vec::new(),
                     search: None,
+                    asked: None,
+                    typed: String::new(),
                 },
             };
             window.sections.push(Section {
@@ -391,6 +407,13 @@ impl Window {
         (!names.is_empty()).then(|| format!("Setting up {}…", names.join(", ")))
     }
 
+    /// Whether a platform's details are still loading (Go live waits for them).
+    pub fn loading(&self) -> bool {
+        self.sections
+            .iter()
+            .any(|s| !s.skipped && matches!(s.state, SectionState::Loading))
+    }
+
     /// The form's current details, as they'd be remembered.
     fn form_details(&self, i: usize) -> StreamDetails {
         let mut saved = StreamDetails::default();
@@ -418,7 +441,11 @@ impl Window {
             (Form::Twitch { details, .. }, "title") => details.title = value.to_owned(),
             (Form::Kick { details, .. }, "title") => details.title = value.to_owned(),
             (Form::Twitch { details, .. }, "tags") => details.tags = split_tags(value),
-            (Form::Twitch { search, .. } | Form::Kick { search, .. }, "category-search") => {
+            (
+                Form::Twitch { search, typed, .. } | Form::Kick { search, typed, .. },
+                "category-search",
+            ) => {
+                *typed = value.to_owned();
                 *search = Some((value.to_owned(), Instant::now()));
             }
             _ => {}
@@ -491,26 +518,38 @@ impl Window {
             }
             (
                 Form::Twitch {
-                    details, results, ..
+                    details,
+                    results,
+                    search,
+                    asked,
+                    typed,
                 },
                 "category",
             ) => {
-                if let Some((id, name)) = results.get(index) {
+                if let Some((id, name, _)) = results.get(index) {
                     details.category_id = id.clone();
                     details.category = name.clone();
                     results.clear();
+                    (*search, *asked) = (None, None);
+                    typed.clear();
                 }
             }
             (
                 Form::Kick {
-                    details, results, ..
+                    details,
+                    results,
+                    search,
+                    asked,
+                    typed,
                 },
                 "category",
             ) => {
-                if let Some((id, name)) = results.get(index) {
+                if let Some((id, name, _)) = results.get(index) {
                     details.category_id = *id;
                     details.category = name.clone();
                     results.clear();
+                    (*search, *asked) = (None, None);
+                    typed.clear();
                 }
             }
             (Form::Twitch { details, .. }, "language") => {
@@ -529,8 +568,9 @@ impl Window {
         for (i, s) in self.sections.iter_mut().enumerate() {
             let tx = self.tx.clone();
             match &mut s.form {
-                Form::Twitch { search, .. } => {
+                Form::Twitch { search, asked, .. } => {
                     if let Some(query) = due(search) {
+                        *asked = Some(query.clone());
                         let session = self.sessions.twitch.clone();
                         spawn("estream-golive-search", move || {
                             let found = session.search_categories(&query).unwrap_or_default();
@@ -538,8 +578,9 @@ impl Window {
                         });
                     }
                 }
-                Form::Kick { search, .. } => {
+                Form::Kick { search, asked, .. } => {
                     if let Some(query) = due(search) {
+                        *asked = Some(query.clone());
                         let session = self.sessions.kick.clone();
                         spawn("estream-golive-search", move || {
                             let found = session.search_categories(&query).unwrap_or_default();
@@ -648,30 +689,26 @@ impl Window {
                 }),
                 Event::TwitchFound(i, query, found) => {
                     if let Some(Section {
-                        form:
-                            Form::Twitch {
-                                results, search, ..
-                            },
+                        form: Form::Twitch { results, asked, .. },
                         ..
                     }) = self.sections.get_mut(i)
-                        && search.is_none()
+                        && asked.as_deref() == Some(query.as_str())
                     {
                         tracing::debug!(%query, n = found.len(), "Twitch categories");
                         *results = found;
+                        *asked = None;
                     }
                 }
                 Event::KickFound(i, query, found) => {
                     if let Some(Section {
-                        form:
-                            Form::Kick {
-                                results, search, ..
-                            },
+                        form: Form::Kick { results, asked, .. },
                         ..
                     }) = self.sections.get_mut(i)
-                        && search.is_none()
+                        && asked.as_deref() == Some(query.as_str())
                     {
                         tracing::debug!(%query, n = found.len(), "Kick categories");
                         *results = found;
+                        *asked = None;
                     }
                 }
                 Event::Applied(i, result) => {
@@ -681,7 +718,10 @@ impl Window {
                     s.applying = false;
                     match *result {
                         Ok(applied) => self.applied.push((s.config, applied)),
-                        Err(e) => s.state = SectionState::ApplyFailed(e),
+                        Err(e) => {
+                            tracing::warn!(platform = platform_name(&s.form), error = %e, "stream details not applied");
+                            s.state = SectionState::ApplyFailed(e);
+                        }
                     }
                 }
             }
@@ -742,11 +782,15 @@ impl Window {
     // ---- Showing ----
 
     /// The sections for the window.
-    pub fn rows(&self) -> Vec<crate::ui::DetailsSection> {
+    /// `image` gives a category picture by address (`None` while it loads).
+    pub fn rows(
+        &self,
+        image: &mut dyn FnMut(&str) -> Option<slint::Image>,
+    ) -> Vec<crate::ui::DetailsSection> {
         self.sections
             .iter()
             .filter(|s| !s.skipped)
-            .map(|s| row(s, self.live))
+            .map(|s| row(s, self.live, image))
             .collect()
     }
 
@@ -892,7 +936,11 @@ fn apply_youtube(
 }
 
 /// A section as the window shows it.
-fn row(s: &Section, live: bool) -> crate::ui::DetailsSection {
+fn row(
+    s: &Section,
+    live: bool,
+    image: &mut dyn FnMut(&str) -> Option<slint::Image>,
+) -> crate::ui::DetailsSection {
     use slint::{ModelRc, SharedString, VecModel};
     let strings = |items: Vec<String>| {
         ModelRc::new(VecModel::from(
@@ -959,12 +1007,17 @@ fn row(s: &Section, live: bool) -> crate::ui::DetailsSection {
             out.locked = locked || live;
         }
         Form::Twitch {
-            details, results, ..
+            details,
+            results,
+            typed,
+            ..
         } => {
             out.kind = "twitch".into();
             out.title = details.title.clone().into();
             out.category = details.category.clone().into();
-            out.categories = strings(results.iter().map(|(_, n)| n.clone()).collect());
+            out.category_query = typed.clone().into();
+            out.categories = strings(results.iter().map(|(_, n, _)| n.clone()).collect());
+            out.category_images = images_of(results.iter().map(|(_, _, u)| u.as_str()), image);
             out.tags = details.tags.join(", ").into();
             let langs = languages(&details.language);
             out.language = langs
@@ -975,15 +1028,37 @@ fn row(s: &Section, live: bool) -> crate::ui::DetailsSection {
             out.languages = strings(langs.into_iter().map(|(_, n)| n).collect());
         }
         Form::Kick {
-            details, results, ..
+            details,
+            results,
+            typed,
+            ..
         } => {
             out.kind = "kick".into();
             out.title = details.title.clone().into();
             out.category = details.category.clone().into();
-            out.categories = strings(results.iter().map(|(_, n)| n.clone()).collect());
+            out.category_query = typed.clone().into();
+            out.categories = strings(results.iter().map(|(_, n, _)| n.clone()).collect());
+            out.category_images = images_of(results.iter().map(|(_, _, u)| u.as_str()), image);
         }
     }
     out
+}
+
+/// The pictures for a list of addresses (empty images while they load).
+fn images_of<'a>(
+    urls: impl Iterator<Item = &'a str>,
+    image: &mut dyn FnMut(&str) -> Option<slint::Image>,
+) -> slint::ModelRc<slint::Image> {
+    let images: Vec<slint::Image> = urls
+        .map(|u| {
+            if u.is_empty() {
+                slint::Image::default()
+            } else {
+                image(u).unwrap_or_default()
+            }
+        })
+        .collect();
+    slint::ModelRc::new(slint::VecModel::from(images))
 }
 
 /// "Ranked · 8:05 PM · public · uses this key" style label for the broadcast list.

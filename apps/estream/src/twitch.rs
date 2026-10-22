@@ -434,7 +434,7 @@ impl Session {
     }
 
     /// Twitch categories (games) matching `query`: (id, name).
-    pub fn search_categories(&self, query: &str) -> Result<Vec<(String, String)>, String> {
+    pub fn search_categories(&self, query: &str) -> Result<Vec<(String, String, String)>, String> {
         if query.trim().is_empty() {
             return Ok(Vec::new());
         }
@@ -513,14 +513,15 @@ fn channel_update(details: &ChannelDetails) -> Value {
     body
 }
 
-fn categories_of(body: &Value) -> Vec<(String, String)> {
+/// `(id, name, box art address)` for each category found.
+fn categories_of(body: &Value) -> Vec<(String, String, String)> {
     body["data"]
         .as_array()
         .map(|items| {
             items
                 .iter()
-                .map(|c| (text(c, "id"), text(c, "name")))
-                .filter(|(id, _)| !id.is_empty())
+                .map(|c| (text(c, "id"), text(c, "name"), text(c, "box_art_url")))
+                .filter(|(id, _, _)| !id.is_empty())
                 .collect()
         })
         .unwrap_or_default()
@@ -618,12 +619,17 @@ mod tests {
     #[test]
     fn categories_come_from_the_search() {
         let body = serde_json::json!({ "data": [
-            { "id": "32982", "name": "Grand Theft Auto V" },
+            { "id": "32982", "name": "Grand Theft Auto V",
+              "box_art_url": "https://static-cdn.jtvnw.net/ttv-boxart/32982-52x72.jpg" },
             { "id": "", "name": "broken" }
         ]});
         assert_eq!(
             categories_of(&body),
-            vec![("32982".into(), "Grand Theft Auto V".into())]
+            vec![(
+                "32982".into(),
+                "Grand Theft Auto V".into(),
+                "https://static-cdn.jtvnw.net/ttv-boxart/32982-52x72.jpg".into()
+            )]
         );
     }
 }
