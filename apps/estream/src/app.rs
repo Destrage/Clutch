@@ -68,6 +68,10 @@ pub struct App {
     /// A source picked in the mixer that has no item in the active scene.
     selected_source: Option<SourceId>,
     mixer_model: Rc<VecModel<MixerStrip>>,
+    /// The destinations panel's rows, updated in place: replacing them every refresh rebuilt
+    /// the Start buttons, and a click whose press and release straddled that was lost.
+    live_model: Rc<VecModel<LiveRow>>,
+    live_active_model: Rc<VecModel<LiveRow>>,
     meter_holds: HashMap<SourceId, [(f32, Instant); 2]>,
     mixer_at: Instant,
     hover: Option<ItemId>,
@@ -691,6 +695,8 @@ impl App {
             selection: None,
             selected_source: None,
             mixer_model: Rc::new(VecModel::default()),
+            live_model: Rc::new(VecModel::default()),
+            live_active_model: Rc::new(VecModel::default()),
             meter_holds: HashMap::new(),
             mixer_at: Instant::now(),
             hover: None,
@@ -792,6 +798,8 @@ impl App {
         window.set_palette_entries(ModelRc::from(app.palette_model.clone()));
         window.set_props(ModelRc::from(app.props_model.clone()));
         window.set_mixer_strips(ModelRc::from(app.mixer_model.clone()));
+        window.set_live_rows(ModelRc::from(app.live_model.clone()));
+        window.set_live_active_rows(ModelRc::from(app.live_active_model.clone()));
         Rc::new(RefCell::new(app))
     }
 
@@ -5371,8 +5379,8 @@ impl App {
         }
         w.set_viewers_total(total.map_or(-1, |n| n.min(i32::MAX as u64) as i32));
         let active: Vec<LiveRow> = rows.iter().filter(|r| r.state != 0).cloned().collect();
-        w.set_live_active_rows(ModelRc::new(VecModel::from(active)));
-        w.set_live_rows(ModelRc::new(VecModel::from(rows)));
+        sync_model(&self.live_active_model, active);
+        sync_model(&self.live_model, rows);
 
         let Some(stream) = &self.stream else {
             w.set_stream_state(0);
