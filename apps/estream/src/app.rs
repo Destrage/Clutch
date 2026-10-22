@@ -160,6 +160,8 @@ pub struct App {
     /// feed, and where replies can go (None: every platform).
     livechat: crate::livechat::LiveChat,
     chat_lines: Rc<VecModel<crate::ui::ChatLine>>,
+    /// Emote images and the layout of chat lines with emotes (one entry per `chat_lines` row).
+    chat_emotes: crate::emotes::ChatEmotes,
     chat_seen: u64,
     chat_shown: Option<(
         Vec<crate::ui::ChatStateRow>,
@@ -655,6 +657,7 @@ impl App {
         let twitch = crate::twitch::Session::new(settings.twitch.clone());
         let youtube = crate::youtube::Session::new(settings.youtube.clone());
         let kick = crate::kick::Session::new(settings.kick.clone());
+        crate::livechat::emotes::set_third_party(settings.chat_third_party);
         let livechat = crate::livechat::LiveChat::new(crate::livechat::Accounts {
             twitch: twitch.clone(),
             youtube: youtube.clone(),
@@ -737,6 +740,7 @@ impl App {
             chat_page: None,
             livechat,
             chat_lines: Rc::new(VecModel::default()),
+            chat_emotes: crate::emotes::ChatEmotes::new(),
             chat_seen: 0,
             chat_shown: None,
             chat_reply_to: Vec::new(),
@@ -1104,6 +1108,12 @@ impl App {
         self.chat_seen = seen;
         let chime = self.settings.chat_chime && new.iter().any(|m| m.event);
         for m in new {
+            let parts = if self.settings.chat_emotes {
+                m.parts
+            } else {
+                Vec::new()
+            };
+            let (pieces, body_height) = self.chat_emotes.push(parts);
             self.chat_lines.push(crate::ui::ChatLine {
                 event: m.event,
                 kind: m.platform.key().into(),
@@ -1112,6 +1122,8 @@ impl App {
                     .unwrap_or(slint::Color::from_rgb_u8(0x8e, 0xc5, 0xff)),
                 text: m.text.into(),
                 time: m.time.format("%-I:%M %p").to_string().into(),
+                pieces,
+                body_height,
             });
         }
         if chime {
@@ -1120,6 +1132,14 @@ impl App {
         // Keep the list as long as the feed.
         while self.chat_lines.row_count() > 300 {
             self.chat_lines.remove(0);
+            self.chat_emotes.pop_front();
+        }
+        if let Some(ms) = self.chat_emotes.tick(
+            &self.chat_lines,
+            w.get_chat_visible(),
+            self.settings.chat_animate,
+        ) {
+            w.set_chat_emote_ms(ms);
         }
         let states = feed.states();
         let rows: Vec<crate::ui::ChatStateRow> = states
@@ -5365,6 +5385,9 @@ impl App {
                 GameAudio::Capture => 1,
                 GameAudio::Skip => 2,
             },
+            chat_emotes: self.settings.chat_emotes,
+            chat_third_party: self.settings.chat_third_party,
+            chat_animate: self.settings.chat_animate,
             remote_enabled: self.settings.remote.enabled,
             remote_port: self.settings.remote.port as f32,
             remote_auth: self.settings.remote.auth,
@@ -6061,6 +6084,12 @@ impl App {
                     _ => GameAudio::Ask,
                 };
             }
+            "chat-emotes" => self.settings.chat_emotes = value > 0.5,
+            "chat-third-party" => {
+                self.settings.chat_third_party = value > 0.5;
+                crate::livechat::emotes::set_third_party(value > 0.5);
+            }
+            "chat-animate" => self.settings.chat_animate = value > 0.5,
             "remote-enable" => {
                 self.settings.remote.enabled = value > 0.5;
                 self.remote_restart_at = Some(Instant::now());
@@ -9695,6 +9724,9 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     on!(on_palette_query_changed, |a, q| a.palette_filter(&q));
     on!(on_palette_run, |a, id| a.run_id(&id));
     on!(on_add_source_pick, |a, kind| a.add_source(&kind));
+    on!(on_chat_text_width, |a, width| a
+        .chat_emotes
+        .set_width(width));
     on!(on_game_audio_answer, |a, capture, remember| a
         .game_audio_answer(capture, remember));
     on!(on_wizard_create, |a| a.wizard_create());

@@ -2,6 +2,7 @@
 //! its own thread, putting messages into one shared feed the chat panel shows; and replying to
 //! one platform or all of them through each platform's API.
 
+pub mod emotes;
 pub mod kick;
 pub mod twitch;
 mod ws;
@@ -47,10 +48,59 @@ pub struct Message {
     pub author: String,
     /// The name's colour as `#rrggbb` ("" for none).
     pub color: String,
+    /// The plain text, emotes by name (replies, copying, and wherever images aren't shown).
     pub text: String,
+    /// Text and emotes; empty when the message has no emotes (`text` says it all).
+    pub parts: Vec<emotes::Part>,
     pub time: chrono::DateTime<chrono::Local>,
     /// A follow, subscription, gift, donation or raid (shown highlighted), not a chat message.
     pub event: bool,
+}
+
+impl Message {
+    /// Sets `parts` (kept only when they hold an emote) and the plain `text` from them.
+    fn with_parts(mut self, parts: Vec<emotes::Part>) -> Self {
+        self.text = emotes::plain(&parts);
+        self.parts = if emotes::has_emotes(&parts) {
+            parts
+        } else {
+            Vec::new()
+        };
+        self
+    }
+}
+
+/// A reader's third-party emotes, loaded in the background once the channel is known.
+#[derive(Clone, Default)]
+struct ThirdParty(Arc<Mutex<Option<emotes::Sets>>>);
+
+impl ThirdParty {
+    /// Starts loading the sets for `channel_id` (once per id).
+    fn load(&self, owner: emotes::Owner, channel_id: String) {
+        if !emotes::third_party_on() {
+            return;
+        }
+        let slot = self.0.clone();
+        let _ = std::thread::Builder::new()
+            .name("estream-emote-sets".into())
+            .spawn(move || {
+                let sets = emotes::load(owner, &channel_id);
+                if let Ok(mut s) = slot.lock() {
+                    *s = Some(sets);
+                }
+            });
+    }
+
+    /// `parts` with the matching words shown as emotes.
+    fn apply(&self, parts: Vec<emotes::Part>) -> Vec<emotes::Part> {
+        match self.0.lock() {
+            Ok(s) if emotes::third_party_on() => match s.as_ref() {
+                Some(sets) => sets.apply(parts),
+                None => parts,
+            },
+            _ => parts,
+        }
+    }
 }
 
 /// How a destination's chat reader is doing.
@@ -372,6 +422,7 @@ mod tests {
             author: "a".into(),
             color: String::new(),
             text: text.into(),
+            parts: Vec::new(),
             time: chrono::Local::now(),
             event: false,
         }

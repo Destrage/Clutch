@@ -131,6 +131,8 @@ export component LiveDeck inherits Rectangle {
     callback chat-resized(float, float);
     callback chat-send(string, int);
     callback chat-toggle-chime();
+    in property <int> chat-emote-ms;
+    callback chat-text-width(float);
 
     /// The F-key label for scene `i` ("" past F9, or when the key is the clip hotkey).
     pure function key-label(i: int) -> string {
@@ -358,6 +360,8 @@ export component LiveDeck inherits Rectangle {
                     resized(w, h) => { root.chat-resized(w, h); }
                     send(t, i) => { root.chat-send(t, i); }
                     toggle-chime => { root.chat-toggle-chime(); }
+                    emote-ms: root.chat-emote-ms;
+                    text-width(w) => { root.chat-text-width(w); }
                 }
                 Rectangle {
                     border-radius: Theme.radius-l;

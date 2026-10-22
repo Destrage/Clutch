@@ -180,6 +180,12 @@ pub struct Settings {
     pub kick: Option<crate::kick::KickAccount>,
     /// A chime when a follow, sub or other stream event arrives in the chat.
     pub chat_chime: bool,
+    /// Emotes in the chat shown as images (off: by name).
+    pub chat_emotes: bool,
+    /// 7TV, BetterTTV and FrankerFaceZ emotes in the chat.
+    pub chat_third_party: bool,
+    /// Animated emotes play (off: their first frame).
+    pub chat_animate: bool,
     /// Going live opens the Go live window (stream details per platform); off: the remembered
     /// details are used without asking.
     pub ask_details: bool,
@@ -501,6 +507,9 @@ impl Default for Settings {
             youtube: None,
             kick: None,
             chat_chime: true,
+            chat_emotes: true,
+            chat_third_party: true,
+            chat_animate: true,
             ask_details: true,
             game_audio: GameAudio::Ask,
             legacy_stream: None,
@@ -697,6 +706,7 @@ mod tests {
             serde_json::from_str(r#"{ "destinations": [{ "name": "YouTube" }] }"#).unwrap();
         assert!(old.ask_details);
         assert_eq!(old.game_audio, GameAudio::Ask);
+        assert!(old.chat_emotes && old.chat_third_party && old.chat_animate);
         assert_eq!(old.destinations[0].details, StreamDetails::default());
         let mut s = Settings::default();
         s.destinations.push(DestinationConfig {

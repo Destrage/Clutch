@@ -29,6 +29,8 @@ estream-media = { path = "../../crates/estream-media" }
 estream-project.workspace = true
 estream-vcam.workspace = true
 anyhow.workspace = true
+cosmic-text.workspace = true
+image.workspace = true
 rfd.workspace = true
 dirs.workspace = true
 fastrand.workspace = true

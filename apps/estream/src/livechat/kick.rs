@@ -57,6 +57,8 @@ pub fn read(cx: &Context<'_>, channel_name: &str) {
         return;
     };
     let mut failures = 0;
+    let third_party = super::ThirdParty::default();
+    let mut owner = None;
     while !cx.stopped() {
         cx.state(State::Connecting);
         let Some(room) = channel(&slug) else {
@@ -69,12 +71,17 @@ pub fn read(cx: &Context<'_>, channel_name: &str) {
             }
             continue;
         };
+        // The channel's 7TV emotes (once per channel owner).
+        if owner != Some(room.user_id) {
+            owner = Some(room.user_id);
+            third_party.load(super::emotes::Owner::Kick, room.user_id.to_string());
+        }
         // Try each key once, starting with the one that worked last.
         let first = KEY.load(Ordering::Relaxed);
         let mut refused = 0;
         for i in 0..KEYS.len() {
             let index = (first + i) % KEYS.len();
-            match connect(cx, KEYS[index], room.chatroom, index) {
+            match connect(cx, KEYS[index], room.chatroom, index, &third_party) {
                 End::Stopped => return,
                 End::Refused => refused += 1,
                 End::Dropped => {
@@ -100,7 +107,13 @@ pub fn read(cx: &Context<'_>, channel_name: &str) {
     }
 }
 
-fn connect(cx: &Context<'_>, key: &str, chatroom: u64, index: usize) -> End {
+fn connect(
+    cx: &Context<'_>,
+    key: &str,
+    chatroom: u64,
+    index: usize,
+    third_party: &super::ThirdParty,
+) -> End {
     let url =
         format!("wss://ws-us2.pusher.com/app/{key}?protocol=7&client=js&version=8.4.0&flash=false");
     let mut socket = match ws::connect(&url) {
@@ -175,7 +188,12 @@ fn connect(cx: &Context<'_>, key: &str, chatroom: u64, index: usize) -> End {
                     .and_then(|d| serde_json::from_str::<Value>(d).ok())
                     .and_then(|d| parse(&d))
                 {
-                    cx.push(message);
+                    let parts = third_party.apply(if message.parts.is_empty() {
+                        vec![super::emotes::Part::Text(message.text.clone())]
+                    } else {
+                        message.parts.clone()
+                    });
+                    cx.push(message.with_parts(parts));
                 }
             }
             _ => {}
@@ -337,6 +355,7 @@ fn event_line(kind: &str, e: &Value) -> Option<Message> {
         color: super::name_color(&author),
         author,
         text,
+        parts: Vec::new(),
         time: chrono::Local::now(),
         event: true,
     })
@@ -353,38 +372,19 @@ fn parse(data: &Value) -> Option<Message> {
         .filter(|c| c.starts_with('#') && c.len() == 7)
         .map(str::to_owned)
         .unwrap_or_else(|| super::name_color(&author));
-    let text = emotes_as_names(data.get("content")?.as_str()?);
-    Some(Message {
-        platform: Platform::Kick,
-        author,
-        color,
-        text,
-        time: chrono::Local::now(),
-        event: false,
-    })
-}
-
-/// `[emote:37234:Prayge]` becomes `Prayge`.
-fn emotes_as_names(content: &str) -> String {
-    let mut out = String::with_capacity(content.len());
-    let mut rest = content;
-    while let Some(start) = rest.find("[emote:") {
-        out.push_str(&rest[..start]);
-        let tail = &rest[start..];
-        match tail.find(']') {
-            Some(end) => {
-                let inner = &tail[7..end];
-                out.push_str(inner.split_once(':').map_or(inner, |(_, name)| name));
-                rest = &tail[end + 1..];
-            }
-            None => {
-                out.push_str(tail);
-                rest = "";
-            }
+    let parts = super::emotes::kick_parts(data.get("content")?.as_str()?);
+    Some(
+        Message {
+            platform: Platform::Kick,
+            author,
+            color,
+            text: String::new(),
+            parts: Vec::new(),
+            time: chrono::Local::now(),
+            event: false,
         }
-    }
-    out.push_str(rest);
-    out
+        .with_parts(parts),
+    )
 }
 
 #[cfg(test)]
@@ -441,9 +441,10 @@ mod tests {
 
     #[test]
     fn emotes_read_as_their_names() {
-        assert_eq!(emotes_as_names("hi [emote:1:KEKW]!"), "hi KEKW!");
-        assert_eq!(emotes_as_names("no emotes"), "no emotes");
-        assert_eq!(emotes_as_names("broken [emote:1:x"), "broken [emote:1:x");
+        use crate::livechat::emotes::{kick_parts, plain};
+        assert_eq!(plain(&kick_parts("hi [emote:1:KEKW]!")), "hi KEKW!");
+        assert_eq!(plain(&kick_parts("no emotes")), "no emotes");
+        assert_eq!(plain(&kick_parts("broken [emote:1:x")), "broken [emote:1:x");
     }
 
     #[test]
