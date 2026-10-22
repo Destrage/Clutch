@@ -49,4 +49,6 @@
   - Twitch and Kick title and category;
   - a hotkey go-live;
   - Edit details while live;
-  - stopping before YouTube goes live.
+  - stopping before YouTube goes live;
+  - Start on one destination (window for that platform only; a double-click keeps it live);
+  - Kick offline: last time's title and category.

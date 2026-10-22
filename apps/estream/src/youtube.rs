@@ -915,7 +915,9 @@ fn updated_video(current: &Value, details: &BroadcastDetails) -> Value {
         },
     });
     for keep in ["tags", "defaultLanguage", "defaultAudioLanguage"] {
-        if !snippet[keep].is_null() {
+        // YouTube gives new live videos the audio language "zxx" (no linguistic content) but
+        // rejects it in an update ("The request metadata is invalid").
+        if !snippet[keep].is_null() && snippet[keep] != "zxx" {
             body["snippet"][keep] = snippet[keep].clone();
         }
     }
@@ -1177,6 +1179,12 @@ mod tests {
             updated_video(&current, &gaming)["snippet"]["categoryId"],
             "20"
         );
+        // A new live video's "zxx" audio language is left out (YouTube rejects it back).
+        let live = serde_json::json!({ "id": "b2", "snippet": { "categoryId": "24",
+            "defaultLanguage": "en", "defaultAudioLanguage": "zxx" } });
+        let body = updated_video(&live, &gaming);
+        assert_eq!(body["snippet"]["defaultLanguage"], "en");
+        assert!(body["snippet"].get("defaultAudioLanguage").is_none());
     }
 
     #[test]

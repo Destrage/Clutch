@@ -296,6 +296,8 @@ pub struct ChatEmotes {
     /// Lay every emote line out again at this time (the width changed or images arrived).
     relayout_at: Option<std::time::Instant>,
     clock: std::time::Instant,
+    /// Pictures asked for outside chat lines (kept when unused chat images are dropped).
+    pictures: HashSet<String>,
 }
 
 /// Lines are laid out again this long after the width last changed (dragging a splitter).
@@ -311,6 +313,7 @@ impl ChatEmotes {
             width: 300.0,
             relayout_at: None,
             clock: std::time::Instant::now(),
+            pictures: HashSet::new(),
         }
     }
 
@@ -360,7 +363,9 @@ impl ChatEmotes {
                     lines.set_row_data(row, line);
                 }
             }
-            self.images.retain(&urls_of(&self.parts));
+            let mut keep = urls_of(&self.parts);
+            keep.extend(self.pictures.iter().map(String::as_str));
+            self.images.retain(&keep);
         }
         if !animate {
             return Some(0); // every emote on its first frame
@@ -384,6 +389,16 @@ impl ChatEmotes {
             self.relayout_at = Some(std::time::Instant::now() + RELAYOUT_DELAY);
         }
         any
+    }
+
+    /// A picture by address (category box art), using the same downloads and cache. `None`
+    /// while it loads.
+    pub fn picture(&mut self, url: &str) -> Option<Image> {
+        if self.pictures.len() > 200 {
+            self.pictures.clear();
+        }
+        self.pictures.insert(url.to_owned());
+        self.images.get(url).and_then(|l| l.frames.row_data(0))
     }
 
     fn urls(&self) -> HashSet<&str> {

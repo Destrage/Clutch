@@ -27,6 +27,9 @@ export struct DetailsSection {
     category-index: int,
     /// Twitch and Kick: the chosen category's name ("" none).
     category: string,
+    /// Twitch and Kick: what is typed in the category search, and a picture per match.
+    category-query: string,
+    category-images: [image],
     /// YouTube: 0 public, 1 unlisted, 2 private.
     privacy: int,
     kids: bool,
@@ -193,21 +196,75 @@ export component StreamDetailsDialog inherits Modal {
                                 font-size: Theme.font-xs;
                                 wrap: word-wrap;
                             }
-                            if s.kind != "youtube": TextField {
-                                label: "Category";
-                                placeholder: s.category == "" ? "Search for a category" : s.category;
-                                edited(t) => { root.text(i, "category-search", t); }
-                            }
-                            if s.kind != "youtube" && s.categories.length > 0: Select {
-                                label: "Matching categories";
-                                options: s.categories;
-                                current-index: -1;
-                                selected(v) => { root.choose(i, "category", v); }
-                            }
-                            if s.kind != "youtube" && s.category != "": Text {
-                                text: "Category: " + s.category;
-                                color: Theme.text-muted;
-                                font-size: Theme.font-s;
+                            // Twitch and Kick take a category from their own list: type to search,
+                            // then pick one of the matches shown under the field.
+                            if s.kind != "youtube": VerticalLayout {
+                                spacing: 4px;
+                                category-field := TextField {
+                                    label: "Category";
+                                    // Kept in Rust: the window's sections are rebuilt as results arrive.
+                                    text: s.category-query;
+                                    placeholder: s.category == "" ? "Search for a category" : "Change category (" + s.category + ")";
+                                    edited(t) => { root.text(i, "category-search", t); }
+                                }
+                                if s.categories.length > 0: Rectangle {
+                                    border-radius: Theme.radius-s;
+                                    border-width: 1px;
+                                    border-color: Theme.border;
+                                    background: Theme.surface-2;
+                                    VerticalLayout {
+                                        padding: 4px;
+                                        for name[k] in s.categories: Rectangle {
+                                            height: 40px;
+                                            border-radius: Theme.radius-s;
+                                            background: pick-ta.has-hover ? Theme.hover : transparent;
+                                            accessible-role: list-item;
+                                            accessible-label: name;
+                                            pick-ta := TouchArea {
+                                                mouse-cursor: MouseCursor.pointer;
+                                                clicked => {
+                                                    category-field.text = "";
+                                                    root.choose(i, "category", k);
+                                                }
+                                            }
+                                            // Box art (Twitch 3:4, Kick banners cropped to fit).
+                                            Rectangle {
+                                                x: 6px;
+                                                width: 26px;
+                                                height: 34px;
+                                                border-radius: 3px;
+                                                clip: true;
+                                                background: Theme.surface-3;
+                                                if k < s.category-images.length: Image {
+                                                    width: parent.width;
+                                                    height: parent.height;
+                                                    source: s.category-images[k];
+                                                    image-fit: cover;
+                                                }
+                                            }
+                                            Text {
+                                                x: 42px;
+                                                width: parent.width - 50px;
+                                                text: name;
+                                                color: Theme.text;
+                                                font-size: Theme.font-m;
+                                                vertical-alignment: center;
+                                                overflow: elide;
+                                            }
+                                        }
+                                    }
+                                }
+                                if category-field.text != "" && s.categories.length == 0: Text {
+                                    text: "Pick a category from the matches; Twitch and Kick only take categories from their list.";
+                                    color: Theme.text-faint;
+                                    font-size: Theme.font-xs;
+                                    wrap: word-wrap;
+                                }
+                                Text {
+                                    text: s.category != "" ? "Category: " + s.category : "No category chosen";
+                                    color: s.category != "" ? Theme.text-muted : Theme.text-faint;
+                                    font-size: Theme.font-s;
+                                }
                             }
                             if s.kind == "twitch": HorizontalLayout {
                                 spacing: 8px;
