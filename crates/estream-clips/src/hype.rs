@@ -38,6 +38,9 @@ pub struct HypeConfig {
     pub sensitivity: Sensitivity,
     /// Short-term loudness must also be above this (dBFS).
     pub floor_db: f32,
+    /// The baseline counts as at least this (dBFS), so after a quiet stretch an ordinary sound
+    /// isn't a big jump.
+    pub baseline_floor_db: f32,
     pub cooldown: f64,
     pub sustain: f64,
     pub short_window: f64,
@@ -47,12 +50,14 @@ pub struct HypeConfig {
 }
 
 impl HypeConfig {
-    /// For game or desktop audio.
+    /// For game or desktop audio. Games go quiet often (menus, looting, waiting), and a jump
+    /// from silence is not a highlight, so the baseline has a floor and the cooldown is long.
     pub fn game(sensitivity: Sensitivity) -> Self {
         Self {
             sensitivity,
-            floor_db: -50.0,
-            cooldown: 20.0,
+            floor_db: -35.0,
+            baseline_floor_db: -40.0,
+            cooldown: 45.0,
             sustain: 0.3,
             short_window: 0.4,
             baseline_window: 60.0,
@@ -60,10 +65,13 @@ impl HypeConfig {
         }
     }
 
-    /// For a microphone: ignores anything quieter than −30 dBFS (typing, breathing).
+    /// For a microphone: ignores anything quieter than −30 dBFS (typing, breathing); a shout
+    /// after a quiet minute counts.
     pub fn mic(sensitivity: Sensitivity) -> Self {
         Self {
             floor_db: -30.0,
+            baseline_floor_db: SILENCE_DB,
+            cooldown: 20.0,
             ..Self::game(sensitivity)
         }
     }
@@ -195,7 +203,7 @@ impl HypeDetector {
             self.baseline = self.sorted.get(self.sorted.len() / 2).copied();
         }
 
-        let baseline = self.baseline?;
+        let baseline = self.baseline?.max(self.cfg.baseline_floor_db);
         let over = short_db - baseline;
         let hot = t - first >= self.cfg.warmup
             && short_db >= self.cfg.floor_db
@@ -276,8 +284,8 @@ mod tests {
     fn repeated_jumps_inside_the_cooldown_fire_once() {
         let mut d = HypeDetector::new(HypeConfig::game(Sensitivity::Medium));
         let burst = |t: f64| {
-            // 1 s bursts at 60, 65, 70 and 90 s.
-            if [60.0, 65.0, 70.0, 90.0]
+            // 1 s bursts at 60, 65, 70, 90 and 110 s.
+            if [60.0, 65.0, 70.0, 90.0, 110.0]
                 .iter()
                 .any(|s| t >= *s && t < s + 1.0)
             {
@@ -286,9 +294,22 @@ mod tests {
                 -40.0
             }
         };
-        let peaks = run(&mut d, 0.0, 100.0, burst);
+        let peaks = run(&mut d, 0.0, 120.0, burst);
         let at: Vec<i64> = peaks.iter().map(|p| p.at.round() as i64).collect();
-        assert_eq!(at, [60, 90], "{peaks:?}");
+        assert_eq!(at, [60, 110], "{peaks:?}");
+    }
+
+    #[test]
+    fn ordinary_game_sound_after_a_quiet_stretch_is_not_hype() {
+        // A minute of near silence (a menu, looting), then normal gunfire at −30 dBFS: far
+        // above the quiet median, but not above what a game normally sounds like.
+        let mut d = HypeDetector::new(HypeConfig::game(Sensitivity::Medium));
+        let shots = |t: f64| if t < 60.0 { -70.0 } else { -30.0 };
+        assert!(run(&mut d, 0.0, 70.0, shots).is_empty());
+        // A real spike out of the same silence still counts.
+        let mut d = HypeDetector::new(HypeConfig::game(Sensitivity::Medium));
+        let spike = |t: f64| if t < 60.0 { -70.0 } else { -18.0 };
+        assert_eq!(run(&mut d, 0.0, 70.0, spike).len(), 1);
     }
 
     #[test]

@@ -101,6 +101,8 @@ pub struct Clipper {
     /// When the game stopped (clip mode stops its buffer once pending clips are saved).
     stopping: Option<Instant>,
     hype: HashMap<SourceId, HypeDetector>,
+    /// The last hype clip, from any source.
+    last_hype: Option<Instant>,
     events_tx: Sender<GameEvent>,
     events_rx: Receiver<GameEvent>,
     gsi: Option<GsiServer>,
@@ -138,14 +140,13 @@ pub fn trigger_kind(kind: &EventKind) -> Option<GameEventKind> {
     })
 }
 
-/// Source kinds whose audio counts as game sound, and as a microphone.
-const GAME_AUDIO: &[&str] = &[
-    "audio_output",
-    "app_audio",
-    "game_capture",
-    "window_capture",
-];
+/// Captures whose own audio is the game's sound (preferred for hype), and Desktop audio, used
+/// when no capture has its audio on. Application audio (voice chat, music) never counts.
+const CAPTURE_AUDIO: &[&str] = &["game_capture", "window_capture"];
+const DESKTOP_AUDIO: &str = "audio_output";
 const MIC_AUDIO: &[&str] = &["audio_input"];
+/// Hype clips from any source are at least this far apart.
+const HYPE_COOLDOWN: Duration = Duration::from_secs(45);
 /// Source kinds that show a game on screen.
 const GAME_VIDEO: &[&str] = &["game_capture", "display_capture", "window_capture"];
 
@@ -163,6 +164,7 @@ impl Clipper {
             buffer: None,
             stopping: None,
             hype: HashMap::new(),
+            last_hype: None,
             events_tx,
             events_rx,
             gsi: None,
@@ -486,14 +488,27 @@ impl Clipper {
         let snapshot = engine.snapshot();
         let meters = engine.audio_meters();
         let t = self.clock.timestamp_of(now).as_secs_f64();
-        let mut peaks = Vec::new();
+        // The game's own sound when a capture has its audio on; otherwise Desktop audio.
+        let capture_audio = meters.sources.iter().any(|(id, _)| {
+            snapshot.source(*id).is_some_and(|d| {
+                CAPTURE_AUDIO.contains(&d.kind.as_str())
+                    && d.settings.get("audio").and_then(|v| v.as_bool()) != Some(false)
+            })
+        });
+        let mut fired = None;
         for (id, meter) in &meters.sources {
             let Some(def) = snapshot.source(*id) else {
                 continue;
             };
-            let cfg = if s.hype_game && GAME_AUDIO.contains(&def.kind.as_str()) {
+            let kind = def.kind.as_str();
+            let game_sound = if capture_audio {
+                CAPTURE_AUDIO.contains(&kind)
+            } else {
+                kind == DESKTOP_AUDIO
+            };
+            let cfg = if s.hype_game && game_sound {
                 HypeConfig::game(s.hype_sensitivity)
-            } else if s.hype_mic && MIC_AUDIO.contains(&def.kind.as_str()) {
+            } else if s.hype_mic && MIC_AUDIO.contains(&kind) {
                 HypeConfig::mic(s.hype_sensitivity)
             } else {
                 continue;
@@ -505,17 +520,34 @@ impl Clipper {
             detector.set_sensitivity(s.hype_sensitivity);
             let reading = meter.read();
             let rms = reading.rms[0].max(reading.rms[1]);
-            if let Some(peak) = detector.push(t, rms) {
-                peaks.push(peak);
+            // Every detector keeps listening (so its baseline stays current); one clip at most.
+            if let Some(peak) = detector.push(t, rms)
+                && fired.is_none()
+            {
+                fired = Some((peak, def.name.clone(), detector.baseline()));
             }
         }
-        for peak in peaks {
-            let at = self
-                .clock
-                .instant_of(Timestamp((peak.at.max(0.0) * 1e9) as u64));
-            let game = self.current_game().map(str::to_owned);
-            self.on_event(ctx, EventKind::Hype, game, at, out);
+        let Some((peak, source, baseline)) = fired else {
+            return;
+        };
+        if self
+            .last_hype
+            .is_some_and(|last| now.duration_since(last) < HYPE_COOLDOWN)
+        {
+            return;
         }
+        self.last_hype = Some(now);
+        tracing::info!(
+            source,
+            over_db = peak.over_db,
+            baseline_db = baseline.unwrap_or_default(),
+            "hype"
+        );
+        let at = self
+            .clock
+            .instant_of(Timestamp((peak.at.max(0.0) * 1e9) as u64));
+        let game = self.current_game().map(str::to_owned);
+        self.on_event(ctx, EventKind::Hype, game, at, out);
     }
 
     /// Starts clip mode's buffer: on the studio engine when a program scene shows the game,
