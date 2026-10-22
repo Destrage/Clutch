@@ -22,13 +22,13 @@ many of them animated.
     doesn't give the images for channel-member emoji (`:_name:`), so those stay text.
 - **7TV, BetterTTV and FrankerFaceZ emotes.** When a channel's chat starts being read, Clutch loads
   that channel's emote sets and the global ones from these services' public APIs. Words in messages
-  that match are shown as the emote. This is on by default, with a switch in Settings → Chat.
+  that match are shown as the emote. This is on by default, with a switch in Settings.
 - **Shown inline.** Emotes sit in the text at about line height and wrap with it. Animated ones
   play, and pause when the chat isn't visible. Hovering an emote shows its name and where it comes
   from.
 - **Cached.** Each image is downloaded once into a disk cache, with a size cap. While an image
   loads, or if it fails, the emote's name is shown instead.
-- **Settings → Chat:**
+- **Settings → Appearance → Chat:**
   - Show emotes as images (on).
   - 7TV, BetterTTV and FrankerFaceZ emotes (on).
   - Animate emotes (on).
@@ -44,8 +44,7 @@ many of them animated.
   - `livechat` (message pieces; Twitch, Kick and YouTube parsing; third-party emote sets);
   - an emote cache and animator;
   - `chat.slint` (line layout with images);
-  - Settings → Chat.
+  - Settings → Appearance → Chat.
 - Network: one request per channel and service when its chat starts, plus each emote image once.
   The third-party services are public APIs with no keys.
-- Licences: if colour emoji need images (see design), Twemoji graphics are CC-BY 4.0 and are
-  credited on the Licenses page.
+- Licences: none added (emoji are drawn by the system's colour emoji font).

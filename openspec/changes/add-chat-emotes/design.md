@@ -35,18 +35,17 @@ pub enum EmoteSource { Twitch, Kick, SevenTv, Bttv, Ffz, Emoji }
 Slint has no inline images in `Text` and no flow layout, so Rust lays out each message:
 1. Split the text parts into words, and treat each emote as a box about 1.4 times the line height
    tall, as wide as its aspect ratio.
-2. Measure words with the UI font's advance widths (`ttf-parser` on the font Slint uses), and break
-   into rows at the panel's width.
+2. Measure words with `cosmic-text` (already a dependency) on the UI font, with its font fallback
+   for emoji and other scripts, and break into rows at the panel's width.
 3. Pass rows of pieces (`text` or `image`, with x offsets) to `chat.slint`, which draws them with
    `Text` and `Image` elements.
-4. Lay the lines out again when the panel width changes, debounced to 100 ms, and only for the
-   visible messages plus a margin.
+4. Lay the lines out again when the panel width changes, debounced to 100 ms.
 
-Task 1.1 is a spike to confirm this. If the current Slint version supports inline images in
-styled text, that's used instead and steps 2 to 4 go away.
+Lines without emotes keep Slint's own wrapped `Text`, unchanged.
 
-Colour emoji: if Slint's renderer draws emoji characters without colour, emoji become `Emoji`
-emote parts using Twemoji PNGs bundled with the app (about 3,600 files; packed in one archive).
+Spike result (task 1.1): Slint 1.18's `StyledText` lists images as unsupported, so the Rust layout
+above is used. The femtovg renderer draws emoji characters in colour, so YouTube emoji need no
+images and no Twemoji set is bundled.
 
 ## Images and animation
 - **Disk cache:** `%LOCALAPPDATA%\Clutch\emotes` (Linux: `~/.cache/clutch/emotes`), keyed by a hash
@@ -54,7 +53,8 @@ emote parts using Twemoji PNGs bundled with the app (about 3,600 files; packed i
   run on a small pool of 4 worker threads, never on the UI thread, and each address is downloaded
   only once even if many messages ask for it.
 - **Decoding:** the `image` crate, already a dependency, with png, webp and gif. Animated frames
-  are decoded once into `slint::Image`s and kept in an in-memory LRU of about 64 MB.
+  are decoded once into `slint::Image`s, scaled to twice the display height, and kept while a
+  line in the chat list (the last 300 messages) uses them.
 - **Animation:** one timer at 20 fps moves each visible animated emote to the frame for its own
   timing. It stops while the chat panel is hidden or Clutch is minimised, and when "Animate emotes"
   is off, emotes show their first frame.

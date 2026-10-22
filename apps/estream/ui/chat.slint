@@ -3,7 +3,7 @@
 
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
-import { Button, IconButton, Icon, EmptyState, Select, TextField } from "widgets.slint";
+import { Button, IconButton, Icon, EmptyState, Select, TextField, Hint } from "widgets.slint";
 import { Modal } from "overlays.slint";
 import { ListView } from "std-widgets.slint";
 
@@ -72,6 +72,21 @@ export component WebView inherits Rectangle {
 }
 
 /// One message in the combined chat.
+/// A placed piece of a chat line with emotes: text, or an emote's frames.
+export struct ChatPiece {
+    x: length,
+    y: length,
+    w: length,
+    h: length,
+    /// The text, or the emote's name (shown while its image loads).
+    text: string,
+    /// The emote's frames (none for text); `frame-ms` per frame when animated.
+    frames: [image],
+    frame-ms: int,
+    /// The emote's name and where it comes from (hover).
+    tip: string,
+}
+
 export struct ChatLine {
     /// "kick" | "twitch" | "youtube"
     kind: string,
@@ -81,6 +96,9 @@ export struct ChatLine {
     time: string,
     /// A follow, sub, gift, donation or raid (highlighted).
     event: bool,
+    /// Text and emotes laid out for the panel's width (none: `text` is shown wrapped).
+    pieces: [ChatPiece],
+    body-height: length,
 }
 
 /// How one destination's chat is being read.
@@ -143,6 +161,10 @@ export component ChatPanel inherits Rectangle {
     callback open-settings();
     callback send(string, int);
     callback toggle-chime();
+    /// Animated emotes show the frame for this time (milliseconds, advanced while visible).
+    in property <int> emote-ms;
+    /// The width messages are laid out at (lines with emotes are laid out in Rust).
+    callback text-width(float);
     /// The page area's size, so a platform page is drawn at exactly that size.
     callback resized(float, float);
     changed view-width => { root.resized(root.view-width / 1px, root.view-height / 1px); }
@@ -303,6 +325,8 @@ export component ChatPanel inherits Rectangle {
                 Rectangle {
                     vertical-stretch: 1;
                     list := ListView {
+                        init => { root.text-width((self.visible-width - 46px) / 1px); }
+                        changed visible-width => { root.text-width((self.visible-width - 46px) / 1px); }
                         /// Follows new messages unless the user scrolled up to read.
                         property <bool> follow: true;
                         property <length> bottom: min(0px, self.visible-height - self.content-height);
@@ -343,13 +367,50 @@ export component ChatPanel inherits Rectangle {
                                         Text { text: line.time; color: Theme.text-faint; font-size: Theme.font-xs; vertical-alignment: center; }
                                         Rectangle { horizontal-stretch: 1; }
                                     }
-                                    Text {
+                                    if line.pieces.length == 0: Text {
                                         text: line.text;
                                         color: Theme.text;
                                         font-weight: line.event ? 600 : 400;
                                         font-size: Theme.font-m;
                                         wrap: word-wrap;
                                         width: list.visible-width - 46px;
+                                    }
+                                    if line.pieces.length > 0: Rectangle {
+                                        width: list.visible-width - 46px;
+                                        height: line.body-height;
+                                        for p in line.pieces: Rectangle {
+                                            x: p.x;
+                                            y: p.y;
+                                            width: p.w;
+                                            height: p.h;
+                                            if p.frames.length == 0: Text {
+                                                width: parent.width + 4px;
+                                                height: parent.height;
+                                                text: p.text;
+                                                color: Theme.text;
+                                                font-size: Theme.font-m;
+                                                vertical-alignment: center;
+                                            }
+                                            if p.frames.length > 0: Image {
+                                                width: parent.width;
+                                                height: parent.height;
+                                                image-fit: contain;
+                                                source: p.frames[p.frame-ms > 0 ? Math.mod(floor(root.emote-ms / p.frame-ms), p.frames.length) : 0];
+                                                accessible-role: image;
+                                                accessible-label: p.text;
+                                            }
+                                            if p.frames.length > 0: TouchArea {
+                                                changed has-hover => {
+                                                    if (self.has-hover) {
+                                                        Hint.text = p.tip;
+                                                        Hint.x = self.absolute-position.x + self.width / 2;
+                                                        Hint.y = self.absolute-position.y + self.height + 6px;
+                                                    } else if (Hint.text == p.tip) {
+                                                        Hint.text = "";
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }

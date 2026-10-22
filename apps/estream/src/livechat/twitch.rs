@@ -50,6 +50,8 @@ fn connect(cx: &Context<'_>, login: &str) -> bool {
         }
     }
     let mut heard = Instant::now();
+    let third_party = super::ThirdParty::default();
+    let mut room_id = String::new();
     loop {
         if cx.stopped() {
             let _ = socket.close(None);
@@ -73,11 +75,27 @@ fn connect(cx: &Context<'_>, login: &str) -> bool {
             }
             match command(line) {
                 // The end of the joined channel's member list: we're in.
-                "366" | "ROOMSTATE" => cx.state(State::Reading),
+                "366" => cx.state(State::Reading),
+                "ROOMSTATE" => {
+                    cx.state(State::Reading);
+                    // The channel's id, for its 7TV, BetterTTV and FrankerFaceZ emotes.
+                    if let Some(id) = tags(line).find(|(k, _)| *k == "room-id").map(|(_, v)| v)
+                        && !id.is_empty()
+                        && id != room_id
+                    {
+                        room_id = id.to_owned();
+                        third_party.load(super::emotes::Owner::Twitch, room_id.clone());
+                    }
+                }
                 "RECONNECT" => return false,
                 "PRIVMSG" => {
                     if let Some(m) = parse(line) {
-                        cx.push(m);
+                        let parts = third_party.apply(if m.parts.is_empty() {
+                            vec![super::emotes::Part::Text(m.text.clone())]
+                        } else {
+                            m.parts.clone()
+                        });
+                        cx.push(m.with_parts(parts));
                     }
                 }
                 _ => {}
@@ -259,6 +277,7 @@ fn event_line(kind: &str, e: &serde_json::Value) -> Option<Message> {
         color: super::name_color(&author),
         author,
         text,
+        parts: Vec::new(),
         time: chrono::Local::now(),
         event: true,
     })
@@ -276,12 +295,20 @@ fn command(line: &str) -> &str {
     rest.split(' ').next().unwrap_or_default()
 }
 
+/// The tags of a line (`@key=value;… `), values still escaped.
+fn tags(line: &str) -> impl Iterator<Item = (&str, &str)> {
+    line.strip_prefix('@')
+        .and_then(|l| l.split_once(' '))
+        .map_or("", |(tags, _)| tags)
+        .split(';')
+        .filter_map(|t| t.split_once('='))
+}
+
 /// A `PRIVMSG` line with tags.
 fn parse(line: &str) -> Option<Message> {
-    let (tags, rest) = line.strip_prefix('@')?.split_once(' ')?;
+    let (_, rest) = line.strip_prefix('@')?.split_once(' ')?;
     let tag = |key: &str| {
-        tags.split(';')
-            .filter_map(|t| t.split_once('='))
+        tags(line)
             .find(|(k, _)| *k == key)
             .map(|(_, v)| unescape(v))
             .unwrap_or_default()
@@ -301,14 +328,19 @@ fn parse(line: &str) -> Option<Message> {
     let color = Some(tag("color"))
         .filter(|c| c.len() == 7)
         .unwrap_or_else(|| super::name_color(&author));
-    Some(Message {
-        platform: Platform::Twitch,
-        author,
-        color,
-        text,
-        time: chrono::Local::now(),
-        event: false,
-    })
+    let parts = super::emotes::twitch_parts(&text, &tag("emotes"));
+    Some(
+        Message {
+            platform: Platform::Twitch,
+            author,
+            color,
+            text,
+            parts: Vec::new(),
+            time: chrono::Local::now(),
+            event: false,
+        }
+        .with_parts(parts),
+    )
 }
 
 /// Undoes the escaping of tag values.
@@ -347,6 +379,23 @@ mod tests {
         assert_eq!(m.color, "#1E90FF");
         assert_eq!(m.text, "hello there: friend");
         assert_eq!(command(LINE), "PRIVMSG");
+    }
+
+    #[test]
+    fn emote_tags_become_parts() {
+        let line = "@color=;display-name=A;emotes=25:0-4 :a!a@a.tmi.twitch.tv PRIVMSG #c :Kappa hi";
+        let m = parse(line).unwrap();
+        assert_eq!(m.text, "Kappa hi");
+        assert!(
+            matches!(&m.parts[0], crate::livechat::emotes::Part::Emote(e) if e.name == "Kappa")
+        );
+        // No emotes: no parts.
+        assert!(parse(LINE).unwrap().parts.is_empty());
+        let room = "@emote-only=0;room-id=12826;slow=0 :tmi.twitch.tv ROOMSTATE #c";
+        assert_eq!(
+            tags(room).find(|(k, _)| *k == "room-id").map(|(_, v)| v),
+            Some("12826")
+        );
     }
 
     #[test]

@@ -1516,6 +1516,31 @@ export component SettingsDialog inherits Modal {
                             selected(i) => { root.set("game-audio", i); }
                         }
                     }
+                    SectionTitle { text: "CHAT"; }
+                    SettingRow {
+                        label: "Emotes as images";
+                        hint: "Off: emotes show as their names.";
+                        HorizontalLayout {
+                            alignment: start;
+                            Toggle { checked: root.form.chat-emotes; toggled(v) => { root.set("chat-emotes", v ? 1 : 0); } }
+                        }
+                    }
+                    SettingRow {
+                        label: "7TV, BetterTTV and FrankerFaceZ emotes";
+                        hint: "The extra emotes many channels use. Takes effect when the chat connects again.";
+                        HorizontalLayout {
+                            alignment: start;
+                            Toggle { checked: root.form.chat-third-party; toggled(v) => { root.set("chat-third-party", v ? 1 : 0); } }
+                        }
+                    }
+                    SettingRow {
+                        label: "Animate emotes";
+                        hint: "Off: animated emotes show their first frame.";
+                        HorizontalLayout {
+                            alignment: start;
+                            Toggle { checked: root.form.chat-animate; toggled(v) => { root.set("chat-animate", v ? 1 : 0); } }
+                        }
+                    }
                     Text { text: root.form.ffmpeg; color: Theme.text-faint; font-size: Theme.font-xs; }
                 }
 

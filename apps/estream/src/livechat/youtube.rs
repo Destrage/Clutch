@@ -239,6 +239,7 @@ fn messages(reply: &Value, skip_before: Option<chrono::DateTime<chrono::Utc>>) -
                 color: super::name_color(&author),
                 author,
                 text,
+                parts: Vec::new(),
                 time: published
                     .map_or_else(chrono::Local::now, |t| t.with_timezone(&chrono::Local)),
                 event,
