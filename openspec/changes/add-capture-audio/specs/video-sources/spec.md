@@ -2,7 +2,8 @@
 
 ### Requirement: Capture audio
 Game capture and Window capture SHALL capture the audio of the application they show, with a
-"Capture audio" setting that is on by default. The audio SHALL follow the captured application,
+"Capture audio" setting that is on by default for Window capture (Game capture: see
+ask-game-capture-audio). The audio SHALL follow the captured application,
 including when "Any fullscreen application" mode switches to another game.
 
 #### Scenario: Game capture with sound
