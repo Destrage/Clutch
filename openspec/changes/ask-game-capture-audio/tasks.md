@@ -12,4 +12,4 @@
 - [x] 2.3 Settings → Appearance → Sources: "Game capture sound" select
 
 ## 3. Check
-- [ ] 3.1 Tests, clippy (done); in-app check of the three cases
+- [x] 3.1 Tests, clippy; in-app check of the three cases
