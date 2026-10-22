@@ -891,6 +891,11 @@ fn updated_broadcast(mut current: Value, details: &BroadcastDetails) -> (Value, 
     content["enableAutoStart"] = details.auto_start.into();
     content["enableAutoStop"] = details.auto_stop.into();
     content["latencyPreference"] = details.latency.api().into();
+    // The older on/off form of the latency: YouTube rejects it next to ultra-low ("Latency
+    // preference not supported with other options selected"), and latencyPreference covers it.
+    if let Some(content) = content.as_object_mut() {
+        content.remove("enableLowLatency");
+    }
     (current, "id,snippet,status,contentDetails")
 }
 
@@ -1154,6 +1159,26 @@ mod tests {
             body["contentDetails"]["monitorStream"]["enableMonitorStream"],
             false
         );
+    }
+
+    #[test]
+    fn the_update_leaves_out_the_old_latency_switch() {
+        // As YouTube returns a broadcast it made: ultra-low with the old switch off.
+        let current = serde_json::json!({
+            "id": "b1",
+            "snippet": { "title": "Old" },
+            "status": { "lifeCycleStatus": "ready", "privacyStatus": "public" },
+            "contentDetails": { "latencyPreference": "ultraLow", "enableLowLatency": false,
+                "enableDvr": true }
+        });
+        let details = BroadcastDetails {
+            latency: Latency::UltraLow,
+            ..Default::default()
+        };
+        let (body, _) = updated_broadcast(current, &details);
+        assert!(body["contentDetails"].get("enableLowLatency").is_none());
+        assert_eq!(body["contentDetails"]["latencyPreference"], "ultraLow");
+        assert_eq!(body["contentDetails"]["enableDvr"], true);
     }
 
     #[test]

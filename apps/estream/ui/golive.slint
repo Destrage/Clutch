@@ -55,6 +55,8 @@ export component StreamDetailsDialog inherits Modal {
     in property <bool> live;
     /// Applying the details (the button says what's happening).
     in property <string> busy;
+    /// A platform's details are still loading (Go live waits for them).
+    in property <bool> loading;
     in property <bool> ask: true;
     callback text(int, string, string);
     callback flag(int, string, bool);
@@ -308,11 +310,11 @@ export component StreamDetailsDialog inherits Modal {
             Rectangle { horizontal-stretch: 1; }
             Button { text: "Cancel"; kind: "ghost"; clicked => { root.dismiss(); } }
             Button {
-                text: root.busy != "" ? root.busy : root.live ? "Save" : "Go Live";
+                text: root.busy != "" ? root.busy : root.loading ? "Loading…" : root.live ? "Save" : "Go Live";
                 kind: root.live ? "primary" : "live";
                 has-icon: !root.live;
                 icon: Icons.radio;
-                enabled: root.busy == "";
+                enabled: root.busy == "" && !root.loading;
                 clicked => { root.go(); }
             }
         }

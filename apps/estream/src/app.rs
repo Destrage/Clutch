@@ -4081,6 +4081,7 @@ impl App {
         w.set_details_keys_only(d.keys_only.join(", ").into());
         w.set_details_live(d.live);
         w.set_details_busy(d.busy().unwrap_or_default().into());
+        w.set_details_loading(d.loading());
         w.set_details_ask(self.settings.ask_details);
         w.set_details_open(true);
     }

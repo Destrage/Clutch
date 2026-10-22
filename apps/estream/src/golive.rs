@@ -407,6 +407,13 @@ impl Window {
         (!names.is_empty()).then(|| format!("Setting up {}…", names.join(", ")))
     }
 
+    /// Whether a platform's details are still loading (Go live waits for them).
+    pub fn loading(&self) -> bool {
+        self.sections
+            .iter()
+            .any(|s| !s.skipped && matches!(s.state, SectionState::Loading))
+    }
+
     /// The form's current details, as they'd be remembered.
     fn form_details(&self, i: usize) -> StreamDetails {
         let mut saved = StreamDetails::default();
@@ -711,7 +718,10 @@ impl Window {
                     s.applying = false;
                     match *result {
                         Ok(applied) => self.applied.push((s.config, applied)),
-                        Err(e) => s.state = SectionState::ApplyFailed(e),
+                        Err(e) => {
+                            tracing::warn!(platform = platform_name(&s.form), error = %e, "stream details not applied");
+                            s.state = SectionState::ApplyFailed(e);
+                        }
                     }
                 }
             }
