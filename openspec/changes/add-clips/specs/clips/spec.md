@@ -73,7 +73,18 @@ with the token written into that config file.
 ### Requirement: Audio Hype Auto-Clip
 The system SHALL optionally save clips when the short-term loudness of selected audio sources rises
 far above their recent baseline, with a selectable sensitivity and a cooldown between clips. It
-SHALL work for any game.
+SHALL work for any game. Game sound SHALL be the game capture's own audio when one has it on, else
+Desktop audio; Application audio (voice chat, music) SHALL NOT count. The cooldown SHALL apply
+across all sources, and a jump out of a quiet stretch SHALL only count if it is loud for a game.
+
+#### Scenario: Voice chat
+- **WHEN** hype detection is on for game audio and friends talk in voice chat captured by an
+  Application audio source
+- **THEN** no hype clip is saved for it
+
+#### Scenario: Gunfire after looting
+- **WHEN** game audio is near silent for a minute and then ordinary gunfire starts
+- **THEN** no hype clip is saved
 
 #### Scenario: Shout
 - **WHEN** hype detection is on for the mic and the user shouts after a quiet minute
