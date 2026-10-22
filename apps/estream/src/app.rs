@@ -2578,6 +2578,7 @@ impl App {
     /// Once a second: start scheduled checks and react when the updater moves on.
     fn update_tick(&mut self) {
         use crate::settings::UpdateMode;
+        crate::update::report_last_install(&self.paths.updates());
         use crate::update::Phase;
         let mode = self.settings.updates.mode;
         if mode != UpdateMode::Off && Instant::now() >= self.update_next_check {

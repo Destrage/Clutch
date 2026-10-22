@@ -340,30 +340,60 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(windows)]
 pub fn install_after_exit(file: &Path, restart: bool) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
+    use windows::Win32::UI::WindowsAndMessaging::{ASFW_ANY, AllowSetForegroundWindow};
+    // Not DETACHED_PROCESS: PowerShell started without a console never runs its command.
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    const DETACHED_PROCESS: u32 = 0x0000_0008;
-    let quote = |p: &Path| p.display().to_string().replace('\'', "''");
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    // Wait for Clutch to close, run the installer with a progress window (Windows asks for
-    // permission: Clutch is installed for all users), then start the new version.
-    let mut script = format!(
-        "Wait-Process -Id {pid} -ErrorAction SilentlyContinue; \
-         $p = Start-Process msiexec.exe -ArgumentList '/i \"{msi}\" /passive /norestart' -Verb RunAs -Wait -PassThru; ",
-        pid = std::process::id(),
-        msi = quote(file),
-    );
-    if restart {
-        script.push_str(&format!(
-            "if ($p.ExitCode -eq 0) {{ Start-Process '{}' }}",
-            quote(&exe)
-        ));
-    }
+    let script = install_script(file, &exe, std::process::id(), restart);
+    // Lets Windows' permission prompt come to the front instead of flashing in the taskbar.
+    // SAFETY: plain Win32 call without pointers.
+    let _ = unsafe { AllowSetForegroundWindow(ASFW_ANY) };
+    tracing::info!(file = %file.display(), restart, "installing update after exit");
     std::process::Command::new("powershell.exe")
         .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script])
-        .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
+        .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .map(|_| ())
         .map_err(|e| format!("couldn't start the installer ({e})"))
+}
+
+/// Waits for process `pid` to close, runs the installer with a progress window (Windows asks for
+/// permission: Clutch is installed for all users), then starts `exe` if `restart`. The outcome
+/// goes to install.log, which the next start copies into Clutch's log.
+#[cfg(windows)]
+fn install_script(file: &Path, exe: &Path, pid: u32, restart: bool) -> String {
+    let quote = |p: &Path| p.display().to_string().replace('\'', "''");
+    let restart = if restart {
+        format!("if ($p.ExitCode -eq 0) {{ Start-Process '{}' }}; ", quote(exe))
+    } else {
+        String::new()
+    };
+    format!(
+        "$log = '{log}'; \
+         Wait-Process -Id {pid} -ErrorAction SilentlyContinue; \
+         try {{ \
+           $p = Start-Process msiexec.exe -ArgumentList '/i \"{msi}\" /passive /norestart' -Verb RunAs -Wait -PassThru -ErrorAction Stop; \
+           Set-Content -Path $log -Value \"installer exit code $($p.ExitCode)\"; \
+           {restart}\
+         }} catch {{ Set-Content -Path $log -Value \"installer didn't start: $($_.Exception.Message)\" }}",
+        log = quote(&file.with_file_name(INSTALL_LOG)),
+        msi = quote(file),
+    )
+}
+
+/// What the last install after exit wrote (see [`install_after_exit`]).
+const INSTALL_LOG: &str = "install.log";
+
+/// Copies the last install's outcome into the log once, then removes it.
+pub fn report_last_install(dir: &Path) {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let path = dir.join(INSTALL_LOG);
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            tracing::info!(result = text.trim(), "last update install");
+            let _ = std::fs::remove_file(&path);
+        }
+    });
 }
 
 /// Replaces the running AppImage with `file` (the running copy keeps working), then starts the
@@ -423,6 +453,29 @@ mod tests {
             {"tag_name": "v0.3.4-beta.3", "prerelease": true, "draft": false, "html_url": "p4",
              "assets": [asset("Clutch-0.3.4-x64.msi")]}
         ])
+    }
+
+    /// The install script is valid PowerShell, also with a quote in the paths.
+    #[cfg(windows)]
+    #[test]
+    fn install_script_parses() {
+        for restart in [false, true] {
+            let script = install_script(
+                Path::new(r"C:\Users\o'neil\AppData\Local\Clutch\updates\Clutch-0.4.0-x64.msi"),
+                Path::new(r"C:\Program Files\Clutch\clutch.exe"),
+                1234,
+                restart,
+            );
+            let check = format!(
+                "$e = $null; [void][System.Management.Automation.Language.Parser]::ParseInput('{}', [ref]$null, [ref]$e); $e.Count",
+                script.replace('\'', "''")
+            );
+            let out = std::process::Command::new("powershell.exe")
+                .args(["-NoProfile", "-Command", &check])
+                .output()
+                .unwrap();
+            assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "0", "{script}");
+        }
     }
 
     #[test]
