@@ -65,6 +65,22 @@ fn set_app_user_model_id() {
     }
 }
 
+/// Configures Clutch to run at Above Normal priority so Windows GPU scheduling and DWM
+/// do not starve the compositor when games or other apps run at 100% GPU utilization.
+#[cfg(windows)]
+fn set_process_priority() {
+    // SAFETY: GetCurrentProcess returns a valid pseudo-handle to the current process.
+    unsafe {
+        let process = windows::Win32::System::Threading::GetCurrentProcess();
+        if let Err(e) = windows::Win32::System::Threading::SetPriorityClass(
+            process,
+            windows::Win32::System::Threading::ABOVE_NORMAL_PRIORITY_CLASS,
+        ) {
+            tracing::warn!("couldn't set process priority to Above Normal: {e}");
+        }
+    }
+}
+
 /// The desktop entry's name, which identifies Clutch to the desktop.
 #[cfg(target_os = "linux")]
 pub const APP_ID: &str = "io.github.destrage.Clutch";
@@ -140,6 +156,8 @@ fn main() -> anyhow::Result<()> {
     };
     #[cfg(windows)]
     set_app_user_model_id();
+    #[cfg(windows)]
+    set_process_priority();
     estream_capture::set_state_dir(paths.root.clone());
     #[cfg(target_os = "linux")]
     register_portal_app();
