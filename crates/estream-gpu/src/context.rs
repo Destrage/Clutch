@@ -89,8 +89,11 @@ impl GpuContext {
             })
             .await?;
         // A live show must not abort on a GPU validation error: log it instead.
-        device.on_uncaptured_error(Arc::new(|e: wgpu::Error| {
+        let dev = device.clone();
+        device.on_uncaptured_error(Arc::new(move |e: wgpu::Error| {
             tracing::error!(error = %e, "GPU validation error");
+            #[cfg(windows)]
+            log_device_removed_reason(&dev);
         }));
         Ok(Self {
             instance,
@@ -126,5 +129,37 @@ impl GpuContext {
                 | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         })
+    }
+}
+
+#[cfg(windows)]
+fn log_device_removed_reason(device: &wgpu::Device) {
+    // SAFETY: as_hal reads the underlying raw device pointer when using the Dx12 backend.
+    if let Some(hal) = unsafe { device.as_hal::<wgpu::hal::api::Dx12>() } {
+        let raw = hal.raw_device();
+        // SAFETY: GetDeviceRemovedReason queries the DXGI device status on the D3D12 device.
+        let reason = unsafe { raw.GetDeviceRemovedReason() };
+        if let Err(err) = reason {
+            let code = err.code().0 as u32;
+            let name = match code {
+                0x887A0006 => "DXGI_ERROR_DEVICE_HUNG (GPU stopped responding to commands)",
+                0x887A0005 => {
+                    "DXGI_ERROR_DEVICE_REMOVED (GPU physically removed or driver crashed)"
+                }
+                0x887A0007 => {
+                    "DXGI_ERROR_DEVICE_RESET (GPU driver reset due to timeout or invalid command)"
+                }
+                0x887A002B => {
+                    "DXGI_ERROR_DRIVER_INTERNAL_ERROR (GPU driver encountered an internal error)"
+                }
+                0x887A0001 => "DXGI_ERROR_INVALID_CALL (application provided invalid parameters)",
+                _ => "Unknown DXGI device removed error",
+            };
+            tracing::error!(
+                code = format!("{code:#010x}"),
+                name,
+                "GPU device was lost or removed"
+            );
+        }
     }
 }
