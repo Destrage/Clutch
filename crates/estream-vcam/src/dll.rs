@@ -49,6 +49,33 @@ impl IClassFactory_Impl for Factory_Impl {
     }
 }
 
+#[implement(IClassFactory)]
+struct DShowFactory;
+
+impl IClassFactory_Impl for DShowFactory_Impl {
+    fn CreateInstance(
+        &self,
+        outer: Ref<IUnknown>,
+        riid: *const GUID,
+        ppv: *mut *mut core::ffi::c_void,
+    ) -> windows::core::Result<()> {
+        if outer.is_some() {
+            return Err(CLASS_E_NOAGGREGATION.into());
+        }
+        let filter: IUnknown =
+            ComObject::new(crate::dshow::DShowFilter::new(MAPPING_NAME)).into_interface();
+        let result = unsafe { filter.query(riid, ppv).ok() };
+        crate::log(&format!("DShow CreateInstance {:?}: {result:?}", unsafe {
+            *riid
+        }));
+        result
+    }
+
+    fn LockServer(&self, _: BOOL) -> windows::core::Result<()> {
+        Ok(())
+    }
+}
+
 /// # Safety
 /// Called by COM with valid pointers.
 #[unsafe(no_mangle)]
@@ -63,19 +90,24 @@ pub unsafe extern "system" fn DllGetClassObject(
     // SAFETY: checked above.
     unsafe {
         *ppv = std::ptr::null_mut();
-        if *clsid != CLSID {
-            return CLASS_E_CLASSNOTAVAILABLE;
+        if *clsid == CLSID {
+            crate::log("DllGetClassObject (MF)");
+            let factory: IUnknown = ComObject::new(Factory).into_interface();
+            factory.query(riid, ppv)
+        } else if *clsid == crate::dshow::DSHOW_CLSID {
+            crate::log("DllGetClassObject (DShow)");
+            let factory: IUnknown = ComObject::new(DShowFactory).into_interface();
+            factory.query(riid, ppv)
+        } else {
+            CLASS_E_CLASSNOTAVAILABLE
         }
-        crate::log("DllGetClassObject");
-        let factory: IUnknown = ComObject::new(Factory).into_interface();
-        factory.query(riid, ppv)
     }
 }
 
 /// The DLL may unload once no camera objects are left (so it isn't kept locked).
 #[unsafe(no_mangle)]
 pub extern "system" fn DllCanUnloadNow() -> HRESULT {
-    if crate::source::objects_alive() {
+    if crate::source::objects_alive() || crate::dshow::dshow_objects_alive() {
         S_FALSE
     } else {
         S_OK
@@ -235,12 +267,16 @@ pub extern "system" fn DllRegisterServer() -> HRESULT {
     unsafe {
         let _ = RegCloseKey(server);
     }
+    let dshow_ok = crate::dshow::register(&path);
+    crate::log(&format!("dshow register: {dshow_ok}"));
     if ok { S_OK } else { SELFREG_E_CLASS }
 }
 
 /// `regsvr32 /u estream_vcam.dll`.
 #[unsafe(no_mangle)]
 pub extern "system" fn DllUnregisterServer() -> HRESULT {
+    // DirectShow filter unregistration
+    crate::dshow::unregister();
     // SAFETY: deletes our own class key.
     let status = unsafe { RegDeleteTreeW(HKEY_LOCAL_MACHINE, &HSTRING::from(class_key())) };
     // Remove the installed copies and the log (a copy Frame Server still holds stays behind).

@@ -154,69 +154,72 @@ fn create_function() -> Option<CreateVirtualCamera> {
 }
 
 /// Why the camera can't be used when [`supported`] is false.
-pub const UNSUPPORTED: &str = "needs Windows 11";
+pub const UNSUPPORTED: &str = "unsupported platform";
 
-/// True if this Windows version can create virtual cameras (Windows 11).
+/// True if this Windows version can create virtual cameras (Windows 10 DirectShow or Windows 11 MF).
 pub fn supported() -> bool {
-    create_function().is_some()
+    true
 }
 
-/// The running session camera. Dropping it removes the camera from the system.
+/// The running session camera. Dropping it removes the camera from the system on Windows 11.
+/// On Windows 10, the DirectShow filter is registered system-wide and consumers connect directly.
 pub struct VirtualCamera {
-    camera: IMFVirtualCamera,
+    camera: Option<IMFVirtualCamera>,
 }
 
 impl VirtualCamera {
     /// Creates and starts the camera (COM must be initialized on this thread).
     pub fn start() -> windows::core::Result<Self> {
-        // SAFETY: MF startup is reference counted; the camera API needs it.
-        unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL)? };
-        let create = create_function().ok_or_else(|| {
-            windows::core::Error::new(
-                windows::Win32::Foundation::E_NOTIMPL,
-                "the virtual camera needs Windows 11",
-            )
-        })?;
-        let name = HSTRING::from(FRIENDLY_NAME);
-        let id = HSTRING::from(CLSID_STRING);
-        let mut camera = None;
-        // SAFETY: the documented signature; strings outlive the call.
-        unsafe {
-            create(
-                MFVirtualCameraType_SoftwareCameraSource,
-                MFVirtualCameraLifetime_Session,
-                MFVirtualCameraAccess_CurrentUser,
-                PCWSTR(name.as_ptr()),
-                PCWSTR(id.as_ptr()),
-                std::ptr::null(),
-                0,
-                &mut camera,
-            )
-            .ok()?
-        };
-        let camera = camera
-            .ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_POINTER))?;
-        // SAFETY: starts the camera we created.
-        unsafe { camera.Start(None)? };
-        Ok(Self { camera })
+        if let Some(create) = create_function() {
+            // Windows 11: Media Foundation virtual camera session
+            unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL)? };
+            let name = HSTRING::from(FRIENDLY_NAME);
+            let id = HSTRING::from(CLSID_STRING);
+            let mut camera = None;
+            unsafe {
+                create(
+                    MFVirtualCameraType_SoftwareCameraSource,
+                    MFVirtualCameraLifetime_Session,
+                    MFVirtualCameraAccess_CurrentUser,
+                    PCWSTR(name.as_ptr()),
+                    PCWSTR(id.as_ptr()),
+                    std::ptr::null(),
+                    0,
+                    &mut camera,
+                )
+                .ok()?
+            };
+            let camera = camera
+                .ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_POINTER))?;
+            unsafe { camera.Start(None)? };
+            Ok(Self { camera: Some(camera) })
+        } else {
+            // Windows 10: DirectShow filter path
+            // The filter was registered via `regsvr32` and reads from shared memory.
+            Ok(Self { camera: None })
+        }
     }
 }
 
 impl VirtualCamera {
-    /// The camera's media source as Frame Server runs it (diagnostics).
+    /// The camera's media source as Frame Server runs it (diagnostics, Windows 11 only).
     pub fn media_source(&self) -> windows::core::Result<IMFMediaSource> {
-        // SAFETY: asks our own camera for its source.
-        unsafe { self.camera.GetMediaSource() }
+        if let Some(ref camera) = self.camera {
+            unsafe { camera.GetMediaSource() }
+        } else {
+            Err(windows::core::Error::from(windows::Win32::Foundation::E_NOTIMPL))
+        }
     }
 }
 
 impl Drop for VirtualCamera {
     fn drop(&mut self) {
-        // SAFETY: removes and releases our own camera.
-        unsafe {
-            let _ = self.camera.Remove();
-            let _ = self.camera.Shutdown();
-            let _ = MFShutdown();
+        if let Some(ref camera) = self.camera {
+            unsafe {
+                let _ = camera.Remove();
+                let _ = camera.Shutdown();
+                let _ = MFShutdown();
+            }
         }
     }
 }

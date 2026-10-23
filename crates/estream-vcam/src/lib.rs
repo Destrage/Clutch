@@ -21,6 +21,8 @@ pub mod control;
 mod dll;
 #[cfg(windows)]
 pub mod source;
+#[cfg(windows)]
+pub mod dshow;
 
 /// The camera's name in apps.
 pub const FRIENDLY_NAME: &str = "Clutch Virtual Camera";
