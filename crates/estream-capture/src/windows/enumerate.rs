@@ -13,7 +13,7 @@ use windows::Win32::System::Threading::{
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GW_OWNER, GWL_EXSTYLE, GetClassNameW, GetForegroundWindow, GetWindow,
     GetWindowLongW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
-    IsIconic, IsWindowVisible, WS_EX_TOOLWINDOW,
+    IsIconic, IsWindow, IsWindowVisible, WS_EX_TOOLWINDOW,
 };
 use windows::core::{BOOL, PWSTR};
 
@@ -96,6 +96,10 @@ pub struct WindowInfo {
     /// The owning process.
     pub pid: u32,
 }
+
+// SAFETY: HWND is a Win32 window handle that can be safely referenced across threads.
+unsafe impl Send for WindowInfo {}
+unsafe impl Sync for WindowInfo {}
 
 impl WindowInfo {
     /// Stable match key stored in settings: `exe:class:title`.
@@ -190,6 +194,19 @@ pub fn foreground_fullscreen() -> Option<WindowInfo> {
     ];
     (info.is_fullscreen() && !ignored.iter().any(|e| info.exe.eq_ignore_ascii_case(e)))
         .then_some(info)
+}
+
+/// Returns true if the window handle is valid and belongs to the expected process.
+pub fn is_window_valid(hwnd: HWND, expected_pid: u32) -> bool {
+    // SAFETY: simple Win32 queries on an HWND handle.
+    unsafe {
+        if !IsWindow(Some(hwnd)).as_bool() {
+            return false;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        pid == expected_pid
+    }
 }
 
 /// Describes a window if it's a normal, visible, capturable top-level window.
@@ -306,5 +323,10 @@ mod tests {
             assert!(monitors.iter().any(|m| m.primary));
         }
         let _ = windows();
+    }
+
+    #[test]
+    fn invalid_window_is_not_valid() {
+        assert!(!is_window_valid(HWND::default(), 0));
     }
 }

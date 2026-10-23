@@ -85,14 +85,18 @@ impl CaptureKind {
     }
 }
 
+type CaptureResult = Result<(WgcCapture, Option<WindowInfo>), SourceStatus>;
+type PendingCapture = std::sync::mpsc::Receiver<CaptureResult>;
+
 pub struct CaptureSource {
     kind: CaptureKind,
     settings: CaptureSettings,
     capture: Option<WgcCapture>,
+    latched_game: Option<WindowInfo>,
     reader: RingReader,
     status: SourceStatus,
     next_attempt: Instant,
-    pending: Option<std::sync::mpsc::Receiver<Result<WgcCapture, SourceStatus>>>,
+    pending: Option<PendingCapture>,
 }
 
 impl CaptureSource {
@@ -101,10 +105,19 @@ impl CaptureSource {
             kind,
             settings: CaptureSettings::default(),
             capture: None,
+            latched_game: None,
             reader: RingReader::default(),
             status: SourceStatus::Unavailable("Starting capture…".into()),
             next_attempt: Instant::now(),
             pending: None,
+        }
+    }
+
+    fn check_latched_window(&mut self) {
+        if let Some(target) = &self.latched_game
+            && !enumerate::is_window_valid(target.hwnd, target.pid)
+        {
+            self.latched_game = None;
         }
     }
 
@@ -118,18 +131,29 @@ impl CaptureSource {
     /// (window enumeration and WinRT setup take milliseconds — too slow for
     /// the video thread). The result is picked up in `tick`.
     fn start_async(&mut self, gpu: &GpuContext) {
-        let (kind, settings, gpu) = (self.kind, self.settings.clone(), gpu.clone());
+        let (kind, settings, latched, gpu) = (
+            self.kind,
+            self.settings.clone(),
+            self.latched_game.clone(),
+            gpu.clone(),
+        );
         let (tx, rx) = std::sync::mpsc::channel();
         let spawned = std::thread::Builder::new()
             .name("estream-capture-start".into())
             .spawn(move || {
-                let _ = tx.send(start_capture(kind, &settings, &gpu));
+                let _ = tx.send(start_capture(kind, &settings, latched, &gpu));
             });
         if spawned.is_ok() {
             self.pending = Some(rx);
         }
     }
     fn waiting_message(&self) -> String {
+        if self.kind == CaptureKind::Game
+            && self.settings.mode == "auto"
+            && let Some(target) = &self.latched_game
+        {
+            return format!("Waiting for [{}] {}", target.exe, target.title);
+        }
         waiting_message(self.kind, &self.settings)
     }
 }
@@ -157,6 +181,7 @@ impl VideoSource for CaptureSource {
             || new.window != self.settings.window
             || new.mode != self.settings.mode;
         if retarget {
+            self.latched_game = None;
             self.stop();
             self.next_attempt = Instant::now();
         } else if new.cursor != self.settings.cursor
@@ -172,17 +197,22 @@ impl VideoSource for CaptureSource {
         if self.capture.as_ref().is_some_and(|c| c.ring.is_closed()) {
             tracing::info!(kind = self.kind.id(), "capture target closed");
             self.stop();
+            self.check_latched_window();
             self.status = SourceStatus::Unavailable(self.waiting_message());
         }
         if let Some(rx) = &self.pending {
             match rx.try_recv() {
-                Ok(Ok(capture)) => {
+                Ok(Ok((capture, latched))) => {
                     tracing::info!(kind = self.kind.id(), "capture started");
                     self.capture = Some(capture);
+                    if self.kind == CaptureKind::Game && self.settings.mode == "auto" {
+                        self.latched_game = latched;
+                    }
                     self.status = SourceStatus::Active;
                     self.pending = None;
                 }
                 Ok(Err(status)) => {
+                    self.check_latched_window();
                     self.status = status;
                     self.pending = None;
                 }
@@ -201,6 +231,7 @@ impl VideoSource for CaptureSource {
                 // Nothing chosen yet: no need to enumerate anything.
                 self.status = SourceStatus::Unavailable(self.waiting_message());
             } else {
+                self.check_latched_window();
                 self.start_async(ctx.gpu);
             }
         }
@@ -225,12 +256,13 @@ impl VideoSource for CaptureSource {
 fn start_capture(
     kind: CaptureKind,
     settings: &CaptureSettings,
+    latched: Option<WindowInfo>,
     gpu: &GpuContext,
-) -> Result<WgcCapture, SourceStatus> {
+) -> Result<(WgcCapture, Option<WindowInfo>), SourceStatus> {
     let interop = interop(gpu).map_err(SourceStatus::Error)?;
     let waiting = || SourceStatus::Unavailable(waiting_message(kind, settings));
     let find = || enumerate::find_window(&settings.window, &enumerate::windows());
-    let target = match kind {
+    let (target, target_info) = match kind {
         CaptureKind::Display => {
             let monitors = enumerate::monitors();
             let found = if settings.monitor.is_empty() {
@@ -241,22 +273,30 @@ fn start_capture(
             let m = found.ok_or_else(|| {
                 SourceStatus::Unavailable(format!("Display {} is not connected", settings.monitor))
             })?;
-            Target::Monitor(m.handle)
+            (Target::Monitor(m.handle), None)
         }
-        CaptureKind::Window => Target::Window(find().ok_or_else(waiting)?.hwnd),
+        CaptureKind::Window => {
+            let win = find().ok_or_else(waiting)?;
+            (Target::Window(win.hwnd), Some(win))
+        }
         CaptureKind::Game => {
-            let found = if settings.mode == "window" {
-                find()
+            let win = if settings.mode == "window" {
+                find().ok_or_else(waiting)?
+            } else if let Some(latched) = latched
+                && enumerate::is_window_valid(latched.hwnd, latched.pid)
+            {
+                latched
             } else {
-                enumerate::foreground_fullscreen()
+                enumerate::foreground_fullscreen().ok_or_else(waiting)?
             };
-            Target::Window(found.ok_or_else(waiting)?.hwnd)
+            (Target::Window(win.hwnd), Some(win))
         }
     };
-    WgcCapture::start(&interop, target, settings.cursor).map_err(|e| {
+    let capture = WgcCapture::start(&interop, target, settings.cursor).map_err(|e| {
         tracing::warn!(kind = kind.id(), error = %e, "capture failed to start");
         SourceStatus::Error(e.to_string())
-    })
+    })?;
+    Ok((capture, target_info))
 }
 
 fn window_options() -> Vec<SelectOption> {
