@@ -2765,6 +2765,7 @@ impl App {
     /// Rebuilds every UI model from the latest engine snapshot.
     pub fn refresh(&mut self) {
         let Some(w) = self.window() else { return };
+        w.set_scroll_pan(self.settings.scroll_pan);
         w.set_clip_hotkey(self.settings.clips.hotkey.clone().into());
         if w.get_automation_open() {
             self.refresh_automation(); // edits, undo and redo
@@ -5498,6 +5499,7 @@ impl App {
                 GameAudio::Skip => 2,
             },
             chat_emotes: self.settings.chat_emotes,
+            scroll_pan: self.settings.scroll_pan,
             chat_third_party: self.settings.chat_third_party,
             chat_animate: self.settings.chat_animate,
             remote_enabled: self.settings.remote.enabled,
@@ -6197,6 +6199,12 @@ impl App {
                 };
             }
             "chat-emotes" => self.settings.chat_emotes = value > 0.5,
+            "scroll-pan" => {
+                self.settings.scroll_pan = value > 0.5;
+                if let Some(w) = self.window() {
+                    w.set_scroll_pan(self.settings.scroll_pan);
+                }
+            }
             "chat-third-party" => {
                 self.settings.chat_third_party = value > 0.5;
                 crate::livechat::emotes::set_third_party(value > 0.5);

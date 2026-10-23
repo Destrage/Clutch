@@ -1505,6 +1505,15 @@ export component SettingsDialog inherits Modal {
                             selected(i) => { root.set("theme", i); }
                         }
                     }
+                    SectionTitle { text: "CANVAS"; }
+                    SettingRow {
+                        label: "Mouse wheel pans preview";
+                        hint: "Off: panning uses middle mouse button drag or Space+drag.";
+                        HorizontalLayout {
+                            alignment: start;
+                            Toggle { checked: root.form.scroll-pan; toggled(v) => { root.set("scroll-pan", v ? 1 : 0); } }
+                        }
+                    }
                     SectionTitle { text: "SOURCES"; }
                     SettingRow {
                         label: "Game capture sound";

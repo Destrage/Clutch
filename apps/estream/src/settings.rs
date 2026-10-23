@@ -191,6 +191,8 @@ pub struct Settings {
     pub ask_details: bool,
     /// Adding a Game capture while the game is already heard: ask, or the remembered answer.
     pub game_audio: GameAudio,
+    /// Mouse wheel scrolling over the preview pans the canvas (default: off).
+    pub scroll_pan: bool,
     /// Single-stream settings from before multistream; read once, migrated, never written.
     #[serde(rename = "stream", skip_serializing)]
     legacy_stream: Option<estream_media::StreamSettings>,
@@ -512,6 +514,7 @@ impl Default for Settings {
             chat_animate: true,
             ask_details: true,
             game_audio: GameAudio::Ask,
+            scroll_pan: false,
             legacy_stream: None,
             legacy_key: None,
         }
