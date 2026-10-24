@@ -5583,7 +5583,7 @@ impl App {
                         if estream_clips::integrations::replay::pubg::folder()
                             .is_some_and(|f| f.is_dir())
                         {
-                            "Connected · events arrive when your match ends".to_owned()
+                            "Connected · events arrive when a Battle Royale match ends (other modes save no replay)".to_owned()
                         } else {
                             "Turn on replays in PUBG to get events".to_owned()
                         }

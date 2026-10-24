@@ -46,15 +46,23 @@ parser failure SHALL NOT crash, stall or degrade capture, rendering or outputs.
 - **WHEN** a game update changes the replay format to a version the parser does not know
 - **THEN** that replay is skipped, one log entry names the game and version, and the watcher keeps running for later replays
 
-### Requirement: Hype Alongside Game Events
-While the running game has a connected event integration, game-audio hype SHALL NOT make clips
-(microphone hype still can). On low sensitivity, game-audio hype SHALL require loud audio outright
-(about −16 dBFS) as well as a jump over a baseline of at least −34 dBFS, so ordinary fights in
-shooters don't count.
+### Requirement: Hype Alongside Live Game Events
+While the running game has a connected integration that reports events live (Counter-Strike 2,
+Dota 2, League of Legends), game-audio hype SHALL NOT make clips; microphone hype still can.
+Replay-file integrations report only after the match, and some modes write no replay, so
+game-audio hype SHALL stay on for them.
 
-#### Scenario: PUBG connected
-- **WHEN** PUBG replay events are connected and a gunfight makes the game audio jump
-- **THEN** no hype clip is saved; kills and knocks from the replay are clipped instead
+#### Scenario: CS2 connected
+- **WHEN** CS2 is connected and a gunfight makes the game audio jump
+- **THEN** no hype clip is saved; kills reported by the game are clipped instead
+
+#### Scenario: PUBG Team Deathmatch
+- **WHEN** PUBG replay events are connected and the player is in a mode that writes no replay
+- **THEN** game-audio hype still makes clips
+
+### Requirement: Low Game Hype Sensitivity
+On low sensitivity, game-audio hype SHALL require loud audio outright (about −16 dBFS) as well as
+a jump over a baseline of at least −34 dBFS, so ordinary fights in shooters don't count.
 
 #### Scenario: Ordinary fight on low
 - **WHEN** game-audio hype is on with low sensitivity and a fight rises to −18 dBFS after a quiet stretch

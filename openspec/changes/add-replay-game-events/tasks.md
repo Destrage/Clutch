@@ -29,5 +29,5 @@
 - [ ] 5.4 Play one match of each game with recording on; confirm clips or markers line up with the moments
 
 ## 6. Hype
-- [x] 6.1 Turn game-audio hype off while the running game's event integration is connected
+- [x] 6.1 Turn game-audio hype off while the running game reports events live (CS2, Dota 2, League); keep it on for PUBG, whose replay events come after the match and not in every mode
 - [x] 6.2 Low game sensitivity: −16 dBFS loudness floor and a −34 dBFS baseline floor (tested against fight levels from real Valorant and PUBG sessions)

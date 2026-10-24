@@ -534,13 +534,14 @@ impl Clipper {
                     && d.settings.get("audio").and_then(|v| v.as_bool()) != Some(false)
             })
         });
-        // A game whose own events are connected clips those; its sound doesn't also make hype
-        // clips (the mic still can).
+        // A game that reports its events live (and is connected) clips those; its sound doesn't
+        // also make hype clips (the mic still can). PUBG's replay events arrive only after the
+        // match, and some modes (Team Deathmatch) write no replay, so hype stays on there.
         let game_reports_events = self
             .detector
             .current()
             .and_then(|g| g.integration)
-            .is_some_and(|i| s.connected.contains(&i));
+            .is_some_and(|i| i != Integration::PubgReplay && s.connected.contains(&i));
         let mut fired = None;
         for (id, meter) in &meters.sources {
             let Some(def) = snapshot.source(*id) else {
