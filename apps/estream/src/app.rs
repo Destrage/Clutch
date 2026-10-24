@@ -9412,7 +9412,7 @@ impl estream_api::Studio for App {
                 Output::Stream => "couldn't go live (check the stream destinations in Clutch)",
                 Output::Record => "couldn't start recording (see Clutch for details)",
                 Output::ReplayBuffer => "couldn't start the replay buffer",
-                Output::VirtualCam => "couldn't start the virtual camera (needs Windows 11)",
+                Output::VirtualCam => "couldn't start the virtual camera (see Clutch for details)",
             }
             .into());
         }

@@ -3,10 +3,12 @@
 //! This implements the minimum DirectShow interfaces (`IBaseFilter`, `IPin`,
 //! `IAMStreamConfig`, `IKsPropertySet`) needed for apps to
 //! recognise a video capture device. Frames come from the same shared-memory protocol
-//! used by the Media Foundation source ([`crate::shared`]).
+//! used by the Media Foundation source ([`crate::shared`]), under
+//! [`crate::shared::DSHOW_MAPPING_NAME`] since the filter runs inside the user's app.
 //!
 //! The filter is registered under `CLSID_VideoInputDeviceCategory` so that apps such as
-//! Zoom, Teams, Discord, Meet etc. discover it alongside real cameras.
+//! Zoom, Teams, Discord, Meet etc. discover it alongside real cameras. Only on Windows 10:
+//! on Windows 11 the Media Foundation camera is listed instead, and both would show twice.
 
 use crate::shared::{Shared, fill_nv12, fit_nv12, nv12_len};
 use crate::source::FORMATS;
@@ -34,8 +36,7 @@ unsafe impl<T> Sync for Agile<T> {}
 // ── GUIDs ────────────────────────────────────────────────────────────────────
 
 /// CLSID for the DirectShow filter — distinct from the MF source's CLSID.
-pub const DSHOW_CLSID: GUID =
-    GUID::from_u128(0x7e3a1f92_5b4c_4d8e_a1c6_9f0e2d7b3a84);
+pub const DSHOW_CLSID: GUID = GUID::from_u128(0x7e3a1f92_5b4c_4d8e_a1c6_9f0e2d7b3a84);
 pub const DSHOW_CLSID_STRING: &str = "{7E3A1F92-5B4C-4D8E-A1C6-9F0E2D7B3A84}";
 
 // NV12 fourcc
@@ -73,7 +74,9 @@ pub fn register(dll_path: &str) -> bool {
     };
     let mut ok = set_string(class, None, crate::FRIENDLY_NAME);
     // SAFETY: closes the key we opened.
-    unsafe { let _ = RegCloseKey(class); }
+    unsafe {
+        let _ = RegCloseKey(class);
+    }
 
     let server = create_key(&format!("{}\\InprocServer32", dshow_class_key()));
     let server = match server {
@@ -84,7 +87,9 @@ pub fn register(dll_path: &str) -> bool {
         && set_string(server, None, dll_path)
         && set_string(server, Some("ThreadingModel"), "Both");
     // SAFETY: closes the key we opened.
-    unsafe { let _ = RegCloseKey(server); }
+    unsafe {
+        let _ = RegCloseKey(server);
+    }
 
     // Register under CLSID_VideoInputDeviceCategory so apps find us.
     let cat = create_key(&filter_category_key());
@@ -96,7 +101,9 @@ pub fn register(dll_path: &str) -> bool {
         && set_string(cat, Some("CLSID"), DSHOW_CLSID_STRING)
         && set_string(cat, Some("FriendlyName"), crate::FRIENDLY_NAME);
     // SAFETY: closes the key we opened.
-    unsafe { let _ = RegCloseKey(cat); }
+    unsafe {
+        let _ = RegCloseKey(cat);
+    }
 
     ok
 }
@@ -115,15 +122,13 @@ pub fn unregister() {
 fn set_string(key: HKEY, name: Option<&str>, value: &str) -> bool {
     let wide: Vec<u16> = value.encode_utf16().chain(Some(0)).collect();
     // SAFETY: the byte view covers the UTF-16 string including its terminator.
-    let bytes =
-        unsafe { std::slice::from_raw_parts(wide.as_ptr().cast::<u8>(), wide.len() * 2) };
+    let bytes = unsafe { std::slice::from_raw_parts(wide.as_ptr().cast::<u8>(), wide.len() * 2) };
     let name = name.map(HSTRING::from);
     // SAFETY: valid open key and data.
     unsafe {
         RegSetValueExW(
             key,
-            name.as_ref()
-                .map_or(PCWSTR::null(), |n| PCWSTR(n.as_ptr())),
+            name.as_ref().map_or(PCWSTR::null(), |n| PCWSTR(n.as_ptr())),
             None,
             REG_SZ,
             Some(bytes),
@@ -166,6 +171,8 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 /// State shared between the filter, pin, and delivery thread.
 struct FilterInner {
     state: Mutex<FILTER_STATE>,
+    /// The filter itself, for `QueryPinInfo` (weak: the filter owns the pin).
+    filter: Mutex<Weak<IBaseFilter>>,
     graph: Mutex<Option<Agile<IFilterGraph>>>,
     pin: Mutex<Option<Agile<IPin>>>,
     allocator: Mutex<Option<Agile<IMemAllocator>>>,
@@ -192,18 +199,30 @@ struct Frames {
 #[implement(IBaseFilter)]
 pub struct DShowFilter {
     inner: Arc<FilterInner>,
-    pin_obj: DShowPin,
+    /// The one output pin: apps compare pin pointers, so it keeps a single identity.
+    pin: IPin,
     worker: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
-/// COM objects alive (shared with the MF source counter).
+/// DirectShow COM objects alive (filters and pins), so the DLL stays loaded while apps use them.
 static LIVE: AtomicU32 = AtomicU32::new(0);
 
 impl DShowFilter {
-    pub fn new(mapping: &str) -> Self {
+    /// Creates the filter as a COM object, wired so its pin can report it.
+    pub fn create(mapping: &str) -> IBaseFilter {
+        let object = ComObject::new(Self::new(mapping));
+        let filter: IBaseFilter = object.to_interface();
+        if let Ok(weak) = filter.downgrade() {
+            *lock(&object.inner.filter) = weak;
+        }
+        filter
+    }
+
+    fn new(mapping: &str) -> Self {
         LIVE.fetch_add(1, Ordering::AcqRel);
         let inner = Arc::new(FilterInner {
             state: Mutex::new(FILTER_STATE(0)), // State_Stopped
+            filter: Mutex::new(Weak::new()),
             graph: Mutex::new(None),
             pin: Mutex::new(None),
             allocator: Mutex::new(None),
@@ -214,12 +233,14 @@ impl DShowFilter {
             wake: Condvar::new(),
             ref_time_base: Mutex::new(None),
         });
-        let pin_obj = DShowPin {
+        LIVE.fetch_add(1, Ordering::AcqRel);
+        let pin = ComObject::new(DShowPin {
             inner: inner.clone(),
-        };
+        })
+        .into_interface();
         Self {
             inner,
-            pin_obj,
+            pin,
             worker: Mutex::new(None),
         }
     }
@@ -227,6 +248,12 @@ impl DShowFilter {
 
 impl Drop for DShowFilter {
     fn drop(&mut self) {
+        // An app may release the filter without stopping it: end the delivery thread before
+        // the DLL can unload.
+        self.inner.stop.store(true, Ordering::Release);
+        if let Some(w) = lock(&self.worker).take() {
+            let _ = w.join();
+        }
         LIVE.fetch_sub(1, Ordering::AcqRel);
     }
 }
@@ -293,9 +320,8 @@ impl IMediaFilter_Impl for DShowFilter_Impl {
 
 impl IBaseFilter_Impl for DShowFilter_Impl {
     fn EnumPins(&self) -> Result<IEnumPins> {
-        let pin = self.pin_obj.clone();
         Ok(ComObject::new(PinEnum {
-            pin,
+            pin: self.pin.clone(),
             pos: AtomicU32::new(0),
         })
         .into_interface())
@@ -304,26 +330,23 @@ impl IBaseFilter_Impl for DShowFilter_Impl {
     fn FindPin(&self, id: &PCWSTR) -> Result<IPin> {
         let name = unsafe { id.to_string() }.unwrap_or_default();
         if name == "Output" || name == "Capture" {
-            let pin_clone = self.pin_obj.clone();
-            Ok(ComObject::new(pin_clone).into_interface())
+            Ok(self.pin.clone())
         } else {
             Err(VFW_E_NOT_FOUND.into())
         }
     }
 
+    #[allow(clippy::not_unsafe_ptr_arg_deref, reason = "COM signature, checked for null")]
     fn QueryFilterInfo(&self, info: *mut FILTER_INFO) -> Result<()> {
-        if info.is_null() {
+        // SAFETY: COM passes a valid structure or null.
+        let Some(info) = (unsafe { info.as_mut() }) else {
             return Err(E_POINTER.into());
-        }
-        unsafe {
-            let info = &mut *info;
-            let name: Vec<u16> = crate::FRIENDLY_NAME.encode_utf16().chain(Some(0)).collect();
-            let len = name.len().min(128);
-            info.achName[..len].copy_from_slice(&name[..len]);
-            info.pGraph = core::mem::ManuallyDrop::new(
-                lock(&self.inner.graph).as_ref().map(|g| g.0.clone()),
-            );
-        }
+        };
+        let name: Vec<u16> = crate::FRIENDLY_NAME.encode_utf16().chain(Some(0)).collect();
+        let len = name.len().min(128);
+        info.achName[..len].copy_from_slice(&name[..len]);
+        info.pGraph =
+            core::mem::ManuallyDrop::new(lock(&self.inner.graph).as_ref().map(|g| g.0.clone()));
         Ok(())
     }
 
@@ -340,30 +363,31 @@ impl IBaseFilter_Impl for DShowFilter_Impl {
 // ── DShowPin ─────────────────────────────────────────────────────────────────
 
 /// The single output pin of our DirectShow source filter.
-#[derive(Clone)]
 #[implement(IPin, IAMStreamConfig, IKsPropertySet)]
 pub(crate) struct DShowPin {
     inner: Arc<FilterInner>,
+}
+
+impl Drop for DShowPin {
+    fn drop(&mut self) {
+        LIVE.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 impl IPin_Impl for DShowPin_Impl {
     fn Connect(&self, receive_pin: Ref<'_, IPin>, mt: *const AM_MEDIA_TYPE) -> Result<()> {
         let receive_pin = receive_pin.ok()?;
 
-        let proposed = if !mt.is_null() {
-            let mt = unsafe { &*mt };
-            if mt.majortype != MEDIATYPE_VIDEO {
-                return Err(VFW_E_TYPE_NOT_ACCEPTED.into());
-            }
-            build_media_type_for_size(lock(&self.inner.format).0, lock(&self.inner.format).1)
-        } else {
-            let (w, h) = *lock(&self.inner.format);
-            build_media_type_for_size(w, h)
-        };
-
-        unsafe {
-            receive_pin.ReceiveConnection(&self.to_interface::<IPin>(), &proposed)?;
+        if !mt.is_null() && unsafe { (*mt).majortype } != MEDIATYPE_VIDEO {
+            return Err(VFW_E_TYPE_NOT_ACCEPTED.into());
         }
+        let (w, h) = *lock(&self.inner.format);
+        let proposed = build_media_type_for_size(w, h);
+        let received =
+            unsafe { receive_pin.ReceiveConnection(&self.to_interface::<IPin>(), &proposed) };
+        // SAFETY: the downstream pin keeps its own copy of the format block.
+        unsafe { CoTaskMemFree(Some(proposed.pbFormat.cast())) };
+        received?;
 
         *lock(&self.inner.pin) = Some(Agile(receive_pin.clone()));
 
@@ -425,17 +449,16 @@ impl IPin_Impl for DShowPin_Impl {
     }
 
     fn QueryPinInfo(&self, info: *mut PIN_INFO) -> Result<()> {
-        if info.is_null() {
+        // SAFETY: COM passes a valid structure or null.
+        let Some(info) = (unsafe { info.as_mut() }) else {
             return Err(E_POINTER.into());
-        }
-        unsafe {
-            let info = &mut *info;
-            info.dir = PINDIR_OUTPUT;
-            let name: Vec<u16> = "Capture\0".encode_utf16().collect();
-            let len = name.len().min(128);
-            info.achName[..len].copy_from_slice(&name[..len]);
-            info.pFilter = core::mem::ManuallyDrop::new(None);
-        }
+        };
+        info.dir = PINDIR_OUTPUT;
+        let name: Vec<u16> = "Capture\0".encode_utf16().collect();
+        let len = name.len().min(128);
+        info.achName[..len].copy_from_slice(&name[..len]);
+        // An owned reference to the filter, as `QueryPinInfo` requires.
+        info.pFilter = core::mem::ManuallyDrop::new(lock(&self.inner.filter).upgrade());
         Ok(())
     }
 
@@ -514,7 +537,7 @@ impl IAMStreamConfig_Impl for DShowPin_Impl {
         }
         let vih = unsafe { &*(mt.pbFormat as *const VIDEOINFOHEADER) };
         let w = vih.bmiHeader.biWidth as u32;
-        let h = (vih.bmiHeader.biHeight as i32).unsigned_abs();
+        let h = vih.bmiHeader.biHeight.unsigned_abs();
         if FORMATS.contains(&(w, h)) {
             *lock(&self.inner.format) = (w, h);
             Ok(())
@@ -546,12 +569,7 @@ impl IAMStreamConfig_Impl for DShowPin_Impl {
         Ok(())
     }
 
-    fn GetStreamCaps(
-        &self,
-        index: i32,
-        mt: *mut *mut AM_MEDIA_TYPE,
-        scc: *mut u8,
-    ) -> Result<()> {
+    fn GetStreamCaps(&self, index: i32, mt: *mut *mut AM_MEDIA_TYPE, scc: *mut u8) -> Result<()> {
         if index < 0 || index as usize >= FORMATS.len() {
             return Err(S_FALSE.into());
         }
@@ -645,10 +663,8 @@ impl IKsPropertySet_Impl for DShowPin_Impl {
         cbpropdata: u32,
         pcbreturned: *mut u32,
     ) -> Result<()> {
-        const AMPROPSETID_PIN: GUID =
-            GUID::from_u128(0x9b00f101_1567_11d1_b3f1_00aa003761c5);
-        const PIN_CATEGORY_CAPTURE: GUID =
-            GUID::from_u128(0xfb6c4281_0353_11d1_905f_0000c0cc16ba);
+        const AMPROPSETID_PIN: GUID = GUID::from_u128(0x9b00f101_1567_11d1_b3f1_00aa003761c5);
+        const PIN_CATEGORY_CAPTURE: GUID = GUID::from_u128(0xfb6c4281_0353_11d1_905f_0000c0cc16ba);
 
         if guidpropset.is_null() {
             return Err(E_POINTER.into());
@@ -676,8 +692,7 @@ impl IKsPropertySet_Impl for DShowPin_Impl {
     }
 
     fn QuerySupported(&self, guidpropset: *const GUID, dwpropid: u32) -> Result<u32> {
-        const AMPROPSETID_PIN: GUID =
-            GUID::from_u128(0x9b00f101_1567_11d1_b3f1_00aa003761c5);
+        const AMPROPSETID_PIN: GUID = GUID::from_u128(0x9b00f101_1567_11d1_b3f1_00aa003761c5);
         const KSPROPERTY_SUPPORT_GET: u32 = 1;
 
         if guidpropset.is_null() {
@@ -770,23 +785,25 @@ fn deliver_loop(inner: Arc<FilterInner>) {
 
         let mut sample_opt: Option<IMediaSample> = None;
         let res = unsafe { allocator.GetBuffer(&mut sample_opt, None, None, 0) };
-        let Some(sample) = (if res.is_ok() { sample_opt } else { None }) else { continue; };
+        let Some(sample) = (if res.is_ok() { sample_opt } else { None }) else {
+            continue;
+        };
 
         let (w, h) = *lock(&inner.format);
         refresh_frame(&inner, w, h);
 
         let frames = lock(&inner.frames);
         unsafe {
-            if let Ok(ptr) = sample.GetPointer() {
-                if !ptr.is_null() {
-                    let len = nv12_len(w, h);
-                    let buf_len = sample.GetSize();
-                    let copy_len = len.min(buf_len as usize);
-                    if frames.picture.len() >= copy_len {
-                        std::ptr::copy_nonoverlapping(frames.picture.as_ptr(), ptr, copy_len);
-                    }
-                    let _ = sample.SetActualDataLength(copy_len as i32);
+            if let Ok(ptr) = sample.GetPointer()
+                && !ptr.is_null()
+            {
+                let len = nv12_len(w, h);
+                let buf_len = sample.GetSize();
+                let copy_len = len.min(buf_len as usize);
+                if frames.picture.len() >= copy_len {
+                    std::ptr::copy_nonoverlapping(frames.picture.as_ptr(), ptr, copy_len);
                 }
+                let _ = sample.SetActualDataLength(copy_len as i32);
             }
         }
         drop(frames);
@@ -815,11 +832,7 @@ fn refresh_frame(inner: &FilterInner, w: u32, h: u32) {
         frames_ref.picture = vec![0; nv12_len(w, h)];
         fill_nv12(&mut frames_ref.picture, w, h, 28, 128, 128);
     }
-    if frames_ref.shared.is_none()
-        && frames_ref
-            .retry_at
-            .is_none_or(|t| Instant::now() >= t)
-    {
+    if frames_ref.shared.is_none() && frames_ref.retry_at.is_none_or(|t| Instant::now() >= t) {
         match Shared::create(&inner.mapping_name) {
             Ok(s) => {
                 s.set_wanted(w, h);
@@ -834,7 +847,8 @@ fn refresh_frame(inner: &FilterInner, w: u32, h: u32) {
     if let Some(shared) = &frames_ref.shared {
         shared.set_wanted(w, h);
         shared.touch_consumer();
-        if let Some((fw, fh)) = shared.read_frame(&mut frames_ref.scratch, &mut frames_ref.last_seq) {
+        if let Some((fw, fh)) = shared.read_frame(&mut frames_ref.scratch, &mut frames_ref.last_seq)
+        {
             fit_nv12(&frames_ref.scratch, fw, fh, &mut frames_ref.picture, w, h);
         }
         if !shared.producer_alive(2000) {
@@ -848,17 +862,12 @@ fn refresh_frame(inner: &FilterInner, w: u32, h: u32) {
 
 #[implement(IEnumPins)]
 struct PinEnum {
-    pin: DShowPin,
+    pin: IPin,
     pos: AtomicU32,
 }
 
 impl IEnumPins_Impl for PinEnum_Impl {
-    fn Next(
-        &self,
-        count: u32,
-        pins: *mut Option<IPin>,
-        fetched: *mut u32,
-    ) -> HRESULT {
+    fn Next(&self, count: u32, pins: *mut Option<IPin>, fetched: *mut u32) -> HRESULT {
         let pos = self.pos.load(Ordering::Acquire);
         if pos >= 1 || count == 0 {
             if !fetched.is_null() {
@@ -867,17 +876,13 @@ impl IEnumPins_Impl for PinEnum_Impl {
             return S_FALSE;
         }
         unsafe {
-            *pins = Some(ComObject::new(self.pin.clone()).into_interface());
+            *pins = Some(self.pin.clone());
         }
         self.pos.store(pos + 1, Ordering::Release);
         if !fetched.is_null() {
             unsafe { *fetched = 1 };
         }
-        if count == 1 {
-            S_OK
-        } else {
-            S_FALSE
-        }
+        if count == 1 { S_OK } else { S_FALSE }
     }
 
     fn Skip(&self, count: u32) -> Result<()> {
@@ -912,12 +917,7 @@ struct MediaTypeEnum {
 }
 
 impl IEnumMediaTypes_Impl for MediaTypeEnum_Impl {
-    fn Next(
-        &self,
-        count: u32,
-        types: *mut *mut AM_MEDIA_TYPE,
-        fetched: *mut u32,
-    ) -> HRESULT {
+    fn Next(&self, count: u32, types: *mut *mut AM_MEDIA_TYPE, fetched: *mut u32) -> HRESULT {
         let pos = self.pos.load(Ordering::Acquire) as usize;
         if pos >= FORMATS.len() || count == 0 {
             if !fetched.is_null() {
@@ -929,9 +929,8 @@ impl IEnumMediaTypes_Impl for MediaTypeEnum_Impl {
         for i in 0..available {
             let (w, h) = FORMATS[pos + i];
             let mt = build_media_type_for_size(w, h);
-            let ptr = unsafe {
-                CoTaskMemAlloc(std::mem::size_of::<AM_MEDIA_TYPE>())
-            } as *mut AM_MEDIA_TYPE;
+            let ptr = unsafe { CoTaskMemAlloc(std::mem::size_of::<AM_MEDIA_TYPE>()) }
+                as *mut AM_MEDIA_TYPE;
             if !ptr.is_null() {
                 unsafe { *ptr = mt };
             }

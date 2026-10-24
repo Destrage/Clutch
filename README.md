@@ -202,7 +202,7 @@ Macros are saved with the scene collection, and every change they make can be un
 
 ## Virtual camera
 
-Click the camera button in the top bar, then pick **Clutch Virtual Camera** in your call app. Windows lists it as "Clutch Virtual Camera (Windows Virtual Camera)". It needs Windows 11. On Linux it uses `v4l2loopback`; see [Linux](#what-differs-on-linux).
+Click the camera button in the top bar, then pick **Clutch Virtual Camera** in your call app. On Windows 11, Windows lists it as "Clutch Virtual Camera (Windows Virtual Camera)". On Windows 10 it's listed as "Clutch Virtual Camera" and works in apps that use DirectShow cameras (Zoom, Discord, Teams, browsers). On Linux it uses `v4l2loopback`; see [Linux](#what-differs-on-linux).
 
 - **First start:** Windows asks once for permission to install the camera component, so expect a UAC prompt. Clutch copies the component to `%ProgramData%\Clutch\VirtualCamera` and registers it there.
 - **Choosing what it shows:** pick the canvas in **Settings → Virtual camera**.

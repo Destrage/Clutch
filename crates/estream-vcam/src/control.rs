@@ -161,6 +161,21 @@ pub fn supported() -> bool {
     true
 }
 
+/// True on Windows 11, where the Media Foundation session camera exists; Windows 10 uses the
+/// DirectShow filter instead.
+pub fn mf_camera_available() -> bool {
+    create_function().is_some()
+}
+
+/// The shared memory the camera source creates on this Windows version.
+pub fn mapping_name() -> &'static str {
+    if mf_camera_available() {
+        crate::shared::MAPPING_NAME
+    } else {
+        crate::shared::DSHOW_MAPPING_NAME
+    }
+}
+
 /// The running session camera. Dropping it removes the camera from the system on Windows 11.
 /// On Windows 10, the DirectShow filter is registered system-wide and consumers connect directly.
 pub struct VirtualCamera {
@@ -192,7 +207,9 @@ impl VirtualCamera {
             let camera = camera
                 .ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_POINTER))?;
             unsafe { camera.Start(None)? };
-            Ok(Self { camera: Some(camera) })
+            Ok(Self {
+                camera: Some(camera),
+            })
         } else {
             // Windows 10: DirectShow filter path
             // The filter was registered via `regsvr32` and reads from shared memory.
@@ -207,7 +224,9 @@ impl VirtualCamera {
         if let Some(ref camera) = self.camera {
             unsafe { camera.GetMediaSource() }
         } else {
-            Err(windows::core::Error::from(windows::Win32::Foundation::E_NOTIMPL))
+            Err(windows::core::Error::from(
+                windows::Win32::Foundation::E_NOTIMPL,
+            ))
         }
     }
 }

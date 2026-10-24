@@ -62,8 +62,7 @@ impl IClassFactory_Impl for DShowFactory_Impl {
         if outer.is_some() {
             return Err(CLASS_E_NOAGGREGATION.into());
         }
-        let filter: IUnknown =
-            ComObject::new(crate::dshow::DShowFilter::new(MAPPING_NAME)).into_interface();
+        let filter = crate::dshow::DShowFilter::create(crate::shared::DSHOW_MAPPING_NAME);
         let result = unsafe { filter.query(riid, ppv).ok() };
         crate::log(&format!("DShow CreateInstance {:?}: {result:?}", unsafe {
             *riid
@@ -267,8 +266,13 @@ pub extern "system" fn DllRegisterServer() -> HRESULT {
     unsafe {
         let _ = RegCloseKey(server);
     }
-    let dshow_ok = crate::dshow::register(&path);
-    crate::log(&format!("dshow register: {dshow_ok}"));
+    // The DirectShow camera is for Windows 10 only; clear any earlier registration first (a PC
+    // upgraded to Windows 11 would otherwise list the camera twice).
+    crate::dshow::unregister();
+    if !crate::control::mf_camera_available() {
+        let dshow_ok = crate::dshow::register(&path);
+        crate::log(&format!("dshow register: {dshow_ok}"));
+    }
     if ok { S_OK } else { SELFREG_E_CLASS }
 }
 
