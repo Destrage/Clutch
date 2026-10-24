@@ -10,7 +10,9 @@ not a source), and drops it when the selection changes or the view closes.
 ## Showing frames
 Each UI tick (every 4 ms), if `Player::sequence()` moved on, the app takes the picture (`try_picture`, never
 blocking) and uploads it through `estream-gpu::YuvConverter` (NV12 → RGBA on the GPU, BT.709/601
-and range from the picture) into a preview texture created like the engine's own preview
+and range from the picture). The converter's output is an sRGB texture, which Slint would decode
+again when drawing (too dark), so its bytes are copied (`copy_texture_to_texture`, formats that
+differ only in sRGB-ness) into a plain RGBA preview texture created like the engine's own preview
 textures, which Slint already accepts (`slint::Image::try_from(wgpu::Texture)`). The textures are
 reused while the size stays the same, so a new frame costs an upload and one draw. Seek bar drags
 seek at most every 120 ms and once more on release. The UI

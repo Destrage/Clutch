@@ -959,10 +959,24 @@ fn upload_picture(
                 estream_gpu::YuvMatrix::for_height(h),
                 picture.full_range,
             );
+            // The converter writes an sRGB texture; the UI would decode it again (too dark),
+            // so its bytes are copied into a plain RGBA texture, like the studio preview.
+            if rgba
+                .as_ref()
+                .is_none_or(|t| t.width() != f.width || t.height() != f.height)
+            {
+                *rgba = Some(estream_gpu::create_preview_texture(gpu, f.width, f.height));
+            }
+            let Some(t) = rgba.as_ref() else { return false };
             let mut encoder = gpu.device.create_command_encoder(&Default::default());
             f.convert(yuv, &mut encoder);
+            encoder.copy_texture_to_texture(
+                f.output.as_image_copy(),
+                t.as_image_copy(),
+                f.output.size(),
+            );
             gpu.queue.submit([encoder.finish()]);
-            f.output.clone()
+            t.clone()
         }
         PixelLayout::Rgba => {
             if rgba
