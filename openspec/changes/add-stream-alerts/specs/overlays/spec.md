@@ -3,7 +3,7 @@
 ### Requirement: Local Overlay Server
 Clutch SHALL serve its overlay pages and stream events to them only on the loopback address, and
 every request SHALL require the install's secret token. User files SHALL be served only by id,
-never by path. The server SHALL run while at least one overlay source exists in the open setup.
+never by path.
 
 #### Scenario: Request without the token
 - **WHEN** a request reaches the overlay server without the correct token

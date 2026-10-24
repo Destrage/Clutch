@@ -36,16 +36,17 @@ same short-sound player as the clip-saved sound, decoded once and cached; files 
 load are reported once and fall back to the chime.
 
 ## Overlay server
-A small HTTP/WebSocket server on the UI side (`apps/estream/src/overlay/`), started when an
-overlay source exists in the setup and stopped when none does:
+A small HTTP/WebSocket server on the UI side (`apps/estream/src/overlay/`), started with the
+studio (one thread idle on a loopback socket; a page's address must exist before its source is
+created):
 - Binds `127.0.0.1` on a free port (remembered, so pages keep working across restarts when it is
   still free).
 - Every route requires the install's random token (`?t=…`, stored in settings, regenerable).
 - `GET /alerts` serves the bundled alerts page; `GET /asset/<id>` serves the user's animation,
   sound and font files by id (never arbitrary paths); `GET /ws` streams JSON messages:
   `{"type":"config", …}` on connect and when settings change, `{"type":"alert", …}` per event.
-- The server runs on its own thread with the existing `tokio` runtime used for I/O; it never
-  touches the video or audio threads.
+- The server uses plain threads (one to accept, one per connection); it never touches the video
+  or audio threads.
 
 ## Alerts source
 A source type `alerts` whose video and audio come from the browser source machinery: it creates

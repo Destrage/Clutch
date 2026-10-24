@@ -171,6 +171,11 @@ pub struct App {
     event_sounds: Option<estream_media::sounds::SoundPlayer>,
     /// Event sound files found missing (reported once each).
     missing_sounds: std::collections::HashSet<PathBuf>,
+    /// Serves the overlay pages (Alerts) to browser sources on this PC.
+    overlay: Option<crate::overlay::OverlayServer>,
+    /// The Test button counts last seen per Alerts source.
+    alert_tests: HashMap<SourceId, Vec<i64>>,
+    overlay_synced: Instant,
     chat_shown: Option<(
         Vec<crate::ui::ChatStateRow>,
         Vec<Option<crate::livechat::Platform>>,
@@ -761,6 +766,9 @@ impl App {
             chat_seen: 0,
             event_sounds: None,
             missing_sounds: Default::default(),
+            overlay: None,
+            alert_tests: HashMap::new(),
+            overlay_synced: Instant::now(),
             chat_shown: None,
             chat_reply_to: Vec::new(),
             chat_sending: None,
@@ -1121,6 +1129,60 @@ impl App {
         w.set_chat_message(message.into());
     }
 
+    /// Starts the overlay server once (with a token made on first use and kept in settings).
+    fn start_overlay_server(&mut self) {
+        if self.overlay.is_some() {
+            return;
+        }
+        if self.settings.overlay_token.is_empty() {
+            self.settings.overlay_token = crate::overlay::new_token();
+            self.settings.save(&self.paths.settings());
+        }
+        match crate::overlay::OverlayServer::start(
+            self.settings.overlay_port,
+            &self.settings.overlay_token,
+        ) {
+            Ok(server) => self.overlay = Some(server),
+            Err(e) => tracing::warn!(error = %e, "overlay server didn't start; Alerts won't show"),
+        }
+    }
+
+    /// Keeps each Alerts source's page settings current and plays Test presses (a few times
+    /// a second).
+    fn tick_overlays(&mut self) {
+        if self.overlay_synced.elapsed() < Duration::from_millis(250) {
+            return;
+        }
+        self.overlay_synced = Instant::now();
+        let (Some(server), Some(engine)) = (&self.overlay, &self.engine) else {
+            return;
+        };
+        use crate::overlay::alerts;
+        let snapshot = engine.snapshot();
+        let mut keep = Vec::new();
+        for def in snapshot.sources.iter().filter(|d| d.kind == alerts::KIND) {
+            let id = def.id.to_string();
+            server.set_config(&id, alerts::config(&def.settings, server));
+            let presses = alerts::test_presses(&def.settings);
+            let counts: Vec<i64> = presses.iter().map(|(_, n)| *n).collect();
+            if let Some(seen) = self.alert_tests.get(&def.id) {
+                for ((kind, n), before) in presses.iter().zip(seen) {
+                    if n != before {
+                        let event = alerts::sample(*kind);
+                        let msg =
+                            alerts::alert_message(&event, crate::livechat::Platform::Twitch, true);
+                        server.send(Some(&id), &msg);
+                    }
+                }
+            }
+            self.alert_tests.insert(def.id, counts);
+            keep.push(id);
+        }
+        self.alert_tests
+            .retain(|id, _| keep.contains(&id.to_string()));
+        server.retain_sources(&keep);
+    }
+
     /// Plays the sound chosen for `kind` on the monitoring device, or the chime when none is set
     /// (or its file is gone).
     fn play_event_sound(&mut self, kind: crate::livechat::event::StreamEventKind) {
@@ -1169,6 +1231,10 @@ impl App {
             .find_map(|m| m.event.as_ref().map(|e| e.kind))
             .filter(|_| self.settings.chat_chime);
         for m in new {
+            if let (Some(event), Some(server)) = (&m.event, &self.overlay) {
+                let msg = crate::overlay::alerts::alert_message(event, m.platform, false);
+                server.send(None, &msg);
+            }
             let parts = if self.settings.chat_emotes {
                 m.parts
             } else {
@@ -2260,6 +2326,9 @@ impl App {
             self.paths.now_playing(),
         );
         estream_media::music_source::register(&mut registry);
+        // Overlay pages need the server's address before their sources are created.
+        self.start_overlay_server();
+        registry.register(crate::overlay::alerts::source_type());
         if let Some(w) = self.window() {
             w.set_source_types(ModelRc::new(VecModel::from(source_types(&registry))));
         }
@@ -2493,6 +2562,7 @@ impl App {
         self.tick_api();
         self.tick_clips();
         self.tick_clips_view();
+        self.tick_overlays();
         self.tick_montages();
         self.tick_automation();
         if self.health_at.elapsed() >= Duration::from_secs(1) {

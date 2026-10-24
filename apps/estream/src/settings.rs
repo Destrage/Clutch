@@ -184,6 +184,9 @@ pub struct Settings {
     pub event_sounds: std::collections::HashMap<crate::livechat::event::StreamEventKind, PathBuf>,
     /// Event sound volume, 0..1.
     pub event_sound_volume: f32,
+    /// The overlay server's port (another free one is used when it's taken) and secret token.
+    pub overlay_port: u16,
+    pub overlay_token: String,
     /// Emotes in the chat shown as images (off: by name).
     pub chat_emotes: bool,
     /// 7TV, BetterTTV and FrankerFaceZ emotes in the chat.
@@ -513,6 +516,8 @@ impl Default for Settings {
             chat_chime: true,
             event_sounds: Default::default(),
             event_sound_volume: 0.8,
+            overlay_port: 4466,
+            overlay_token: String::new(),
             chat_emotes: true,
             chat_third_party: true,
             chat_animate: true,
