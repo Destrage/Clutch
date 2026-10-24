@@ -519,13 +519,27 @@ impl Default for Settings {
 }
 
 impl Settings {
-    /// Loads settings, falling back to defaults (and logging) if missing or invalid.
+    /// Loads settings, falling back to defaults (and logging) if missing or invalid. Entries this
+    /// version can't read (a newer version's values) are left out; the file is copied aside
+    /// first, as saving afterwards would lose them.
     pub fn load(path: &Path) -> Self {
         let mut settings: Self = match std::fs::read_to_string(path) {
-            Ok(text) => serde_json::from_str(&text).unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "invalid settings file; using defaults");
-                Self::default()
-            }),
+            Ok(text) => match Self::parse_lenient(&text) {
+                Ok((settings, dropped)) if dropped.is_empty() => settings,
+                Ok((settings, dropped)) => {
+                    tracing::warn!(
+                        ?dropped,
+                        "settings entries this version can't read were left out"
+                    );
+                    keep_invalid(path);
+                    settings
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "invalid settings file; using defaults");
+                    keep_invalid(path);
+                    Self::default()
+                }
+            },
             Err(_) => Self::default(),
         };
         settings.migrate();
@@ -559,6 +573,35 @@ impl Settings {
             k.unprotect();
         }
         settings
+    }
+
+    /// Parses settings, dropping the entries that fail to read (the entry at the error's
+    /// path; a missing field then fails its parent, which goes next) until the rest reads.
+    /// Returns the settings and the paths dropped; errors only when the JSON itself is invalid.
+    fn parse_lenient(text: &str) -> Result<(Self, Vec<String>), serde_json::Error> {
+        let mut doc: serde_json::Value = serde_json::from_str(text)?;
+        let mut dropped = Vec::new();
+        loop {
+            let err = match serde_path_to_error::deserialize::<_, Self>(&doc) {
+                Ok(settings) => return Ok((settings, dropped)),
+                Err(err) => err,
+            };
+            let mut path: Vec<_> = err.path().iter().cloned().collect();
+            // An enum's variant isn't a node of its own: drop the value holding it.
+            while matches!(
+                path.last(),
+                Some(
+                    serde_path_to_error::Segment::Enum { .. }
+                        | serde_path_to_error::Segment::Unknown
+                )
+            ) {
+                path.pop();
+            }
+            if path.is_empty() || !remove_at(&mut doc, &path) {
+                return Err(err.into_inner());
+            }
+            dropped.push(err.path().to_string());
+        }
     }
 
     /// Points saved paths inside the old settings folder at the new one (after
@@ -621,6 +664,46 @@ impl Settings {
     }
 }
 
+/// Removes the entry at `path` from `doc`; false when there's nothing there to remove.
+fn remove_at(doc: &mut serde_json::Value, path: &[serde_path_to_error::Segment]) -> bool {
+    use serde_path_to_error::Segment;
+    let Some((last, parents)) = path.split_last() else {
+        return false;
+    };
+    let mut node = doc;
+    for segment in parents {
+        node = match (segment, node) {
+            (Segment::Seq { index }, serde_json::Value::Array(a)) => match a.get_mut(*index) {
+                Some(n) => n,
+                None => return false,
+            },
+            (Segment::Map { key }, serde_json::Value::Object(o)) => match o.get_mut(key) {
+                Some(n) => n,
+                None => return false,
+            },
+            _ => return false,
+        };
+    }
+    match (last, node) {
+        (Segment::Seq { index }, serde_json::Value::Array(a)) if *index < a.len() => {
+            a.remove(*index);
+            true
+        }
+        (Segment::Map { key }, serde_json::Value::Object(o)) => o.remove(key).is_some(),
+        _ => false,
+    }
+}
+
+/// Copies an unreadable settings file to `settings.invalid-<date>-<time>.json` beside it.
+fn keep_invalid(path: &Path) {
+    let stamp = chrono::Local::now().format("%Y-%m-%d-%H%M%S");
+    let copy = path.with_file_name(format!("settings.invalid-{stamp}.json"));
+    match std::fs::copy(path, &copy) {
+        Ok(_) => tracing::warn!(copy = %copy.display(), "kept a copy of the settings file"),
+        Err(e) => tracing::error!(error = %e, "couldn't copy the settings file aside"),
+    }
+}
+
 /// Parses `#rrggbb` into a Slint color.
 pub fn parse_hex(hex: &str) -> Option<(u8, u8, u8)> {
     let hex = hex.trim().trim_start_matches('#');
@@ -670,6 +753,50 @@ fn is_kick_ingest(server: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unknown_entries_are_left_out_and_the_rest_kept() {
+        let text = r#"{
+            "theme": "light",
+            "destinations": [{ "name": "Twitch" }],
+            "clips": { "connected": ["cs2_gsi", "pubg_replay"], "hotkey_seconds": 45 }
+        }"#;
+        let (s, dropped) = Settings::parse_lenient(text).unwrap();
+        assert_eq!(dropped, ["clips.connected[1]"]);
+        assert_eq!(s.theme, ThemeMode::Light);
+        assert_eq!(s.destinations[0].name, "Twitch");
+        assert_eq!(s.clips.connected, [estream_clips::Integration::Cs2Gsi]);
+        assert_eq!(s.clips.hotkey_seconds, 45);
+
+        let (s, dropped) =
+            Settings::parse_lenient(r#"{ "theme": "neon", "chat_chime": false }"#).unwrap();
+        assert_eq!(dropped, ["theme"]);
+        assert_eq!(s.theme, ThemeMode::default());
+        assert!(!s.chat_chime);
+
+        assert!(Settings::parse_lenient("{ not json").is_err());
+    }
+
+    #[test]
+    fn unreadable_settings_are_copied_aside() {
+        let dir = std::env::temp_dir().join(format!("clutch-settings-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(&path, r#"{ "theme": "neon", "chat_chime": false }"#).unwrap();
+        let s = Settings::load(&path);
+        assert!(!s.chat_chime);
+        let copies: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("settings.invalid-")
+            })
+            .collect();
+        assert_eq!(copies.len(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     /// The registry read agrees with what `reg.exe` reports.
     #[cfg(windows)]
