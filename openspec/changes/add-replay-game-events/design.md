@@ -24,8 +24,9 @@ pub struct ReplayEvent { pub kind: EventKind, pub match_time: Duration }
 ```
 
 `ReplayWatcher` (`estream-clips::integrations::replay`) owns one thread per watched game:
-- It starts when the game is detected (and the integration is connected) and stops when the game
-  exits, after one last scan. Replays already in the folder when it starts are ignored.
+- It runs while the game is detected and the integration is connected, including when the user
+  connects with the game already open, and stops when the game exits, after one last scan.
+  Replays already in the folder when it starts are ignored.
 - It polls the folder every 2 s. Polling is simpler and more robust than `ReadDirectoryChangesW`
   for folders written in bursts, and the cost is a directory listing.
 - Rust's `std::fs` opens files with full sharing on Windows, so the game can keep writing,

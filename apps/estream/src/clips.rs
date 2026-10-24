@@ -417,18 +417,6 @@ impl Clipper {
                             Err(e) => tracing::warn!(error = %e, "League poller didn't start"),
                         }
                     }
-                    if game.integration == Some(Integration::PubgReplay)
-                        && ctx.settings.connected.contains(&Integration::PubgReplay)
-                        && self.pubg.is_none()
-                    {
-                        match ReplayWatcher::start(Box::new(Pubg), self.events_tx.clone()) {
-                            Some(Ok(w)) => self.pubg = Some(w),
-                            Some(Err(e)) => {
-                                tracing::warn!(error = %e, "PUBG replay watcher didn't start")
-                            }
-                            None => {}
-                        }
-                    }
                     out.push(Notice::GameStarted(game.name));
                 }
                 Detection::Stopped(game) => {
@@ -447,6 +435,24 @@ impl Clipper {
                     out.push(Notice::GameStopped(game.name));
                 }
                 Detection::AskIsGame { exe, title } => out.push(Notice::AskIsGame { exe, title }),
+            }
+        }
+        // PUBG's replay watcher runs while PUBG does, including when it was connected with the
+        // game already open.
+        if self.pubg.is_none()
+            && ctx.settings.connected.contains(&Integration::PubgReplay)
+            && self
+                .detector
+                .current()
+                .is_some_and(|g| g.integration == Some(Integration::PubgReplay))
+        {
+            match ReplayWatcher::start(Box::new(Pubg), self.events_tx.clone()) {
+                Some(Ok(w)) => {
+                    tracing::info!("PUBG replay watcher started");
+                    self.pubg = Some(w);
+                }
+                Some(Err(e)) => tracing::warn!(error = %e, "PUBG replay watcher didn't start"),
+                None => {}
             }
         }
         // Clip mode switched on while a game is already running.
