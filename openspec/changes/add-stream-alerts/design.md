@@ -33,7 +33,8 @@ Each reader keeps building the display text as today (the platforms word things 
 ## Event sounds
 `Settings.event_sounds: HashMap<EventKind, PathBuf>` plus a volume. Sounds play through the
 same short-sound player as the clip-saved sound, decoded once and cached; files that fail to
-load are reported once and fall back to the chime.
+load are reported once and fall back to the built-in pack's sound for the kind (the chime only
+when that is unavailable). The settings live on their own Audio page.
 
 ## Overlay server
 A small HTTP/WebSocket server on the UI side (`apps/estream/src/overlay/`), started with the

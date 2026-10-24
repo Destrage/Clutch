@@ -19,6 +19,77 @@ pub const KIND: &str = "alerts";
 const ANIMATIONS: &[&str] = &["webm", "webp", "png", "apng", "gif"];
 const SOUNDS: &[&str] = &["wav", "ogg", "mp3"];
 
+/// Clutch's built-in pack (sounds only so far), shipped inside the app.
+const BUILTIN: &[(&str, &[u8])] = &[
+    ("pack.json", include_bytes!("../../assets/alerts/pack.json")),
+    (
+        "follow/sound.ogg",
+        include_bytes!("../../assets/alerts/follow/sound.ogg"),
+    ),
+    (
+        "follow/sound-2.ogg",
+        include_bytes!("../../assets/alerts/follow/sound-2.ogg"),
+    ),
+    (
+        "sub/sound.ogg",
+        include_bytes!("../../assets/alerts/sub/sound.ogg"),
+    ),
+    (
+        "resub/sound.ogg",
+        include_bytes!("../../assets/alerts/resub/sound.ogg"),
+    ),
+    (
+        "gift/sound.ogg",
+        include_bytes!("../../assets/alerts/gift/sound.ogg"),
+    ),
+    (
+        "bits/sound.ogg",
+        include_bytes!("../../assets/alerts/bits/sound.ogg"),
+    ),
+    (
+        "bits/sound-2.ogg",
+        include_bytes!("../../assets/alerts/bits/sound-2.ogg"),
+    ),
+    (
+        "raid/sound.ogg",
+        include_bytes!("../../assets/alerts/raid/sound.ogg"),
+    ),
+    (
+        "paid/sound.ogg",
+        include_bytes!("../../assets/alerts/paid/sound.ogg"),
+    ),
+];
+
+/// The built-in pack's folder, written to the cache on first use (files that differ are
+/// rewritten, so an update brings its sounds along). `None` when it can't be written.
+pub fn builtin_pack() -> Option<&'static Path> {
+    static DIR: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let dir = dirs::cache_dir()?.join("Clutch").join("alerts").join("builtin");
+        for (name, bytes) in BUILTIN {
+            let path = dir.join(name);
+            if std::fs::read(&path).ok().as_deref() == Some(*bytes) {
+                continue;
+            }
+            let written = path
+                .parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| std::fs::write(&path, bytes));
+            if let Err(e) = written {
+                tracing::warn!(path = %path.display(), error = %e, "built-in alert pack not written");
+                return None;
+            }
+        }
+        Some(dir)
+    })
+    .as_deref()
+}
+
+/// The built-in sound of `kind` (its first, when it has several).
+pub fn builtin_sound(kind: StreamEventKind) -> Option<PathBuf> {
+    Some(builtin_pack()?.join(key(kind)).join("sound.ogg"))
+}
+
 /// The settings key and default template of each kind.
 fn key(kind: StreamEventKind) -> &'static str {
     match kind {
@@ -247,9 +318,10 @@ pub fn config(settings: &Value, server: &OverlayServer) -> Value {
             })
             .unwrap_or_else(|| d.to_owned())
     };
-    let pack_dir = Path::new(s("pack"))
-        .parent()
-        .filter(|_| !s("pack").is_empty());
+    let pack_dir = match s("pack") {
+        "" => builtin_pack(),
+        pack => Path::new(pack).parent(),
+    };
     let mut kinds = serde_json::Map::new();
     for kind in StreamEventKind::ALL {
         let k = key(kind);
@@ -369,6 +441,17 @@ pub fn sample(kind: StreamEventKind) -> StreamEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builtin_pack_has_a_sound_per_kind() {
+        for kind in StreamEventKind::ALL {
+            let name = format!("{}/sound.ogg", key(kind));
+            assert!(
+                BUILTIN.iter().any(|(n, b)| *n == name && !b.is_empty()),
+                "{name}"
+            );
+        }
+    }
 
     #[test]
     fn amounts_read_naturally() {

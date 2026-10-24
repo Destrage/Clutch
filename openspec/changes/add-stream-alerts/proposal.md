@@ -14,7 +14,7 @@ already has, with no account or web service.
   platforms are follow, sub, resub, gift, bits, raid and paid message (Super Chat, Super Sticker,
   Kicks).
 - **Event sounds in the chat:** each kind can have its own sound file (WAV, OGG, MP3), replacing
-  the single chime; kinds without a sound fall back to the chime. Volume setting; the bell still
+  the single chime; kinds without a sound use the built-in pack's sound. Volume setting; the bell still
   mutes them all.
 - **Alerts source:** a new source type, "Alerts", added from Add source like any other. For each
   kind: on/off, an animation (WebM with alpha recommended; animated WebP, PNG, GIF also work), a
@@ -27,7 +27,7 @@ already has, with no account or web service.
   shrinking to fit long names.
 - **Alert packs:** a pack is a folder with, per kind, the animation, one or more sounds and an
   `alert.json` saying where the text box is, when the text appears and its style. Clutch ships a
-  built-in pack (animations and sounds from the project owner); users can pick another pack,
+  built-in pack (sounds made from CC0 packs now; animations from the project owner later); users can pick another pack,
   share their own, or replace single files. Several sounds for a kind play in turn or at random,
   and a kind can have a bigger variant above an amount (e.g. 10+ gifted subs).
 - **Local overlay server:** Clutch serves its overlay pages and pushes events to them over a

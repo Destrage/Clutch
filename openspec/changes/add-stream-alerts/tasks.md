@@ -20,7 +20,8 @@
 - [x] 4.3 Inspector: per-kind settings, minimum amount, Test button
 - [x] 4.4 Live text: template placeholders, optional parts, text box, enter/leave timing, shrink to fit
 - [x] 4.5 Alert packs: `pack.json` / per-kind `alert.json`, several sounds (in turn or random), big variants, per-source overrides
-- [ ] 4.6 Built-in pack from the project owner's animations and sounds
+- [x] 4.6 Built-in pack sounds (from Kenney's CC0 packs; event sounds use them too)
+- [ ] 4.6b Built-in pack animations from the project owner
 - [ ] 4.7 Advanced: per-kind `alert.html` + CSS
 
 ## 5. Verification

@@ -1183,20 +1183,20 @@ impl App {
         server.retain_sources(&keep);
     }
 
-    /// Plays the sound chosen for `kind` on the monitoring device, or the chime when none is set
-    /// (or its file is gone).
+    /// Plays the sound chosen for `kind` on the monitoring device, or Clutch's built-in one when
+    /// none is set (or its file is gone); the system chime when even that can't be had.
     fn play_event_sound(&mut self, kind: crate::livechat::event::StreamEventKind) {
-        let Some(path) = self.settings.event_sounds.get(&kind).cloned() else {
+        let chosen = self.settings.event_sounds.get(&kind).cloned().filter(|p| {
+            let found = p.is_file();
+            if !found && self.missing_sounds.insert(p.clone()) {
+                tracing::warn!(path = %p.display(), "event sound file is missing; built-in sound instead");
+            }
+            found
+        });
+        let Some(path) = chosen.or_else(|| crate::overlay::alerts::builtin_sound(kind)) else {
             crate::livechat::chime();
             return;
         };
-        if !path.is_file() {
-            if self.missing_sounds.insert(path.clone()) {
-                tracing::warn!(path = %path.display(), "event sound file is missing; chime instead");
-            }
-            crate::livechat::chime();
-            return;
-        }
         let device = self.monitor_device();
         if self
             .event_sounds

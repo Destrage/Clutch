@@ -861,19 +861,20 @@ export component SettingsDialog inherits Modal {
     in property <SettingsForm> form;
     in property <string> remote-status;
     /// The page shown: 0 Performance, 1 Stream, 2 Recording, 3 Clips, 4 Virtual camera,
-    /// 5 Remote control, 6 Appearance, 7 Updates.
+    /// 5 Remote control, 6 Appearance, 7 Updates, 8 About, 9 Audio. The list below sets the order.
     in-out property <int> page;
     property <bool> reveal-password: false;
-    property <[{icon: image, label: string}]> pages: [
-        { icon: Icons.gauge, label: "Performance" },
-        { icon: Icons.radio, label: "Stream" },
-        { icon: Icons.circle, label: "Recording" },
-        { icon: Icons.scissors, label: "Clips" },
-        { icon: Icons.camera, label: "Virtual camera" },
-        { icon: Icons.globe, label: "Remote control" },
-        { icon: Icons.palette, label: "Appearance" },
-        { icon: Icons.refresh, label: "Updates" },
-        { icon: Icons.sparkles, label: "About" },
+    property <[{icon: image, label: string, id: int}]> pages: [
+        { icon: Icons.gauge, label: "Performance", id: 0 },
+        { icon: Icons.radio, label: "Stream", id: 1 },
+        { icon: Icons.circle, label: "Recording", id: 2 },
+        { icon: Icons.scissors, label: "Clips", id: 3 },
+        { icon: Icons.volume, label: "Audio", id: 9 },
+        { icon: Icons.camera, label: "Virtual camera", id: 4 },
+        { icon: Icons.globe, label: "Remote control", id: 5 },
+        { icon: Icons.palette, label: "Appearance", id: 6 },
+        { icon: Icons.refresh, label: "Updates", id: 7 },
+        { icon: Icons.sparkles, label: "About", id: 8 },
     ];
     callback set(string, float);
     callback set-text(string, string);
@@ -918,12 +919,12 @@ export component SettingsDialog inherits Modal {
             alignment: start;
             accessible-role: tab-list;
             accessible-label: "Settings pages";
-            for p[i] in root.pages: SettingsPageItem {
+            for p in root.pages: SettingsPageItem {
                 icon: p.icon;
                 label: p.label;
-                current: i == root.page;
+                current: p.id == root.page;
                 clicked => {
-                    root.page = i;
+                    root.page = p.id;
                     keys.focus();
                 }
             }
@@ -1541,22 +1542,27 @@ export component SettingsDialog inherits Modal {
                             Toggle { checked: root.form.chat-animate; toggled(v) => { root.set("chat-animate", v ? 1 : 0); } }
                         }
                     }
+                    Text { text: root.form.ffmpeg; color: Theme.text-faint; font-size: Theme.font-xs; }
+                }
+
+                if root.page == 9: VerticalLayout {
+                    spacing: 12px;
                     SectionTitle { text: "EVENT SOUNDS"; }
                     Text {
-                        text: "A sound for each kind of stream event, on your monitoring device (viewers don't hear it). Kinds without one play the chime. The bell in the chat header mutes them all.";
+                        text: "A sound for each kind of stream event, on your monitoring device (viewers don't hear it). Kinds without your own sound play Clutch's built-in one. The bell in the chat header mutes them all.";
                         color: Theme.text-muted;
                         font-size: Theme.font-s;
                         wrap: word-wrap;
                     }
                     for row[i] in root.form.event-sounds: SettingRow {
                         label: row.label;
-                        hint: row.file == "" ? "Chime" : row.file;
+                        hint: row.file == "" ? "Built-in" : row.file;
                         HorizontalLayout {
                             alignment: start;
                             spacing: 4px;
                             IconButton { icon: Icons.folder-open; tooltip: "Choose a sound file"; clicked => { root.set("event-sound-pick", i); } }
                             IconButton { icon: Icons.play; tooltip: "Play it"; clicked => { root.set("event-sound-play", i); } }
-                            if row.file != "": IconButton { icon: Icons.x; tooltip: "Use the chime"; clicked => { root.set("event-sound-clear", i); } }
+                            if row.file != "": IconButton { icon: Icons.x; tooltip: "Use the built-in sound"; clicked => { root.set("event-sound-clear", i); } }
                         }
                     }
                     SettingRow {
@@ -1567,7 +1573,6 @@ export component SettingsDialog inherits Modal {
                             changed(v) => { root.set("event-sound-volume", v); }
                         }
                     }
-                    Text { text: root.form.ffmpeg; color: Theme.text-faint; font-size: Theme.font-xs; }
                 }
 
                 if root.page == 8: VerticalLayout {
