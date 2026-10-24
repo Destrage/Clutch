@@ -300,7 +300,7 @@ fn start_capture(
 }
 
 fn window_options() -> Vec<SelectOption> {
-    let mut list: Vec<WindowInfo> = enumerate::windows();
+    let mut list: Vec<WindowInfo> = enumerate::picker_windows();
     list.sort_by_key(|w| (w.exe.to_lowercase(), w.title.to_lowercase()));
     list.into_iter()
         .map(|w| SelectOption::new(w.key(), w.label()))

@@ -6,6 +6,7 @@
 ## 2. Game Capture Target Latching
 - [x] 2.1 Keep acquired game target in `CaptureSource` across focus changes while the target window/process remains alive
 - [x] 2.2 Re-acquire foreground target when the latched window is closed or its process terminates
+- [x] 2.3 List minimized windows in the window pickers (fullscreen games minimize while another window has focus)
 
 ## 3. Device Removal Diagnostics
 - [x] 3.1 Report detailed removal reason code when a DXGI device removed error occurs

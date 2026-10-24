@@ -163,28 +163,39 @@ pub fn find_window(key: &str, windows: &[WindowInfo]) -> Option<WindowInfo> {
         .find_map(|rule| windows.iter().find(|w| rule(w)).cloned())
 }
 
+/// Windows that can be captured now (minimized ones can't).
 pub fn windows() -> Vec<WindowInfo> {
+    list_windows(false)
+}
+
+/// Windows to offer in the window pickers: also minimized ones (fullscreen games minimize
+/// while another window has focus), which are captured once restored.
+pub fn picker_windows() -> Vec<WindowInfo> {
+    list_windows(true)
+}
+
+fn list_windows(minimized: bool) -> Vec<WindowInfo> {
     unsafe extern "system" fn callback(hwnd: HWND, data: LPARAM) -> BOOL {
-        // SAFETY: `data` is the `&mut Vec<WindowInfo>` passed below.
-        let out = unsafe { &mut *(data.0 as *mut Vec<WindowInfo>) };
-        if let Some(info) = describe(hwnd) {
+        // SAFETY: `data` is the `&mut (Vec<WindowInfo>, bool)` passed below.
+        let (out, minimized) = unsafe { &mut *(data.0 as *mut (Vec<WindowInfo>, bool)) };
+        if let Some(info) = describe(hwnd, *minimized) {
             out.push(info);
         }
         BOOL(1)
     }
-    let mut out: Vec<WindowInfo> = Vec::new();
-    // SAFETY: the callback only touches `out` through the LPARAM during the call.
+    let mut state: (Vec<WindowInfo>, bool) = (Vec::new(), minimized);
+    // SAFETY: the callback only touches `state` through the LPARAM during the call.
     unsafe {
-        let _ = EnumWindows(Some(callback), LPARAM(&mut out as *mut _ as isize));
+        let _ = EnumWindows(Some(callback), LPARAM(&mut state as *mut _ as isize));
     }
-    out
+    state.0
 }
 
 /// The foreground window if it is a capturable fullscreen application.
 pub fn foreground_fullscreen() -> Option<WindowInfo> {
     // SAFETY: simple Win32 query.
     let hwnd = unsafe { GetForegroundWindow() };
-    let info = describe(hwnd)?;
+    let info = describe(hwnd, false)?;
     let ignored = [
         "explorer.exe",
         "clutch.exe",
@@ -209,11 +220,15 @@ pub fn is_window_valid(hwnd: HWND, expected_pid: u32) -> bool {
     }
 }
 
-/// Describes a window if it's a normal, visible, capturable top-level window.
-fn describe(hwnd: HWND) -> Option<WindowInfo> {
+/// Describes a window if it's a normal, visible, capturable top-level window (or a minimized
+/// one, with `minimized`).
+fn describe(hwnd: HWND, minimized: bool) -> Option<WindowInfo> {
     // SAFETY: Win32 queries on a window handle; buffers are sized correctly.
     unsafe {
-        if hwnd.is_invalid() || !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
+        if hwnd.is_invalid()
+            || !IsWindowVisible(hwnd).as_bool()
+            || (!minimized && IsIconic(hwnd).as_bool())
+        {
             return None;
         }
         // Skip our own windows *before* any call that may send them a message

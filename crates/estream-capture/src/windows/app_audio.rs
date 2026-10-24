@@ -432,7 +432,7 @@ pub fn source_type() -> SourceType {
         "Application audio",
         "Capture one app's audio (games, browsers, music players)",
         |settings| {
-            let mut apps: Vec<String> = super::enumerate::windows()
+            let mut apps: Vec<String> = super::enumerate::picker_windows()
                 .into_iter()
                 .map(|w| w.exe)
                 .collect();
