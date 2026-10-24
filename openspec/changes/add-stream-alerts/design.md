@@ -64,6 +64,51 @@ message are inserted as text (never HTML).
 
 Test: the inspector's "Test" button per kind sends a sample event with a placeholder name.
 
+## Live text and alert packs
+Animations carry no text; the alerts page lays the event's text over the playing animation.
+
+**Template placeholders:** `{name}`, `{platform}` (name) or `{platform_icon}`, `{amount}`
+(formatted per kind: "500 bits", "5 subs", "$5.00", "40 viewers"), `{months}`, `{tier}`,
+`{message}`. Missing values collapse with their surrounding words where the template marks them
+optional (`[for {months} months]`). Values are inserted as text, never HTML.
+
+**Pack layout:**
+
+```
+<pack>/
+  pack.json                 name, author, version
+  sub/alert.webm            the animation (no text)
+  sub/sound.wav             one or more sounds (sound-2.wav … play in turn or at random)
+  sub/alert.json            text and timing for this kind
+  sub/big/…                 optional bigger variant, used at or above `big_at`
+  follow/ resub/ gift/ bits/ raid/ paid/
+```
+
+`alert.json`:
+
+```json
+{
+  "template": "{name} [subscribed for {months} months]",
+  "text_box": { "x": 0.18, "y": 0.62, "w": 0.64, "h": 0.14 },
+  "text_in": 0.6, "text_out": 4.2,
+  "enter": "fade-up", "leave": "fade",
+  "font": "Bebas Neue", "font_file": "font.ttf", "size": 64,
+  "color": "#ffffff", "name_color": "#8ec5ff", "outline": "#000000",
+  "duration": 5.0, "big_at": 10, "sounds": "random"
+}
+```
+
+The text box is in fractions of the animation's size, so a pack works at any canvas size. Text
+shrinks (down to 50 %) to fit the box on one or two lines. Per-source settings override any
+field (template, colours, sounds) without editing the pack.
+
+The built-in pack ships inside the app; user packs live in Clutch's data folder
+(`alerts/<pack>/`) and are picked per Alerts source. Replacing a single file (e.g. only the
+follow sound) is a per-source override, so the pack stays intact.
+
+**Advanced:** a pack kind may provide `alert.html` + CSS instead of `alert.json` for fully custom
+text animation; it receives the same event fields and runs in the same sandboxed page.
+
 ## Formats
 - Animation: WebM VP9 with alpha (best: small, smooth, transparent), animated WebP, APNG, GIF, or
   a still PNG. MOV/ProRes 4444 isn't playable in the browser and is listed as unsupported.

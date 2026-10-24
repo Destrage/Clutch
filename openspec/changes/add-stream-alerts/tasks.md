@@ -18,7 +18,10 @@
 - [ ] 4.1 `alerts` source type built on the browser source (canvas size, transparent, audio on)
 - [ ] 4.2 Bundled alerts page: queue, per-kind animation, sound, text template, layout, duration
 - [ ] 4.3 Inspector: per-kind settings, minimum amount, Test button
-- [ ] 4.4 Default animations and sounds (from the project owner) or empty kinds
+- [ ] 4.4 Live text: template placeholders, optional parts, text box, enter/leave timing, shrink to fit
+- [ ] 4.5 Alert packs: `pack.json` / per-kind `alert.json`, several sounds (in turn or random), big variants, per-source overrides
+- [ ] 4.6 Built-in pack from the project owner's animations and sounds
+- [ ] 4.7 Advanced: per-kind `alert.html` + CSS
 
 ## 5. Verification
 - [ ] 5.1 `cargo test --workspace`, `cargo clippy --workspace --all-targets`
