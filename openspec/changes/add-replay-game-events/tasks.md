@@ -27,3 +27,7 @@
 - [x] 5.2 Watcher tests: unfinished replay retried, truncated file, unsupported format, panicking parser, pre-existing replays ignored
 - [x] 5.3 Run `cargo test --workspace` and `cargo clippy --workspace --all-targets`
 - [ ] 5.4 Play one match of each game with recording on; confirm clips or markers line up with the moments
+
+## 6. Hype
+- [x] 6.1 Turn game-audio hype off while the running game's event integration is connected
+- [x] 6.2 Low game sensitivity: −16 dBFS loudness floor and a −34 dBFS baseline floor (tested against fight levels from real Valorant and PUBG sessions)

@@ -534,6 +534,13 @@ impl Clipper {
                     && d.settings.get("audio").and_then(|v| v.as_bool()) != Some(false)
             })
         });
+        // A game whose own events are connected clips those; its sound doesn't also make hype
+        // clips (the mic still can).
+        let game_reports_events = self
+            .detector
+            .current()
+            .and_then(|g| g.integration)
+            .is_some_and(|i| s.connected.contains(&i));
         let mut fired = None;
         for (id, meter) in &meters.sources {
             let Some(def) = snapshot.source(*id) else {
@@ -545,7 +552,7 @@ impl Clipper {
             } else {
                 kind == DESKTOP_AUDIO
             };
-            let cfg = if s.hype_game && game_sound {
+            let cfg = if s.hype_game && game_sound && !game_reports_events {
                 HypeConfig::game(s.hype_sensitivity)
             } else if s.hype_mic && MIC_AUDIO.contains(&kind) {
                 HypeConfig::mic(s.hype_sensitivity)
@@ -556,7 +563,9 @@ impl Clipper {
                 .hype
                 .entry(*id)
                 .or_insert_with(|| HypeDetector::new(cfg));
-            detector.set_sensitivity(s.hype_sensitivity);
+            if *detector.config() != cfg {
+                detector.set_config(cfg);
+            }
             let reading = meter.read();
             let rms = reading.rms[0].max(reading.rms[1]);
             // Every detector keeps listening (so its baseline stays current); one clip at most.

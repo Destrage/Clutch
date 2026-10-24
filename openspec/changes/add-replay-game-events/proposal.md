@@ -37,6 +37,7 @@ support pages tell users to turn on the game's replays when auto-clips don't tri
 
 ## Impact
 - Affected specs: `clips`.
+- Also tunes audio hype: off for games with a connected event integration, stricter on low.
 - Affected code: `estream-clips` (replay watcher framework, per-game parsers, new event kinds,
   marker alignment), `apps/estream` (per-game toggles in clip settings, post-match markers and
   clips in the recordings view).
