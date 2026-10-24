@@ -821,14 +821,24 @@ fn spawn_thumbnail(clip: PathBuf, at: f64, done: Sender<PathBuf>) {
     }
 }
 
+/// The "clip saved" sound (16-bit PCM WAV, built into the app).
+#[cfg(windows)]
+static SAVED_SOUND: &[u8] = include_bytes!("../assets/clip-saved.wav");
+
 /// Plays the "clip saved" sound.
 pub fn play_saved_sound() {
     #[cfg(windows)]
     {
-        use windows::Win32::System::Diagnostics::Debug::MessageBeep;
-        use windows::Win32::UI::WindowsAndMessaging::MB_ICONASTERISK;
-        // SAFETY: plays a system sound asynchronously; no pointers involved.
-        let _ = unsafe { MessageBeep(MB_ICONASTERISK) };
+        use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
+        // SAFETY: with SND_MEMORY the pointer is the WAV data, which is 'static, so it outlives
+        // the asynchronous playback.
+        let _ = unsafe {
+            PlaySoundW(
+                windows::core::PCWSTR(SAVED_SOUND.as_ptr().cast()),
+                None,
+                SND_MEMORY | SND_ASYNC | SND_NODEFAULT,
+            )
+        };
     }
 }
 
