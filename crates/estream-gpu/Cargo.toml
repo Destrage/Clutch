@@ -21,6 +21,8 @@ wgpu.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
+    "Wdk_Graphics_Direct3D",
     "Win32_Foundation",
     "Win32_Graphics_Direct3D12",
+    "Win32_System_Threading",
 ] }

@@ -174,6 +174,7 @@ fn main() -> anyhow::Result<()> {
         _ => {}
     }
     let gpu = GpuContext::new_headless(&GpuOptions::default())?;
+    gpu.raise_scheduling_priority();
     // Slint keeps the device and queue in a thread-local that is dropped during process
     // exit, after wgpu's own thread-locals are gone (which panics in wgpu's lock tracing).
     // Holding one reference for the life of the process means the GPU objects are never

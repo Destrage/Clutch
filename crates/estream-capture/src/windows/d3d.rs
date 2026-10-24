@@ -19,6 +19,10 @@ use windows::core::Interface;
 /// Format of shared capture textures in wgpu (sampled as sRGB → linear).
 pub const SHARED_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;
 
+const INTEL_VENDOR: u32 = 0x8086;
+/// Highest value `IDXGIDevice::SetGPUThreadPriority` accepts.
+const GPU_THREAD_PRIORITY: i32 = 7;
+
 /// A D3D11 device on the same GPU as wgpu, plus wgpu's D3D12 device.
 #[derive(Clone)]
 pub struct D3D11Interop {
@@ -72,6 +76,14 @@ impl D3D11Interop {
                 context.ok_or_else(|| CaptureError::Interop("no D3D11 context".into()))?;
             let mt: ID3D11Multithread = device.cast()?;
             let _ = mt.SetMultithreadProtected(true);
+            // Keep capture copies flowing while a game saturates the GPU (not on Intel GPUs;
+            // a raised value needs administrator rights, so failure is expected and harmless).
+            if gpu.info.vendor != INTEL_VENDOR {
+                let dxgi: IDXGIDevice = device.cast()?;
+                if let Err(e) = dxgi.SetGPUThreadPriority(GPU_THREAD_PRIORITY) {
+                    tracing::debug!(error = %e, "capture GPU thread priority not raised");
+                }
+            }
             Ok(Self {
                 device,
                 context,

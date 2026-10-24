@@ -336,7 +336,10 @@ impl IBaseFilter_Impl for DShowFilter_Impl {
         }
     }
 
-    #[allow(clippy::not_unsafe_ptr_arg_deref, reason = "COM signature, checked for null")]
+    #[allow(
+        clippy::not_unsafe_ptr_arg_deref,
+        reason = "COM signature, checked for null"
+    )]
     fn QueryFilterInfo(&self, info: *mut FILTER_INFO) -> Result<()> {
         // SAFETY: COM passes a valid structure or null.
         let Some(info) = (unsafe { info.as_mut() }) else {
