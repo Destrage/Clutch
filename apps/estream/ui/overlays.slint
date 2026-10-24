@@ -1,7 +1,7 @@
 import { Theme, Platform } from "theme.slint";
 import { Icons } from "icons.slint";
 import { PaletteEntry, Preset, SourceType, SettingsForm, DestinationRow, LiveRow } from "types.slint";
-import { Button, IconButton, Icon, Badge, TextField, TextArea, NumberField, Select, Toggle, SectionTitle } from "widgets.slint";
+import { Button, IconButton, Icon, Badge, TextField, TextArea, NumberField, Select, Slider, Toggle, SectionTitle } from "widgets.slint";
 import { KindIcon } from "panels.slint";
 
 // Full-window scrim with a centered card. Clicking the scrim calls `dismiss`.
@@ -1539,6 +1539,32 @@ export component SettingsDialog inherits Modal {
                         HorizontalLayout {
                             alignment: start;
                             Toggle { checked: root.form.chat-animate; toggled(v) => { root.set("chat-animate", v ? 1 : 0); } }
+                        }
+                    }
+                    SectionTitle { text: "EVENT SOUNDS"; }
+                    Text {
+                        text: "A sound for each kind of stream event, on your monitoring device (viewers don't hear it). Kinds without one play the chime. The bell in the chat header mutes them all.";
+                        color: Theme.text-muted;
+                        font-size: Theme.font-s;
+                        wrap: word-wrap;
+                    }
+                    for row[i] in root.form.event-sounds: SettingRow {
+                        label: row.label;
+                        hint: row.file == "" ? "Chime" : row.file;
+                        HorizontalLayout {
+                            alignment: start;
+                            spacing: 4px;
+                            IconButton { icon: Icons.folder-open; tooltip: "Choose a sound file"; clicked => { root.set("event-sound-pick", i); } }
+                            IconButton { icon: Icons.play; tooltip: "Play it"; clicked => { root.set("event-sound-play", i); } }
+                            if row.file != "": IconButton { icon: Icons.x; tooltip: "Use the chime"; clicked => { root.set("event-sound-clear", i); } }
+                        }
+                    }
+                    SettingRow {
+                        label: "Event sound volume";
+                        Slider {
+                            label: "Event sound volume";
+                            value: root.form.event-sound-volume;
+                            changed(v) => { root.set("event-sound-volume", v); }
                         }
                     }
                     Text { text: root.form.ffmpeg; color: Theme.text-faint; font-size: Theme.font-xs; }

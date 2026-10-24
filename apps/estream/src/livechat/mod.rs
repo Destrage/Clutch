@@ -3,6 +3,7 @@
 //! one platform or all of them through each platform's API.
 
 pub mod emotes;
+pub mod event;
 pub mod kick;
 pub mod twitch;
 mod ws;
@@ -54,7 +55,7 @@ pub struct Message {
     pub parts: Vec<emotes::Part>,
     pub time: chrono::DateTime<chrono::Local>,
     /// A follow, subscription, gift, donation or raid (shown highlighted), not a chat message.
-    pub event: bool,
+    pub event: Option<event::StreamEvent>,
 }
 
 impl Message {
@@ -424,7 +425,7 @@ mod tests {
             text: text.into(),
             parts: Vec::new(),
             time: chrono::Local::now(),
-            event: false,
+            event: None,
         }
     }
 

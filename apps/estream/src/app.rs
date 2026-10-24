@@ -167,6 +167,10 @@ pub struct App {
     /// Emote images and the layout of chat lines with emotes (one entry per `chat_lines` row).
     chat_emotes: crate::emotes::ChatEmotes,
     chat_seen: u64,
+    /// Plays stream event sounds on the monitoring device (started on first use).
+    event_sounds: Option<estream_media::sounds::SoundPlayer>,
+    /// Event sound files found missing (reported once each).
+    missing_sounds: std::collections::HashSet<PathBuf>,
     chat_shown: Option<(
         Vec<crate::ui::ChatStateRow>,
         Vec<Option<crate::livechat::Platform>>,
@@ -755,6 +759,8 @@ impl App {
             chat_lines: Rc::new(VecModel::default()),
             chat_emotes: crate::emotes::ChatEmotes::new(),
             chat_seen: 0,
+            event_sounds: None,
+            missing_sounds: Default::default(),
             chat_shown: None,
             chat_reply_to: Vec::new(),
             chat_sending: None,
@@ -1115,6 +1121,41 @@ impl App {
         w.set_chat_message(message.into());
     }
 
+    /// Plays the sound chosen for `kind` on the monitoring device, or the chime when none is set
+    /// (or its file is gone).
+    fn play_event_sound(&mut self, kind: crate::livechat::event::StreamEventKind) {
+        let Some(path) = self.settings.event_sounds.get(&kind).cloned() else {
+            crate::livechat::chime();
+            return;
+        };
+        if !path.is_file() {
+            if self.missing_sounds.insert(path.clone()) {
+                tracing::warn!(path = %path.display(), "event sound file is missing; chime instead");
+            }
+            crate::livechat::chime();
+            return;
+        }
+        let device = self.monitor_device();
+        if self
+            .event_sounds
+            .as_ref()
+            .is_none_or(|p| p.device() != device)
+        {
+            self.event_sounds = Some(estream_media::sounds::SoundPlayer::start(&device));
+        }
+        if let Some(player) = &self.event_sounds {
+            player.play(&path, self.settings.event_sound_volume);
+        }
+    }
+
+    /// The device event sounds are heard on: the monitoring device (empty = default output).
+    fn monitor_device(&self) -> String {
+        self.engine
+            .as_ref()
+            .map(|e| e.snapshot().audio.monitor_device.clone())
+            .unwrap_or_default()
+    }
+
     /// The combined chat: adds new messages to the list, and updates the reader states and the
     /// "Send to" choices when they change.
     fn tick_live_chat(&mut self, w: &AppWindow) {
@@ -1122,7 +1163,11 @@ impl App {
         let feed = self.livechat.feed().clone();
         let (new, seen) = feed.since(self.chat_seen);
         self.chat_seen = seen;
-        let chime = self.settings.chat_chime && new.iter().any(|m| m.event);
+        // One sound per batch, for the first event in it.
+        let sound_for = new
+            .iter()
+            .find_map(|m| m.event.as_ref().map(|e| e.kind))
+            .filter(|_| self.settings.chat_chime);
         for m in new {
             let parts = if self.settings.chat_emotes {
                 m.parts
@@ -1131,7 +1176,7 @@ impl App {
             };
             let (pieces, body_height) = self.chat_emotes.push(parts);
             self.chat_lines.push(crate::ui::ChatLine {
-                event: m.event,
+                event: m.event.is_some(),
                 kind: m.platform.key().into(),
                 author: m.author.into(),
                 author_color: parse_color(&m.color)
@@ -1142,8 +1187,8 @@ impl App {
                 body_height,
             });
         }
-        if chime {
-            crate::livechat::chime();
+        if let Some(kind) = sound_for {
+            self.play_event_sound(kind);
         }
         // Keep the list as long as the feed.
         while self.chat_lines.row_count() > 300 {
@@ -5500,6 +5545,23 @@ impl App {
             chat_emotes: self.settings.chat_emotes,
             chat_third_party: self.settings.chat_third_party,
             chat_animate: self.settings.chat_animate,
+            event_sounds: ModelRc::new(VecModel::from(
+                crate::livechat::event::StreamEventKind::ALL
+                    .iter()
+                    .map(|k| crate::ui::EventSoundRow {
+                        label: k.label().into(),
+                        file: self
+                            .settings
+                            .event_sounds
+                            .get(k)
+                            .and_then(|p| p.file_name())
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default()
+                            .into(),
+                    })
+                    .collect::<Vec<_>>(),
+            )),
+            event_sound_volume: self.settings.event_sound_volume,
             remote_enabled: self.settings.remote.enabled,
             remote_port: self.settings.remote.port as f32,
             remote_auth: self.settings.remote.auth,
@@ -6202,6 +6264,31 @@ impl App {
                 crate::livechat::emotes::set_third_party(value > 0.5);
             }
             "chat-animate" => self.settings.chat_animate = value > 0.5,
+            "event-sound-pick" | "event-sound-play" | "event-sound-clear" => {
+                use crate::livechat::event::StreamEventKind;
+                let Some(&kind) = StreamEventKind::ALL.get(value.round().max(0.0) as usize) else {
+                    return;
+                };
+                match field {
+                    "event-sound-pick" => {
+                        let Some(path) = rfd::FileDialog::new()
+                            .set_title(format!("Sound for {}", kind.label()))
+                            .add_filter("Sound", &["wav", "ogg", "mp3", "flac", "m4a"])
+                            .pick_file()
+                        else {
+                            return;
+                        };
+                        self.missing_sounds.remove(&path);
+                        self.settings.event_sounds.insert(kind, path);
+                        self.play_event_sound(kind);
+                    }
+                    "event-sound-play" => self.play_event_sound(kind),
+                    _ => {
+                        self.settings.event_sounds.remove(&kind);
+                    }
+                }
+            }
+            "event-sound-volume" => self.settings.event_sound_volume = value.clamp(0.0, 1.0),
             "remote-enable" => {
                 self.settings.remote.enabled = value > 0.5;
                 self.remote_restart_at = Some(Instant::now());

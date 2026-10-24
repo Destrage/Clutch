@@ -28,7 +28,7 @@ Mapping from what each reader already parses:
 | Raid | `channel.raid` | – | – |
 | Paid | – | `kicks.gifted` | `superChatEvent`, `superStickerEvent` |
 
-The display text stays as today (built from the typed event), so the chat looks the same.
+Each reader keeps building the display text as today (the platforms word things differently, e.g. YouTube "became a member"), so the chat looks the same; the typed event travels alongside it.
 
 ## Event sounds
 `Settings.event_sounds: HashMap<EventKind, PathBuf>` plus a volume. Sounds play through the

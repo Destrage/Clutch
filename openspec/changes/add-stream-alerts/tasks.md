@@ -1,13 +1,13 @@
 # Tasks: add-stream-alerts
 
 ## 1. Typed events
-- [ ] 1.1 `StreamEvent` with kind, platform, name, amount, months, tier, message; readers fill it (Twitch, Kick, YouTube)
-- [ ] 1.2 Chat event text built from the typed event (unchanged look); tests per platform payload
+- [x] 1.1 `StreamEvent` with kind, platform, name, amount, months, tier, message; readers fill it (Twitch, Kick, YouTube)
+- [x] 1.2 Chat event text unchanged (built per platform as before); tests per platform payload for the typed fields
 
 ## 2. Event sounds
-- [ ] 2.1 Per-kind sound files and a volume in settings; chime as fallback; bell mutes all
-- [ ] 2.2 Short-sound player (decode once, cache, play asynchronously)
-- [ ] 2.3 Settings UI: a sound picker and play button per kind
+- [x] 2.1 Per-kind sound files and a volume in settings; chime as fallback; bell mutes all
+- [x] 2.2 Short-sound player (`estream-media::sounds`: decode once with FFmpeg, cache, mix, play on the monitoring device)
+- [x] 2.3 Settings UI: a sound picker and play button per kind
 
 ## 3. Overlay server
 - [ ] 3.1 Loopback HTTP/WebSocket server with a per-install token; starts when an overlay source exists

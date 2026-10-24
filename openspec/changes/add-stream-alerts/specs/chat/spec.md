@@ -3,7 +3,7 @@
 ### Requirement: Typed Stream Events
 Every stream event in the combined chat SHALL carry its kind (follow, sub, resub, gift, bits, raid
 or paid message), platform, viewer name, and where the platform provides them the amount, months,
-tier and message. The chat line text SHALL be built from these fields.
+tier and message, alongside the chat line text.
 
 #### Scenario: Twitch resub
 - **WHEN** Twitch reports a 3-month Tier 2 resub with a message
