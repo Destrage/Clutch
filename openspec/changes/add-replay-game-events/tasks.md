@@ -20,7 +20,7 @@
 
 ## 4. UI
 - [x] 4.1 Per-game Connect toggle in clip settings (off by default) with the "Turn on replays" hint when the folder is missing (PUBG)
-- [ ] 4.2 Show replay markers in the recordings view and save clips from them
+- [x] 4.2 Show replay markers in the recordings view (late markers update a finished recording's events) and save clips from them (clicking a marker in a recording trims around it)
 
 ## 5. Verification
 - [x] 5.1 Parser unit tests against synthetic fixtures shaped like real replays (PUBG), plus an ignored test that reads the newest local replay

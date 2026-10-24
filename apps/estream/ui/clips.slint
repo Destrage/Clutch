@@ -338,6 +338,12 @@ export component ClipsDialog inherits Modal {
             }
 
             SectionTitle { text: "TRIM"; }
+            if root.form.recordings && root.form.ticks.length > 0: Text {
+                text: "Click a marker on the seek bar to trim around that moment, then save it as a clip.";
+                color: Theme.text-faint;
+                font-size: Theme.font-xs;
+                wrap: word-wrap;
+            }
             HorizontalLayout {
                 spacing: 8px;
                 Text { text: "In"; width: 28px; color: Theme.text-muted; font-size: Theme.font-s; vertical-alignment: center; }

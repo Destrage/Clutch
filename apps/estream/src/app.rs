@@ -4711,15 +4711,34 @@ impl App {
                     .rev()
                     .find(|(_, started, stopped)| at >= *started && at <= *stopped)
                 {
+                    let path = path.clone();
+                    let at = at.duration_since(*started).as_secs_f64();
                     let mut markers =
-                        estream_clips::markers::Markers::load(path).unwrap_or_default();
+                        estream_clips::markers::Markers::load(&path).unwrap_or_default();
                     markers.push(estream_clips::markers::Marker {
-                        kind,
+                        kind: kind.clone(),
                         game,
-                        at: at.duration_since(*started).as_secs_f64(),
+                        at,
                     });
-                    if let Err(e) = markers.save(path) {
+                    if let Err(e) = markers.save(&path) {
                         tracing::warn!(error = %e, "couldn't save the recording markers");
+                    }
+                    // Its details were read when it finished: add the late event to them, so
+                    // the Clips view shows it (a recording not read yet picks it up then).
+                    if self
+                        .recordings
+                        .get(&path)
+                        .is_some_and(|c| c.meta.duration > 0.0)
+                    {
+                        let changed = self.recordings.update(&path, |meta| {
+                            let i = meta.events.partition_point(|m| m.at <= at);
+                            meta.events.insert(i, estream_clips::ClipMark { kind, at });
+                        });
+                        if let Err(e) = changed {
+                            tracing::warn!(error = %e, "couldn't update a recording's events");
+                        } else if self.showing_recordings() {
+                            self.refresh_clips();
+                        }
                     }
                 }
             }
@@ -4992,14 +5011,24 @@ impl App {
             "seek-done" => self.clips_ui.seek_done(),
             "seek-by" => self.clips_ui.seek_by(value as f64, duration, &monitor),
             "seek-event" => {
-                let at = self
+                let event = self
                     .clips_ui
                     .selected
                     .as_ref()
                     .and_then(|p| self.shown_library().get(p))
                     .and_then(|c| c.meta.events.get(index))
-                    .map(|e| e.at);
-                if let Some(at) = at {
+                    .map(|e| (e.at, e.kind.window()));
+                if let Some((at, (pre, post))) = event {
+                    // In a recording, a marker is also where a clip starts: trim around it, so
+                    // "Save as new clip" saves that moment.
+                    if self.showing_recordings() && duration > 0.0 {
+                        // Out to the end first, so the old Out can't hold the new In back.
+                        self.clips_ui.set_trim(true, duration, duration);
+                        self.clips_ui.set_trim(false, (at - pre).max(0.0), duration);
+                        self.clips_ui
+                            .set_trim(true, (at + post).min(duration), duration);
+                        self.refresh_clips();
+                    }
                     let to = (at - crate::clips::TICK_LEAD).max(0.0);
                     self.clips_ui.seek(to, false, &monitor);
                 }
