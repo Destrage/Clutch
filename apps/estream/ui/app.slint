@@ -715,6 +715,71 @@ export component AppWindow inherits Window {
         }
     }
 
+    if root.montage-open: MontageDialog {
+        as-page: true;
+        x: root.sidebar-width;
+        width: root.width - root.sidebar-width;
+        form: root.montage-form;
+        action(f, i, v) => { root.montage-action(f, i, v); }
+        text(f, s) => { root.montage-text(f, s); }
+        key(t, c, s) => { root.montage-key(t, c, s); }
+        dismiss => {
+            root.montage-action("close", 0, 0);
+            root.montage-open = false;
+            main-keys.focus();
+        }
+    }
+
+    // The Chat page (beside the sidebar), for chatting when not live.
+    if root.chat-open && !root.deck-visible: Rectangle {
+        x: root.sidebar-width;
+        width: root.width - root.sidebar-width;
+        background: Theme.bg;
+        VerticalLayout {
+            padding: 20px;
+            spacing: 14px;
+            Text { text: "Chat"; color: Theme.text; font-family: Theme.font-display; font-size: 28px; font-weight: 600; }
+            HorizontalLayout {
+                alignment: start;
+                vertical-stretch: 1;
+                ChatPanel {
+                    width: min(560px, root.width - root.sidebar-width - 40px);
+                    tabs: root.chat-tabs;
+                    selected: root.chat-selected;
+                    frame: root.chat-frame;
+                    message: root.chat-message;
+                    people-total: root.chat-people-total;
+                    people: root.chat-people;
+                    live: root.chat-live;
+                    select(i) => { root.chat-select(i); }
+                    pointer(k, x, y, b, dx, dy) => { root.chat-pointer(k, x, y, b, dx, dy); }
+                    key(t, d, c, s, a) => { root.chat-key(t, d, c, s, a); }
+                    home => { root.chat-home(); }
+                    reload => { root.chat-reload(); }
+                    resized(w, h) => { root.chat-resized(w, h); }
+                    send(t, i) => { root.chat-send(t, i); }
+                    toggle-chime => { root.chat-toggle-chime(); }
+                    emote-ms: root.chat-emote-ms;
+                    text-width(w) => { root.chat-text-width(w); }
+                }
+            }
+        }
+    }
+
+    if root.clips-open: ClipsDialog {
+        as-page: true;
+        x: root.sidebar-width;
+        width: root.width - root.sidebar-width;
+        form: root.clips-form;
+        action(f, i, v) => { root.clips-action(f, i, v); }
+        text(f, s) => { root.clips-text(f, s); }
+        dismiss => {
+            root.clips-action("close", 0, 0);
+            root.clips-open = false;
+            main-keys.focus();
+        }
+    }
+
     if root.add-source-open: AddSourceDialog {
         types: root.source-types;
         pick(kind) => {
@@ -827,71 +892,6 @@ export component AppWindow inherits Window {
         // Rust closes it (it stays open while the details are being applied).
         dismiss => {
             root.details-closed();
-            main-keys.focus();
-        }
-    }
-
-    if root.montage-open: MontageDialog {
-        as-page: true;
-        x: root.sidebar-width;
-        width: root.width - root.sidebar-width;
-        form: root.montage-form;
-        action(f, i, v) => { root.montage-action(f, i, v); }
-        text(f, s) => { root.montage-text(f, s); }
-        key(t, c, s) => { root.montage-key(t, c, s); }
-        dismiss => {
-            root.montage-action("close", 0, 0);
-            root.montage-open = false;
-            main-keys.focus();
-        }
-    }
-
-    // The Chat page (beside the sidebar), for chatting when not live.
-    if root.chat-open && !root.deck-visible: Rectangle {
-        x: root.sidebar-width;
-        width: root.width - root.sidebar-width;
-        background: Theme.bg;
-        VerticalLayout {
-            padding: 20px;
-            spacing: 14px;
-            Text { text: "Chat"; color: Theme.text; font-family: Theme.font-display; font-size: 28px; font-weight: 600; }
-            HorizontalLayout {
-                alignment: start;
-                vertical-stretch: 1;
-                ChatPanel {
-                    width: min(560px, root.width - root.sidebar-width - 40px);
-                    tabs: root.chat-tabs;
-                    selected: root.chat-selected;
-                    frame: root.chat-frame;
-                    message: root.chat-message;
-                    people-total: root.chat-people-total;
-                    people: root.chat-people;
-                    live: root.chat-live;
-                    select(i) => { root.chat-select(i); }
-                    pointer(k, x, y, b, dx, dy) => { root.chat-pointer(k, x, y, b, dx, dy); }
-                    key(t, d, c, s, a) => { root.chat-key(t, d, c, s, a); }
-                    home => { root.chat-home(); }
-                    reload => { root.chat-reload(); }
-                    resized(w, h) => { root.chat-resized(w, h); }
-                    send(t, i) => { root.chat-send(t, i); }
-                    toggle-chime => { root.chat-toggle-chime(); }
-                    emote-ms: root.chat-emote-ms;
-                    text-width(w) => { root.chat-text-width(w); }
-                }
-            }
-        }
-    }
-
-    if root.clips-open: ClipsDialog {
-        as-page: true;
-        x: root.sidebar-width;
-        width: root.width - root.sidebar-width;
-        form: root.clips-form;
-        action(f, i, v) => { root.clips-action(f, i, v); }
-        text(f, s) => { root.clips-text(f, s); }
-        dismiss => {
-            root.clips-action("close", 0, 0);
-            root.clips-open = false;
             main-keys.focus();
         }
     }
