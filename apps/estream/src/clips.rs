@@ -8,6 +8,8 @@ use crate::settings::ClipSettings;
 use estream_clips::integrations::GameEvent;
 use estream_clips::integrations::gsi::{self, GsiServer};
 use estream_clips::integrations::league::LeaguePoller;
+use estream_clips::integrations::replay::ReplayWatcher;
+use estream_clips::integrations::replay::pubg::Pubg;
 use estream_clips::library::{ClipMark, ClipMeta, Library, Trigger};
 use estream_clips::{
     ClipEvent, ClipRequest, Detection, Detector, EventKind, GameList, HypeConfig, HypeDetector,
@@ -109,6 +111,8 @@ pub struct Clipper {
     /// What the GSI server was started with (restart when it changes).
     gsi_config: Option<(u16, String, String)>,
     league: Option<LeaguePoller>,
+    /// Reads PUBG's replays while it runs (its events arrive when the player's match ends).
+    pubg: Option<ReplayWatcher>,
     hotkey: Option<Box<dyn estream_automation::hotkeys::GlobalHotkeys>>,
     hotkey_chord: Option<estream_project::Chord>,
     /// Whether the last hotkey registration's outcome was reported (some systems answer
@@ -130,11 +134,13 @@ pub fn trigger_kind(kind: &EventKind) -> Option<GameEventKind> {
     Some(match kind {
         EventKind::Manual => return None,
         EventKind::Kill => GameEventKind::Kill,
+        EventKind::Knock => GameEventKind::Knock,
         EventKind::MultiKill { .. } => GameEventKind::MultiKill,
         EventKind::Ace => GameEventKind::Ace,
         EventKind::Death => GameEventKind::Death,
         EventKind::RoundWin => GameEventKind::RoundWin,
         EventKind::MatchWin => GameEventKind::MatchWin,
+        EventKind::Goal => GameEventKind::Goal,
         EventKind::Objective { .. } => GameEventKind::Objective,
         EventKind::Hype => GameEventKind::Hype,
     })
@@ -170,6 +176,7 @@ impl Clipper {
             gsi: None,
             gsi_config: None,
             league: None,
+            pubg: None,
             hotkey: estream_automation::hotkeys::start(),
             hotkey_chord: None,
             hotkey_reported: true,
@@ -278,6 +285,9 @@ impl Clipper {
         }
         if !s.connected.contains(&Integration::LeagueLiveClient) {
             self.league = None;
+        }
+        if !s.connected.contains(&Integration::PubgReplay) {
+            self.pubg = None;
         }
         if !(s.hype_game || s.hype_mic) {
             self.hype.clear();
@@ -414,6 +424,10 @@ impl Clipper {
                     if game.integration == Some(Integration::LeagueLiveClient) {
                         self.league = None;
                     }
+                    if game.integration == Some(Integration::PubgReplay) {
+                        // Dropping it reads a replay written just before the game closed.
+                        self.pubg = None;
+                    }
                     if self.buffer.is_some() {
                         self.stopping = Some(now);
                     }
@@ -421,6 +435,24 @@ impl Clipper {
                     out.push(Notice::GameStopped(game.name));
                 }
                 Detection::AskIsGame { exe, title } => out.push(Notice::AskIsGame { exe, title }),
+            }
+        }
+        // PUBG's replay watcher runs while PUBG does, including when it was connected with the
+        // game already open.
+        if self.pubg.is_none()
+            && ctx.settings.connected.contains(&Integration::PubgReplay)
+            && self
+                .detector
+                .current()
+                .is_some_and(|g| g.integration == Some(Integration::PubgReplay))
+        {
+            match ReplayWatcher::start(Box::new(Pubg), self.events_tx.clone()) {
+                Some(Ok(w)) => {
+                    tracing::info!("PUBG replay watcher started");
+                    self.pubg = Some(w);
+                }
+                Some(Err(e)) => tracing::warn!(error = %e, "PUBG replay watcher didn't start"),
+                None => {}
             }
         }
         // Clip mode switched on while a game is already running.
@@ -462,6 +494,13 @@ impl Clipper {
         if self.buffer.is_none() && ctx.studio_replay.is_none() {
             return; // nothing to clip from
         }
+        // Replay-file events arrive after the match: clip only what clip mode still holds
+        // (the recording gets a marker either way).
+        let age = Instant::now().saturating_duration_since(at) + Duration::from_secs(pre as u64);
+        if self.buffer.is_some() && age > Duration::from_secs(ctx.settings.buffer_seconds as u64) {
+            tracing::debug!(kind = %kind.label(), "event is older than the clip buffer");
+            return;
+        }
         let _ = self.request(
             kind,
             game,
@@ -495,6 +534,14 @@ impl Clipper {
                     && d.settings.get("audio").and_then(|v| v.as_bool()) != Some(false)
             })
         });
+        // A game that reports its events live (and is connected) clips those; its sound doesn't
+        // also make hype clips (the mic still can). PUBG's replay events arrive only after the
+        // match, and some modes (Team Deathmatch) write no replay, so hype stays on there.
+        let game_reports_events = self
+            .detector
+            .current()
+            .and_then(|g| g.integration)
+            .is_some_and(|i| i != Integration::PubgReplay && s.connected.contains(&i));
         let mut fired = None;
         for (id, meter) in &meters.sources {
             let Some(def) = snapshot.source(*id) else {
@@ -506,7 +553,7 @@ impl Clipper {
             } else {
                 kind == DESKTOP_AUDIO
             };
-            let cfg = if s.hype_game && game_sound {
+            let cfg = if s.hype_game && game_sound && !game_reports_events {
                 HypeConfig::game(s.hype_sensitivity)
             } else if s.hype_mic && MIC_AUDIO.contains(&kind) {
                 HypeConfig::mic(s.hype_sensitivity)
@@ -517,7 +564,9 @@ impl Clipper {
                 .hype
                 .entry(*id)
                 .or_insert_with(|| HypeDetector::new(cfg));
-            detector.set_sensitivity(s.hype_sensitivity);
+            if *detector.config() != cfg {
+                detector.set_config(cfg);
+            }
             let reading = meter.read();
             let rms = reading.rms[0].max(reading.rms[1]);
             // Every detector keeps listening (so its baseline stays current); one clip at most.

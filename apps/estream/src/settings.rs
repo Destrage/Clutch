@@ -281,11 +281,11 @@ impl Default for AutoRule {
 pub fn default_window(event: estream_project::GameEventKind) -> (u32, u32) {
     use estream_project::GameEventKind as K;
     match event {
-        K::Kill | K::Death => (10, 3),
+        K::Kill | K::Knock | K::Death => (10, 3),
         K::MultiKill | K::Ace => (15, 4),
         K::RoundWin | K::MatchWin => (15, 5),
         K::Objective => (12, 3),
-        K::Hype => (12, 4),
+        K::Hype | K::Goal => (12, 4),
     }
 }
 
@@ -306,6 +306,7 @@ pub fn integration_events(
         ],
         I::Dota2Gsi => &[K::Kill, K::MultiKill, K::MatchWin, K::Death],
         I::LeagueLiveClient => &[K::Kill, K::MultiKill, K::Ace, K::Objective, K::MatchWin],
+        I::PubgReplay => &[K::Kill, K::Knock, K::MatchWin, K::Death],
     }
 }
 
@@ -379,6 +380,10 @@ impl ClipSettings {
             (I::Cs2Gsi, "Counter-Strike 2"),
             (I::Dota2Gsi, "Dota 2"),
             (I::LeagueLiveClient, "League of Legends"),
+            (
+                I::PubgReplay,
+                estream_clips::integrations::replay::pubg::GAME,
+            ),
         ] {
             for &event in integration_events(integration) {
                 if !self
@@ -546,6 +551,8 @@ impl Settings {
             Err(_) => Self::default(),
         };
         settings.migrate();
+        // Integrations added since the file was saved get their default rules.
+        settings.clips.fill_rules();
         // The accent before the Clutch look; anyone who kept it gets the new default.
         if settings.accent.eq_ignore_ascii_case("#6c8cff") {
             settings.accent = DEFAULT_ACCENT.into();

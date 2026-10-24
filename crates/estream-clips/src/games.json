@@ -10,7 +10,7 @@
   { "name": "Call of Duty", "exe": ["cod.exe"] },
   { "name": "Call of Duty: Modern Warfare", "exe": ["ModernWarfare.exe"] },
   { "name": "Call of Duty: Black Ops Cold War", "exe": ["BlackOpsColdWar.exe"] },
-  { "name": "PUBG: Battlegrounds", "exe": ["TslGame.exe"], "steam_app": 578080 },
+  { "name": "PUBG: Battlegrounds", "exe": ["TslGame.exe"], "steam_app": 578080, "integration": "pubg_replay" },
   { "name": "Rainbow Six Siege", "exe": ["RainbowSix.exe", "RainbowSix_Vulkan.exe", "RainbowSix_BE.exe"], "steam_app": 359550 },
   { "name": "Minecraft", "exe": ["Minecraft.Windows.exe"] },
   { "name": "Grand Theft Auto V", "exe": ["GTA5.exe", "GTA5_Enhanced.exe"], "steam_app": 271590 },

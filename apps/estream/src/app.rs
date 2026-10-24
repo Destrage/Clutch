@@ -146,6 +146,9 @@ pub struct App {
     recordings: estream_clips::Library,
     /// Markers for the recording in progress: its file, when it started, the markers so far.
     markers: Option<(PathBuf, Instant, estream_clips::markers::Markers)>,
+    /// Recordings finished this session (file, started, stopped), newest last, so events that
+    /// arrive late (from replay files) still get a marker in the recording that covered them.
+    finished_recordings: Vec<(PathBuf, Instant, Instant)>,
     /// A fullscreen program offered as a game (exe, window title), until answered.
     clip_ask: Option<(String, String)>,
     /// The Clips view.
@@ -744,6 +747,7 @@ impl App {
             clipper,
             recordings,
             markers: None,
+            finished_recordings: Vec::new(),
             clip_ask: None,
             clips_ui: crate::clips::ClipsUi::default(),
             chat: crate::chat::ChatUi::default(),
@@ -4374,10 +4378,17 @@ impl App {
                     };
                     self.toast(message, false);
                     // The markers follow the recording if it was remuxed to MP4.
-                    if let (Some((original, ..)), Some(last)) = (self.markers.take(), paths.first())
-                        && let Err(e) = estream_clips::markers::Markers::rename(&original, last)
+                    if let (Some((original, started, _)), Some(last)) =
+                        (self.markers.take(), paths.first())
                     {
-                        tracing::warn!(error = %e, "couldn't move the recording markers");
+                        if let Err(e) = estream_clips::markers::Markers::rename(&original, last) {
+                            tracing::warn!(error = %e, "couldn't move the recording markers");
+                        }
+                        self.finished_recordings
+                            .push((last.clone(), started, Instant::now()));
+                        if self.finished_recordings.len() > 8 {
+                            self.finished_recordings.remove(0);
+                        }
                     }
                     self.last_recording = paths.first().cloned();
                     self.last_output = paths.into_iter().next();
@@ -4531,11 +4542,31 @@ impl App {
                     runner.game_event(game.as_deref().unwrap_or(""), t, at);
                     self.runner = Some(runner);
                 }
-                if let Some((path, started, markers)) = &mut self.markers {
+                // Into the recording that was running at `at`: the current one, or (for events
+                // read from replay files after the match) one that has finished since.
+                if let Some((path, started, markers)) = &mut self.markers
+                    && at >= *started
+                {
                     markers.push(estream_clips::markers::Marker {
                         kind,
                         game,
-                        at: at.saturating_duration_since(*started).as_secs_f64(),
+                        at: at.duration_since(*started).as_secs_f64(),
+                    });
+                    if let Err(e) = markers.save(path) {
+                        tracing::warn!(error = %e, "couldn't save the recording markers");
+                    }
+                } else if let Some((path, started, _)) = self
+                    .finished_recordings
+                    .iter()
+                    .rev()
+                    .find(|(_, started, stopped)| at >= *started && at <= *stopped)
+                {
+                    let mut markers =
+                        estream_clips::markers::Markers::load(path).unwrap_or_default();
+                    markers.push(estream_clips::markers::Marker {
+                        kind,
+                        game,
+                        at: at.duration_since(*started).as_secs_f64(),
                     });
                     if let Err(e) = markers.save(path) {
                         tracing::warn!(error = %e, "couldn't save the recording markers");
@@ -5627,12 +5658,16 @@ impl App {
     }
 
     /// The integrations shown in Settings → Clips, in order.
-    const CLIP_INTEGRATIONS: [(estream_clips::Integration, &'static str); 3] = [
+    const CLIP_INTEGRATIONS: [(estream_clips::Integration, &'static str); 4] = [
         (estream_clips::Integration::Cs2Gsi, "Counter-Strike 2"),
         (estream_clips::Integration::Dota2Gsi, "Dota 2"),
         (
             estream_clips::Integration::LeagueLiveClient,
             "League of Legends",
+        ),
+        (
+            estream_clips::Integration::PubgReplay,
+            estream_clips::integrations::replay::pubg::GAME,
         ),
     ];
 
@@ -5649,6 +5684,15 @@ impl App {
                     (false, _) => "Not connected".to_owned(),
                     (true, Integration::LeagueLiveClient) => {
                         "Connected · events arrive while a match is on".to_owned()
+                    }
+                    (true, Integration::PubgReplay) => {
+                        if estream_clips::integrations::replay::pubg::folder()
+                            .is_some_and(|f| f.is_dir())
+                        {
+                            "Connected · events arrive when a Battle Royale match ends (other modes save no replay)".to_owned()
+                        } else {
+                            "Turn on replays in PUBG to get events".to_owned()
+                        }
                     }
                     (true, _) => match self.clipper.last_seen(*integration) {
                         Some(t) if t.elapsed() < Duration::from_secs(30) => {
@@ -5818,6 +5862,18 @@ impl App {
                         }
                         self.toast(
                             format!("{name} connected: clips start in your next match"),
+                            false,
+                        );
+                        return true;
+                    }
+                    Integration::PubgReplay => {
+                        if !c.connected.contains(&integration) {
+                            c.connected.push(integration);
+                        }
+                        self.toast(
+                            format!(
+                                "{name} connected: kills, knocks and wins are read from its replay when each match ends"
+                            ),
                             false,
                         );
                         return true;

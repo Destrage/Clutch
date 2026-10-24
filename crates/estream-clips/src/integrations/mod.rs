@@ -1,7 +1,9 @@
-//! Game integrations: official local event APIs that report kills, wins and objectives.
+//! Game integrations: official local event APIs that report kills, wins and objectives, and
+//! replay files that games write to the local disk.
 
 pub mod gsi;
 pub mod league;
+pub mod replay;
 pub mod steam;
 
 use crate::event::EventKind;
