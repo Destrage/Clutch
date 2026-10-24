@@ -187,47 +187,53 @@ export component AddSourceDialog inherits Modal {
         color: Theme.text-muted;
         font-size: Theme.font-s;
     }
-    VerticalLayout {
-        padding: 12px;
-        spacing: 4px;
-        for t in root.types: Rectangle {
-            height: 54px;
-            border-radius: Theme.radius-m;
-            background: t.available && type-ta.has-hover ? Theme.hover : transparent;
-            opacity: t.available ? 1 : 0.55;
-            accessible-role: button;
-            accessible-label: t.title;
-            accessible-enabled: t.available;
-            accessible-action-default => { if (t.available) { root.pick(t.kind); } }
-            type-ta := TouchArea {
-                enabled: t.available;
-                mouse-cursor: MouseCursor.pointer;
-                clicked => { root.pick(t.kind); }
-            }
-            HorizontalLayout {
-                padding-left: 10px;
-                padding-right: 10px;
-                spacing: 12px;
-                VerticalLayout {
-                    alignment: center;
-                    Rectangle {
-                        width: 36px;
-                        height: 36px;
-                        border-radius: Theme.radius-m;
-                        background: t.available ? Theme.accent-soft : Theme.surface-3;
-                        KindIcon { kind: t.kind; size: 17px; tint: t.available ? Theme.accent : Theme.text-faint; }
+    // Scrolls once the list is taller than the window allows.
+    Flickable {
+        height: min(list.preferred-height, root.height - 140px);
+        content-height: list.preferred-height;
+        list := VerticalLayout {
+            padding: 12px;
+            spacing: 4px;
+            alignment: start;
+            for t in root.types: Rectangle {
+                height: 54px;
+                border-radius: Theme.radius-m;
+                background: t.available && type-ta.has-hover ? Theme.hover : transparent;
+                opacity: t.available ? 1 : 0.55;
+                accessible-role: button;
+                accessible-label: t.title;
+                accessible-enabled: t.available;
+                accessible-action-default => { if (t.available) { root.pick(t.kind); } }
+                type-ta := TouchArea {
+                    enabled: t.available;
+                    mouse-cursor: MouseCursor.pointer;
+                    clicked => { root.pick(t.kind); }
+                }
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    spacing: 12px;
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 36px;
+                            height: 36px;
+                            border-radius: Theme.radius-m;
+                            background: t.available ? Theme.accent-soft : Theme.surface-3;
+                            KindIcon { kind: t.kind; size: 17px; tint: t.available ? Theme.accent : Theme.text-faint; }
+                        }
                     }
-                }
-                VerticalLayout {
-                    alignment: center;
-                    spacing: 2px;
-                    horizontal-stretch: 1;
-                    Text { text: t.title; color: Theme.text; font-size: Theme.font-m; font-weight: 600; }
-                    Text { text: t.description; color: Theme.text-muted; font-size: Theme.font-s; overflow: elide; }
-                }
-                if !t.available: VerticalLayout {
-                    alignment: center;
-                    Badge { text: "Soon"; }
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 2px;
+                        horizontal-stretch: 1;
+                        Text { text: t.title; color: Theme.text; font-size: Theme.font-m; font-weight: 600; }
+                        Text { text: t.description; color: Theme.text-muted; font-size: Theme.font-s; overflow: elide; }
+                    }
+                    if !t.available: VerticalLayout {
+                        alignment: center;
+                        Badge { text: "Soon"; }
+                    }
                 }
             }
         }
