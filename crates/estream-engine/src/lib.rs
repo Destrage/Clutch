@@ -31,7 +31,7 @@ pub use source::{
     NOT_ON_THIS_SYSTEM, SourceContext, SourceError, SourceFrame, SourceRegistry, SourceStatus,
     SourceType, VideoSource,
 };
-pub use video::{CanvasFrame, CanvasOutput, SourceInfo, VideoCore};
+pub use video::{CanvasFrame, CanvasOutput, SourceInfo, UiPreview, VideoCore};
 
 pub use estream_audio as audio_engine;
 pub use estream_core as core;

@@ -44,7 +44,10 @@ pub struct App {
     window: slint::Weak<AppWindow>,
     paths: Paths,
     pub settings: Settings,
+    /// The UI's GPU device (Slint draws with it; clips and montages render on it).
     gpu: GpuContext,
+    /// The studio engine's device: its own on Windows, else the UI's.
+    engine_gpu: GpuContext,
     engine: Option<Engine>,
     subscription: Option<Subscription>,
     collection: PathBuf,
@@ -103,6 +106,9 @@ pub struct App {
     studio: bool,
     preview_scene: Option<SceneId>,
     last_preview_sequence: u64,
+    /// The program and studio Preview pictures on the UI's device.
+    program_picture: estream_engine::UiPreview,
+    preview_picture: estream_engine::UiPreview,
     /// The last picture of each scene (a GPU copy, refreshed twice a second).
     scene_thumbs: HashMap<SceneId, (estream_gpu::wgpu::Texture, slint::Image)>,
     thumb_at: Instant,
@@ -678,7 +684,13 @@ fn key_from_text(text: &str) -> Option<Key> {
 }
 
 impl App {
-    pub fn new(window: &AppWindow, paths: Paths, settings: Settings, gpu: GpuContext) -> Shared {
+    pub fn new(
+        window: &AppWindow,
+        paths: Paths,
+        settings: Settings,
+        gpu: GpuContext,
+        engine_gpu: GpuContext,
+    ) -> Shared {
         let clipper = crate::clips::Clipper::new(&settings.clips, &settings.recording);
         let recordings = estream_clips::Library::open_flat(&settings.recording.folder);
         let twitch = crate::twitch::Session::new(settings.twitch.clone());
@@ -697,6 +709,7 @@ impl App {
             paths,
             settings,
             gpu,
+            engine_gpu,
             engine: None,
             subscription: None,
             scenes_model: Rc::new(VecModel::default()),
@@ -737,6 +750,8 @@ impl App {
             studio: false,
             preview_scene: None,
             last_preview_sequence: 0,
+            program_picture: Default::default(),
+            preview_picture: Default::default(),
             scene_thumbs: HashMap::new(),
             thumb_at: Instant::now(),
             shader_target: ShaderTarget::Transition,
@@ -2369,7 +2384,7 @@ impl App {
         }
         let config = EngineConfig {
             registry,
-            gpu: Some(self.gpu.clone()),
+            gpu: Some(self.engine_gpu.clone()),
             collection_path: Some(self.collection.clone()),
             ..Default::default()
         };
@@ -2482,8 +2497,8 @@ impl App {
         self.tick_youtube_start();
         self.tick_details();
         if let Some(engine) = &self.engine {
-            let image = |frame: estream_engine::CanvasFrame<'_>| {
-                slint::Image::try_from(frame.preview.clone())
+            let image = |texture: &estream_gpu::wgpu::Texture| {
+                slint::Image::try_from(texture.clone())
                     .map_err(|e| tracing::error!(error = %e, "preview texture rejected"))
                     .ok()
             };
@@ -2502,15 +2517,18 @@ impl App {
                     && frame.sequence != self.last_sequence
                 {
                     self.last_sequence = frame.sequence;
-                    if snap && let Some(scene) = on_air {
-                        changed |=
-                            snap_thumb(&self.gpu, &mut self.scene_thumbs, scene, frame.preview);
-                    }
-                    if let Some(img) = image(frame) {
-                        if self.studio {
-                            w.set_program_frame(img);
-                        } else {
-                            w.set_preview_frame(img);
+                    // None: the engine skipped this preview while the last copy ran; keep it.
+                    if let Some(picture) = self.program_picture.show(&self.gpu, &output, &frame) {
+                        if snap && let Some(scene) = on_air {
+                            changed |=
+                                snap_thumb(&self.gpu, &mut self.scene_thumbs, scene, &picture);
+                        }
+                        if let Some(img) = image(&picture) {
+                            if self.studio {
+                                w.set_program_frame(img);
+                            } else {
+                                w.set_preview_frame(img);
+                            }
                         }
                     }
                 }
@@ -2521,12 +2539,14 @@ impl App {
                     && frame.sequence != self.last_preview_sequence
                 {
                     self.last_preview_sequence = frame.sequence;
-                    if snap && let Some(scene) = self.preview_scene {
-                        changed |=
-                            snap_thumb(&self.gpu, &mut self.scene_thumbs, scene, frame.preview);
-                    }
-                    if let Some(img) = image(frame) {
-                        w.set_preview_frame(img);
+                    if let Some(picture) = self.preview_picture.show(&self.gpu, &output, &frame) {
+                        if snap && let Some(scene) = self.preview_scene {
+                            changed |=
+                                snap_thumb(&self.gpu, &mut self.scene_thumbs, scene, &picture);
+                        }
+                        if let Some(img) = image(&picture) {
+                            w.set_preview_frame(img);
+                        }
                     }
                 }
                 w.set_transition_busy(engine.is_transitioning(canvas));
@@ -9912,10 +9932,10 @@ fn push_layers(
     }
 }
 
-/// Meter position (0..1) for a linear level on a -60..0 dB scale.
-/// Copies a scene's current picture into its thumbnail texture (made on first use, and again
-/// when the canvas size changes). Returns whether a new thumbnail was made, so the scene cards
-/// need rebuilding; later copies update the texture the card already shows.
+/// Copies a scene's current picture (on the UI's device) into its thumbnail texture (made on
+/// first use, and again when the canvas size changes). Returns whether a new thumbnail was
+/// made, so the scene cards need rebuilding; later copies update the texture the card already
+/// shows.
 fn snap_thumb(
     gpu: &GpuContext,
     thumbs: &mut HashMap<SceneId, (estream_gpu::wgpu::Texture, slint::Image)>,
