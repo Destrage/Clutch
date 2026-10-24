@@ -22,6 +22,20 @@ pub enum Integration {
     LeagueLiveClient,
     /// PUBG: Battlegrounds replay files (events arrive when the player's match ends).
     PubgReplay,
+    /// Fortnite replay files (events arrive when the match ends).
+    FortniteReplay,
+    /// Rocket League replay files (saved when the match ends, with auto-save on).
+    RocketLeagueReplay,
+}
+
+impl Integration {
+    /// Whether the game's events come from its replay files (after a match), not live.
+    pub fn is_replay(self) -> bool {
+        matches!(
+            self,
+            Self::PubgReplay | Self::FortniteReplay | Self::RocketLeagueReplay
+        )
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]

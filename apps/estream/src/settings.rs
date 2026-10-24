@@ -313,7 +313,8 @@ pub fn integration_events(
         ],
         I::Dota2Gsi => &[K::Kill, K::MultiKill, K::MatchWin, K::Death],
         I::LeagueLiveClient => &[K::Kill, K::MultiKill, K::Ace, K::Objective, K::MatchWin],
-        I::PubgReplay => &[K::Kill, K::Knock, K::MatchWin, K::Death],
+        I::PubgReplay | I::FortniteReplay => &[K::Kill, K::Knock, K::MatchWin, K::Death],
+        I::RocketLeagueReplay => &[K::Goal, K::MatchWin],
     }
 }
 
@@ -390,6 +391,14 @@ impl ClipSettings {
             (
                 I::PubgReplay,
                 estream_clips::integrations::replay::pubg::GAME,
+            ),
+            (
+                I::FortniteReplay,
+                estream_clips::integrations::replay::fortnite::GAME,
+            ),
+            (
+                I::RocketLeagueReplay,
+                estream_clips::integrations::replay::rocket_league::GAME,
             ),
         ] {
             for &event in integration_events(integration) {

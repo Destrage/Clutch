@@ -2,7 +2,7 @@
 
 ## 1. Research
 - [x] 1.1 PUBG: check real replays for when they're written (post-match: the folder appears when the player's match ends)
-- [ ] 1.1b Fortnite: capture a replay folder mid-match and after the match (not installed on the dev machine)
+- [x] 1.1b Fortnite: checked on two real replays (S12, C5S5): finished replays only (the event key is written at the end)
 - [x] 1.2 Document PUBG's layout, local-player identification and event fields in `design.md`
 
 ## 2. Framework
@@ -14,8 +14,8 @@
 
 ## 3. Games
 - [x] 3.1 PUBG: kills, knocks, deaths and wins
-- [ ] 3.2 Fortnite: eliminations and knocks
-- [ ] 3.3 Rocket League: goals via `boxcars` header parsing
+- [x] 3.2 Fortnite: eliminations, knocks, death and wins (recording player from the log or the stats)
+- [x] 3.3 Rocket League: goals and wins via `boxcars` header parsing
 - [ ] 3.4 Rainbow Six Siege: kills, headshots, plants per round
 
 ## 4. UI

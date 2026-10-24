@@ -5817,7 +5817,7 @@ impl App {
     }
 
     /// The integrations shown in Settings → Clips, in order.
-    const CLIP_INTEGRATIONS: [(estream_clips::Integration, &'static str); 4] = [
+    const CLIP_INTEGRATIONS: [(estream_clips::Integration, &'static str); 6] = [
         (estream_clips::Integration::Cs2Gsi, "Counter-Strike 2"),
         (estream_clips::Integration::Dota2Gsi, "Dota 2"),
         (
@@ -5828,7 +5828,36 @@ impl App {
             estream_clips::Integration::PubgReplay,
             estream_clips::integrations::replay::pubg::GAME,
         ),
+        (
+            estream_clips::Integration::FortniteReplay,
+            estream_clips::integrations::replay::fortnite::GAME,
+        ),
+        (
+            estream_clips::Integration::RocketLeagueReplay,
+            estream_clips::integrations::replay::rocket_league::GAME,
+        ),
     ];
+
+    /// Settings → Clips status of a connected game whose events come from its replays.
+    fn replay_status(integration: estream_clips::Integration) -> &'static str {
+        use estream_clips::Integration as I;
+        let saved = estream_clips::integrations::replay::has_replays(integration);
+        match (integration, saved) {
+            (I::PubgReplay, true) => {
+                "Connected · events arrive when a Battle Royale match ends (other modes save no replay)"
+            }
+            (I::PubgReplay, false) => "Turn on replays in PUBG to get events",
+            (I::FortniteReplay, true) => "Connected · events arrive when each match ends",
+            (I::FortniteReplay, false) => "Turn on Record Replays in Fortnite to get events",
+            (I::RocketLeagueReplay, true) => {
+                "Connected · goals and wins arrive when each match ends"
+            }
+            (I::RocketLeagueReplay, false) => {
+                "Turn on Auto Save Replays in Rocket League to get events"
+            }
+            _ => "Connected",
+        }
+    }
 
     /// Settings → Clips fields, on top of `form`.
     fn clip_settings_form(&self, form: SettingsForm) -> SettingsForm {
@@ -5844,15 +5873,7 @@ impl App {
                     (true, Integration::LeagueLiveClient) => {
                         "Connected · events arrive while a match is on".to_owned()
                     }
-                    (true, Integration::PubgReplay) => {
-                        if estream_clips::integrations::replay::pubg::folder()
-                            .is_some_and(|f| f.is_dir())
-                        {
-                            "Connected · events arrive when a Battle Royale match ends (other modes save no replay)".to_owned()
-                        } else {
-                            "Turn on replays in PUBG to get events".to_owned()
-                        }
-                    }
+                    (true, i) if i.is_replay() => Self::replay_status(*i).to_owned(),
                     (true, _) => match self.clipper.last_seen(*integration) {
                         Some(t) if t.elapsed() < Duration::from_secs(30) => {
                             "Receiving events".to_owned()
@@ -6025,13 +6046,20 @@ impl App {
                         );
                         return true;
                     }
-                    Integration::PubgReplay => {
+                    Integration::PubgReplay
+                    | Integration::FortniteReplay
+                    | Integration::RocketLeagueReplay => {
                         if !c.connected.contains(&integration) {
                             c.connected.push(integration);
                         }
+                        let what = match integration {
+                            Integration::RocketLeagueReplay => "goals and wins are",
+                            Integration::FortniteReplay => "eliminations, knocks and wins are",
+                            _ => "kills, knocks and wins are",
+                        };
                         self.toast(
                             format!(
-                                "{name} connected: kills, knocks and wins are read from its replay when each match ends"
+                                "{name} connected: {what} read from its replay when each match ends"
                             ),
                             false,
                         );
