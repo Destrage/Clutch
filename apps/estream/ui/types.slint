@@ -568,6 +568,28 @@ export struct ClipRow {
 }
 
 /// The Clips view.
+/// An event on the clip player's seek bar.
+export struct ClipTick {
+    /// Seconds into the clip.
+    at: float,
+    label: string,
+}
+
+/// The in-app clip player, updated while it plays (kept out of `ClipsForm`, which is rebuilt
+/// only when the library changes).
+export struct ClipPlayerState {
+    /// The player has the selected clip open (its frames replace the still preview).
+    active: bool,
+    playing: bool,
+    /// Seconds.
+    position: float,
+    /// 0..1.
+    volume: float,
+    muted: bool,
+    frame: image,
+    has-frame: bool,
+}
+
 export struct ClipsForm {
     items: [ClipRow],
     /// "All games" first.
@@ -585,6 +607,8 @@ export struct ClipsForm {
     subtitle: string,
     /// Events inside the clip, e.g. "Kill 0:10 · Double kill 0:14".
     events: string,
+    /// The same events, for the player's seek bar.
+    ticks: [ClipTick],
     favorite: bool,
     /// Seconds.
     duration: float,

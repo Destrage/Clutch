@@ -5,7 +5,7 @@ import "fonts/Figtree.ttf";
 import "fonts/Jost.ttf";
 import { Theme, Platform } from "theme.slint";
 import { Icons } from "icons.slint";
-import { CanvasTab, SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SourceType, PropRow, MixerStrip, AudioInspect, SettingsForm, LiveRow, DestinationRow, VideoFilterRow, MediaInspect, AutomationForm, MacroRow, TriggerRow, StepRow, ClipsForm, ClipRow, MontageForm, StatsForm, StatTile, StatRow, AlertRow } from "types.slint";
+import { CanvasTab, SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SourceType, PropRow, MixerStrip, AudioInspect, SettingsForm, LiveRow, DestinationRow, VideoFilterRow, MediaInspect, AutomationForm, MacroRow, TriggerRow, StepRow, ClipsForm, ClipRow, ClipPlayerState, MontageForm, StatsForm, StatTile, StatRow, AlertRow } from "types.slint";
 import { VSplitter, HSplitter, TooltipLayer, Hint } from "widgets.slint";
 import { Preview } from "preview.slint";
 import { TopBar, ScenesPanel, SourcesPanel, InspectorPanel, MixerPanel, StatusBar, TransitionColumn, ProgramView, CanvasTabs } from "panels.slint";
@@ -224,6 +224,7 @@ export component AppWindow inherits Window {
     in-out property <bool> stats-open;
     in-out property <bool> clips-open;
     in property <ClipsForm> clips-form;
+    in property <ClipPlayerState> clip-player;
     callback clips-action(string, int, float);
     callback clips-text(string, string);
     in-out property <bool> montage-open;
@@ -885,6 +886,7 @@ export component AppWindow inherits Window {
         x: root.sidebar-width;
         width: root.width - root.sidebar-width;
         form: root.clips-form;
+        player: root.clip-player;
         action(f, i, v) => { root.clips-action(f, i, v); }
         text(f, s) => { root.clips-text(f, s); }
         dismiss => {
