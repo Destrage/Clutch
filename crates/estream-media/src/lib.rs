@@ -14,6 +14,7 @@ pub mod mux;
 pub mod output;
 pub mod player;
 pub mod settings;
+pub mod sounds;
 pub mod stream;
 pub mod thumbnail;
 pub mod trim;

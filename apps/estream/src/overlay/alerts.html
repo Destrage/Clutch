@@ -1,0 +1,218 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Clutch alerts</title>
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
+  #stage { position: absolute; inset: 0; }
+  .alert { position: absolute; inset: 0; opacity: 0; transition: opacity 300ms ease; }
+  .alert.shown { opacity: 1; }
+  .alert video, .alert img {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    max-width: 100%; max-height: 100%;
+  }
+  .text {
+    position: absolute; display: flex; align-items: center; justify-content: center;
+    text-align: center; line-height: 1.15; font-weight: 700; overflow: hidden;
+    paint-order: stroke fill; -webkit-text-stroke: 0.06em rgba(0, 0, 0, 0.85);
+    text-shadow: 0 0.05em 0.25em rgba(0, 0, 0, 0.6);
+    opacity: 0; transform: translateY(0.4em);
+    transition: opacity 350ms ease, transform 350ms ease;
+  }
+  .text.in { opacity: 1; transform: translateY(0); }
+  .text.out { opacity: 0; transform: translateY(-0.3em); }
+  .text .inner { max-width: 100%; word-break: break-word; }
+  .text .message { display: block; font-weight: 500; font-size: 0.55em; margin-top: 0.35em; }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<script>
+"use strict";
+const params = new URLSearchParams(location.search);
+const stage = document.getElementById("stage");
+let config = null;
+const queue = [];
+let busy = false;
+const turns = {};
+
+const QUEUE_CAP = 20;
+const GAP_MS = 600;
+
+function connect() {
+  const ws = new WebSocket(`ws://${location.host}/ws?t=${params.get("t")}&source=${params.get("source")}`);
+  ws.onmessage = (e) => {
+    let msg;
+    try { msg = JSON.parse(e.data); } catch { return; }
+    if (msg.type === "config") { config = msg.config; next(); }
+    if (msg.type === "alert") enqueue(msg);
+  };
+  ws.onclose = () => setTimeout(connect, 2000);
+}
+
+function enqueue(alert) {
+  queue.push(alert);
+  // A burst (a raid of follows) shouldn't play for minutes: drop the oldest follows first.
+  while (queue.length > QUEUE_CAP) {
+    const i = queue.findIndex((a) => a.kind === "follow");
+    queue.splice(i >= 0 ? i : 0, 1);
+  }
+  next();
+}
+
+function settingsFor(alert) {
+  const kind = config && config.kinds && config.kinds[alert.kind];
+  if (!kind) return null;
+  if (!alert.test) {
+    if (!kind.on) return null;
+    if (kind.min > 0 && (alert.amount || 0) < kind.min) return null;
+  }
+  const pack = kind.pack || {};
+  const big = kind.big;
+  const bigAt = (big && big.settings && big.settings.big_at) || pack.big_at;
+  if (big && bigAt && (alert.amount || 0) >= bigAt) {
+    return {
+      animation: big.animation || kind.animation,
+      sounds: big.sounds && big.sounds.length ? big.sounds : kind.sounds,
+      pack: Object.assign({}, pack, big.settings || {}),
+      template: kind.template, volume: kind.volume,
+    };
+  }
+  return { animation: kind.animation, sounds: kind.sounds, pack, template: kind.template, volume: kind.volume };
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+/// Fills `{name}` etc.; a `[ … ]` part is left out when a value inside it is missing.
+function fill(template, alert, nameColor) {
+  const values = {
+    name: alert.name, platform: alert.platform_name, amount: alert.amount_display,
+    months: alert.months, tier: alert.tier, message: alert.message,
+  };
+  const has = (k) => values[k] !== null && values[k] !== undefined && values[k] !== "";
+  const withOptional = template.replace(/\[([^\]]*)\]/g, (_, part) => {
+    const keys = [...part.matchAll(/\{(\w+)\}/g)].map((m) => m[1]);
+    return keys.every(has) ? part : "";
+  });
+  return escapeHtml(withOptional).replace(/\{(\w+)\}/g, (_, k) => {
+    if (!has(k)) return "";
+    const v = escapeHtml(values[k]);
+    return k === "name" ? `<span style="color:${nameColor}">${v}</span>` : v;
+  });
+}
+
+/// One of a kind's sounds: in turn, or at random with `"sounds": "random"` in its alert.json.
+function pickSound(kind, sounds, mode) {
+  if (!sounds || !sounds.length) return null;
+  if (mode === "random") return sounds[Math.floor(Math.random() * sounds.length)];
+  const n = turns[kind] = ((turns[kind] ?? -1) + 1) % sounds.length;
+  return sounds[n];
+}
+
+/// Shrinks the text until it fits its box (down to half size).
+function fit(box, inner, size) {
+  let s = size;
+  inner.style.fontSize = s + "px";
+  while (s > size * 0.5 && (inner.scrollWidth > box.clientWidth || inner.scrollHeight > box.clientHeight)) {
+    s -= 2;
+    inner.style.fontSize = s + "px";
+  }
+}
+
+function play(alert, s) {
+  return new Promise((done) => {
+    const el = document.createElement("div");
+    el.className = "alert";
+    stage.appendChild(el);
+    const pack = s.pack || {};
+    let media = null;
+    if (s.animation && s.animation.url) {
+      media = document.createElement(s.animation.video ? "video" : "img");
+      media.src = s.animation.url;
+      if (s.animation.video) { media.muted = true; media.autoplay = true; media.playsInline = true; }
+      el.appendChild(media);
+    }
+
+    const box = document.createElement("div");
+    box.className = "text";
+    const inner = document.createElement("div");
+    inner.className = "inner";
+    inner.innerHTML = fill(s.template, alert, pack.name_color || config.name_color);
+    box.appendChild(inner);
+    box.style.fontFamily = `"${pack.font || config.font || "Segoe UI"}", "Segoe UI", sans-serif`;
+    box.style.color = pack.color || config.color;
+    el.appendChild(box);
+
+    // Scale the configured size (for 1080p) to this page.
+    const size = (pack.size || config.size || 56) * (window.innerHeight / 1080);
+    const place = () => {
+      // The text box is in fractions of the animation as shown (or of the page without one).
+      let r = { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+      if (media) {
+        const b = media.getBoundingClientRect();
+        if (b.width > 0) r = b;
+      }
+      const t = pack.text_box || (media ? { x: 0.05, y: 0.72, w: 0.9, h: 0.22 } : { x: 0.1, y: 0.38, w: 0.8, h: 0.24 });
+      box.style.left = r.left + t.x * r.width + "px";
+      box.style.top = r.top + t.y * r.height + "px";
+      box.style.width = t.w * r.width + "px";
+      box.style.height = t.h * r.height + "px";
+      fit(box, inner, size);
+    };
+
+    const soundUrl = pickSound(alert.kind, s.sounds, pack.sounds);
+    let audio = null;
+    if (soundUrl) {
+      audio = new Audio(soundUrl);
+      audio.volume = Math.max(0, Math.min(1, s.volume ?? 0.8));
+    }
+
+    const start = (mediaSeconds) => {
+      place();
+      requestAnimationFrame(() => el.classList.add("shown"));
+      if (audio) audio.play().catch(() => {});
+      const duration = Math.max(3, pack.duration || mediaSeconds || 5);
+      const textIn = pack.text_in ?? 0.3;
+      const textOut = Math.min(pack.text_out ?? duration - 0.5, duration - 0.3);
+      setTimeout(() => box.classList.add("in"), textIn * 1000);
+      setTimeout(() => box.classList.add("out"), textOut * 1000);
+      setTimeout(() => {
+        el.classList.remove("shown");
+        setTimeout(() => { el.remove(); done(); }, 350);
+      }, duration * 1000);
+    };
+
+    if (!media) start(0);
+    else if (s.animation.video) {
+      let started = false;
+      const go = () => { if (!started) { started = true; start(isFinite(media.duration) ? media.duration : 0); } };
+      media.onloadedmetadata = go;
+      media.onerror = go;
+      setTimeout(go, 1500);
+    } else {
+      media.onload = () => start(0);
+      media.onerror = () => start(0);
+    }
+  });
+}
+
+async function next() {
+  if (busy || !config) return;
+  const alert = queue.shift();
+  if (!alert) return;
+  const s = settingsFor(alert);
+  if (!s) { next(); return; }
+  busy = true;
+  try { await play(alert, s); } finally {
+    busy = false;
+    setTimeout(next, GAP_MS);
+  }
+}
+
+connect();
+</script>
+</body>
+</html>

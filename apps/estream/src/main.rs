@@ -15,6 +15,7 @@ mod kick;
 mod livechat;
 mod montage;
 mod oauth;
+mod overlay;
 mod performance;
 mod presets;
 mod secret;

@@ -230,29 +230,46 @@ fn event_line(kind: &str, e: &serde_json::Value) -> Option<Message> {
             name
         }
     };
+    let message = e["message"]["text"]
+        .as_str()
+        .or(e["message"].as_str())
+        .unwrap_or_default()
+        .to_owned();
     let with_message = |head: String| {
-        let text = e["message"]["text"]
-            .as_str()
-            .or(e["message"].as_str())
-            .unwrap_or_default();
-        if text.is_empty() {
+        if message.is_empty() {
             head
         } else {
-            format!("{head}: {text}")
+            format!("{head}: {message}")
         }
     };
-    let (author, text) = match kind {
-        "channel.follow" => (s("user_name"), "followed".to_owned()),
+    let tier_name = tier.trim().trim_start_matches('(').trim_end_matches(')');
+    use super::event::{StreamEvent, StreamEventKind as K};
+    let (author, text, event) = match kind {
+        "channel.follow" => {
+            let name = s("user_name");
+            (
+                name.clone(),
+                "followed".to_owned(),
+                StreamEvent::new(K::Follow, name),
+            )
+        }
         // Gifted ones are announced once, by the gift event.
         "channel.subscribe" if e["is_gift"].as_bool() == Some(true) => return None,
-        "channel.subscribe" => (s("user_name"), format!("subscribed{tier}")),
-        "channel.subscription.message" => (
-            s("user_name"),
-            with_message(format!(
-                "resubscribed for {} months{tier}",
-                n("cumulative_months")
-            )),
-        ),
+        "channel.subscribe" => {
+            let name = s("user_name");
+            let event = StreamEvent::new(K::Sub, name.clone()).tier(tier_name);
+            (name, format!("subscribed{tier}"), event)
+        }
+        "channel.subscription.message" => {
+            let name = s("user_name");
+            let months = n("cumulative_months");
+            let event = StreamEvent::new(K::Resub, name.clone())
+                .months(months as u32)
+                .tier(tier_name)
+                .message(message.clone());
+            let text = with_message(format!("resubscribed for {months} months{tier}"));
+            (name, text, event)
+        }
         "channel.subscription.gift" => {
             let total = n("total").max(1);
             let subs = if total == 1 {
@@ -260,16 +277,26 @@ fn event_line(kind: &str, e: &serde_json::Value) -> Option<Message> {
             } else {
                 format!("{total} subs")
             };
-            (or_anonymous(s("user_name")), format!("gifted {subs}{tier}"))
+            let name = or_anonymous(s("user_name"));
+            let event = StreamEvent::new(K::Gift, name.clone())
+                .amount(total as f64)
+                .tier(tier_name);
+            (name, format!("gifted {subs}{tier}"), event)
         }
-        "channel.cheer" => (
-            or_anonymous(s("user_name")),
-            with_message(format!("cheered {} bits", n("bits"))),
-        ),
-        "channel.raid" => (
-            s("from_broadcaster_user_name"),
-            format!("raided with {} viewers", n("viewers")),
-        ),
+        "channel.cheer" => {
+            let name = or_anonymous(s("user_name"));
+            let bits = n("bits");
+            let event = StreamEvent::new(K::Bits, name.clone())
+                .amount(bits as f64)
+                .message(message.clone());
+            (name, with_message(format!("cheered {bits} bits")), event)
+        }
+        "channel.raid" => {
+            let name = s("from_broadcaster_user_name");
+            let viewers = n("viewers");
+            let event = StreamEvent::new(K::Raid, name.clone()).amount(viewers as f64);
+            (name, format!("raided with {viewers} viewers"), event)
+        }
         _ => return None,
     };
     Some(Message {
@@ -279,7 +306,7 @@ fn event_line(kind: &str, e: &serde_json::Value) -> Option<Message> {
         text,
         parts: Vec::new(),
         time: chrono::Local::now(),
-        event: true,
+        event: Some(event),
     })
 }
 
@@ -337,7 +364,7 @@ fn parse(line: &str) -> Option<Message> {
             text,
             parts: Vec::new(),
             time: chrono::Local::now(),
-            event: false,
+            event: None,
         }
         .with_parts(parts),
     )
@@ -413,7 +440,12 @@ mod tests {
             event_line("channel.follow", &follow).unwrap().text,
             "followed"
         );
-        assert!(event_line("channel.follow", &follow).unwrap().event);
+        assert!(
+            event_line("channel.follow", &follow)
+                .unwrap()
+                .event
+                .is_some()
+        );
         let gift = serde_json::json!({ "user_name": null, "total": 5, "tier": "1000", "is_anonymous": true });
         let line = event_line("channel.subscription.gift", &gift).unwrap();
         assert_eq!(
@@ -435,6 +467,45 @@ mod tests {
         );
         let gifted_sub = serde_json::json!({ "user_name": "X", "is_gift": true });
         assert!(event_line("channel.subscribe", &gifted_sub).is_none());
+    }
+
+    #[test]
+    fn notifications_carry_typed_events() {
+        use crate::livechat::event::StreamEventKind as K;
+        let event =
+            |kind: &str, e: serde_json::Value| event_line(kind, &e).and_then(|m| m.event).unwrap();
+        let resub = event(
+            "channel.subscription.message",
+            serde_json::json!({ "user_name": "Sam", "cumulative_months": 3, "tier": "2000",
+                "message": { "text": "love it" } }),
+        );
+        assert_eq!(resub.kind, K::Resub);
+        assert_eq!(resub.name, "Sam");
+        assert_eq!(resub.months, Some(3));
+        assert_eq!(resub.tier.as_deref(), Some("Tier 2"));
+        assert_eq!(resub.message.as_deref(), Some("love it"));
+        let gift = event(
+            "channel.subscription.gift",
+            serde_json::json!({ "user_name": null, "total": 5, "tier": "1000" }),
+        );
+        assert_eq!(
+            (gift.kind, gift.name.as_str(), gift.amount),
+            (K::Gift, "Anonymous", Some(5.0))
+        );
+        assert_eq!(gift.tier, None, "Tier 1 is the default and not named");
+        let bits = event(
+            "channel.cheer",
+            serde_json::json!({ "user_name": "Jo", "bits": 500 }),
+        );
+        assert_eq!(
+            (bits.kind, bits.amount, bits.message),
+            (K::Bits, Some(500.0), None)
+        );
+        let raid = event(
+            "channel.raid",
+            serde_json::json!({ "from_broadcaster_user_name": "Big", "viewers": 40 }),
+        );
+        assert_eq!((raid.kind, raid.amount), (K::Raid, Some(40.0)));
     }
 
     #[test]

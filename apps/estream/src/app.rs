@@ -170,6 +170,15 @@ pub struct App {
     /// Emote images and the layout of chat lines with emotes (one entry per `chat_lines` row).
     chat_emotes: crate::emotes::ChatEmotes,
     chat_seen: u64,
+    /// Plays stream event sounds on the monitoring device (started on first use).
+    event_sounds: Option<estream_media::sounds::SoundPlayer>,
+    /// Event sound files found missing (reported once each).
+    missing_sounds: std::collections::HashSet<PathBuf>,
+    /// Serves the overlay pages (Alerts) to browser sources on this PC.
+    overlay: Option<crate::overlay::OverlayServer>,
+    /// The Test button counts last seen per Alerts source.
+    alert_tests: HashMap<SourceId, Vec<i64>>,
+    overlay_synced: Instant,
     chat_shown: Option<(
         Vec<crate::ui::ChatStateRow>,
         Vec<Option<crate::livechat::Platform>>,
@@ -759,6 +768,11 @@ impl App {
             chat_lines: Rc::new(VecModel::default()),
             chat_emotes: crate::emotes::ChatEmotes::new(),
             chat_seen: 0,
+            event_sounds: None,
+            missing_sounds: Default::default(),
+            overlay: None,
+            alert_tests: HashMap::new(),
+            overlay_synced: Instant::now(),
             chat_shown: None,
             chat_reply_to: Vec::new(),
             chat_sending: None,
@@ -1119,6 +1133,95 @@ impl App {
         w.set_chat_message(message.into());
     }
 
+    /// Starts the overlay server once (with a token made on first use and kept in settings).
+    fn start_overlay_server(&mut self) {
+        if self.overlay.is_some() {
+            return;
+        }
+        if self.settings.overlay_token.is_empty() {
+            self.settings.overlay_token = crate::overlay::new_token();
+            self.settings.save(&self.paths.settings());
+        }
+        match crate::overlay::OverlayServer::start(
+            self.settings.overlay_port,
+            &self.settings.overlay_token,
+        ) {
+            Ok(server) => self.overlay = Some(server),
+            Err(e) => tracing::warn!(error = %e, "overlay server didn't start; Alerts won't show"),
+        }
+    }
+
+    /// Keeps each Alerts source's page settings current and plays Test presses (a few times
+    /// a second).
+    fn tick_overlays(&mut self) {
+        if self.overlay_synced.elapsed() < Duration::from_millis(250) {
+            return;
+        }
+        self.overlay_synced = Instant::now();
+        let (Some(server), Some(engine)) = (&self.overlay, &self.engine) else {
+            return;
+        };
+        use crate::overlay::alerts;
+        let snapshot = engine.snapshot();
+        let mut keep = Vec::new();
+        for def in snapshot.sources.iter().filter(|d| d.kind == alerts::KIND) {
+            let id = def.id.to_string();
+            server.set_config(&id, alerts::config(&def.settings, server));
+            let presses = alerts::test_presses(&def.settings);
+            let counts: Vec<i64> = presses.iter().map(|(_, n)| *n).collect();
+            if let Some(seen) = self.alert_tests.get(&def.id) {
+                for ((kind, n), before) in presses.iter().zip(seen) {
+                    if n != before {
+                        let event = alerts::sample(*kind);
+                        let msg =
+                            alerts::alert_message(&event, crate::livechat::Platform::Twitch, true);
+                        server.send(Some(&id), &msg);
+                    }
+                }
+            }
+            self.alert_tests.insert(def.id, counts);
+            keep.push(id);
+        }
+        self.alert_tests
+            .retain(|id, _| keep.contains(&id.to_string()));
+        server.retain_sources(&keep);
+    }
+
+    /// Plays the sound chosen for `kind` on the monitoring device, or Clutch's built-in one when
+    /// none is set (or its file is gone); the system chime when even that can't be had.
+    fn play_event_sound(&mut self, kind: crate::livechat::event::StreamEventKind) {
+        let chosen = self.settings.event_sounds.get(&kind).cloned().filter(|p| {
+            let found = p.is_file();
+            if !found && self.missing_sounds.insert(p.clone()) {
+                tracing::warn!(path = %p.display(), "event sound file is missing; built-in sound instead");
+            }
+            found
+        });
+        let Some(path) = chosen.or_else(|| crate::overlay::alerts::builtin_sound(kind)) else {
+            crate::livechat::chime();
+            return;
+        };
+        let device = self.monitor_device();
+        if self
+            .event_sounds
+            .as_ref()
+            .is_none_or(|p| p.device() != device)
+        {
+            self.event_sounds = Some(estream_media::sounds::SoundPlayer::start(&device));
+        }
+        if let Some(player) = &self.event_sounds {
+            player.play(&path, self.settings.event_sound_volume);
+        }
+    }
+
+    /// The device event sounds are heard on: the monitoring device (empty = default output).
+    fn monitor_device(&self) -> String {
+        self.engine
+            .as_ref()
+            .map(|e| e.snapshot().audio.monitor_device.clone())
+            .unwrap_or_default()
+    }
+
     /// The combined chat: adds new messages to the list, and updates the reader states and the
     /// "Send to" choices when they change.
     fn tick_live_chat(&mut self, w: &AppWindow) {
@@ -1126,8 +1229,16 @@ impl App {
         let feed = self.livechat.feed().clone();
         let (new, seen) = feed.since(self.chat_seen);
         self.chat_seen = seen;
-        let chime = self.settings.chat_chime && new.iter().any(|m| m.event);
+        // One sound per batch, for the first event in it.
+        let sound_for = new
+            .iter()
+            .find_map(|m| m.event.as_ref().map(|e| e.kind))
+            .filter(|_| self.settings.chat_chime);
         for m in new {
+            if let (Some(event), Some(server)) = (&m.event, &self.overlay) {
+                let msg = crate::overlay::alerts::alert_message(event, m.platform, false);
+                server.send(None, &msg);
+            }
             let parts = if self.settings.chat_emotes {
                 m.parts
             } else {
@@ -1135,7 +1246,7 @@ impl App {
             };
             let (pieces, body_height) = self.chat_emotes.push(parts);
             self.chat_lines.push(crate::ui::ChatLine {
-                event: m.event,
+                event: m.event.is_some(),
                 kind: m.platform.key().into(),
                 author: m.author.into(),
                 author_color: parse_color(&m.color)
@@ -1146,8 +1257,8 @@ impl App {
                 body_height,
             });
         }
-        if chime {
-            crate::livechat::chime();
+        if let Some(kind) = sound_for {
+            self.play_event_sound(kind);
         }
         // Keep the list as long as the feed.
         while self.chat_lines.row_count() > 300 {
@@ -2219,6 +2330,9 @@ impl App {
             self.paths.now_playing(),
         );
         estream_media::music_source::register(&mut registry);
+        // Overlay pages need the server's address before their sources are created.
+        self.start_overlay_server();
+        registry.register(crate::overlay::alerts::source_type());
         if let Some(w) = self.window() {
             w.set_source_types(ModelRc::new(VecModel::from(source_types(&registry))));
         }
@@ -2452,6 +2566,7 @@ impl App {
         self.tick_api();
         self.tick_clips();
         self.tick_clips_view();
+        self.tick_overlays();
         self.tick_montages();
         self.tick_automation();
         if self.health_at.elapsed() >= Duration::from_secs(1) {
@@ -5637,6 +5752,23 @@ impl App {
             scroll_pan: self.settings.scroll_pan,
             chat_third_party: self.settings.chat_third_party,
             chat_animate: self.settings.chat_animate,
+            event_sounds: ModelRc::new(VecModel::from(
+                crate::livechat::event::StreamEventKind::ALL
+                    .iter()
+                    .map(|k| crate::ui::EventSoundRow {
+                        label: k.label().into(),
+                        file: self
+                            .settings
+                            .event_sounds
+                            .get(k)
+                            .and_then(|p| p.file_name())
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default()
+                            .into(),
+                    })
+                    .collect::<Vec<_>>(),
+            )),
+            event_sound_volume: self.settings.event_sound_volume,
             remote_enabled: self.settings.remote.enabled,
             remote_port: self.settings.remote.port as f32,
             remote_auth: self.settings.remote.auth,
@@ -6370,6 +6502,31 @@ impl App {
                 crate::livechat::emotes::set_third_party(value > 0.5);
             }
             "chat-animate" => self.settings.chat_animate = value > 0.5,
+            "event-sound-pick" | "event-sound-play" | "event-sound-clear" => {
+                use crate::livechat::event::StreamEventKind;
+                let Some(&kind) = StreamEventKind::ALL.get(value.round().max(0.0) as usize) else {
+                    return;
+                };
+                match field {
+                    "event-sound-pick" => {
+                        let Some(path) = rfd::FileDialog::new()
+                            .set_title(format!("Sound for {}", kind.label()))
+                            .add_filter("Sound", &["wav", "ogg", "mp3", "flac", "m4a"])
+                            .pick_file()
+                        else {
+                            return;
+                        };
+                        self.missing_sounds.remove(&path);
+                        self.settings.event_sounds.insert(kind, path);
+                        self.play_event_sound(kind);
+                    }
+                    "event-sound-play" => self.play_event_sound(kind),
+                    _ => {
+                        self.settings.event_sounds.remove(&kind);
+                    }
+                }
+            }
+            "event-sound-volume" => self.settings.event_sound_volume = value.clamp(0.0, 1.0),
             "remote-enable" => {
                 self.settings.remote.enabled = value > 0.5;
                 self.remote_restart_at = Some(Instant::now());
