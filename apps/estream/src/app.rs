@@ -174,10 +174,14 @@ pub struct App {
     event_sounds: Option<estream_media::sounds::SoundPlayer>,
     /// Event sound files found missing (reported once each).
     missing_sounds: std::collections::HashSet<PathBuf>,
-    /// Serves the overlay pages (Alerts) to browser sources on this PC.
+    /// Serves the overlay pages (Alerts, Chat overlay) to browser sources on this PC.
     overlay: Option<crate::overlay::OverlayServer>,
     /// The Test button counts last seen per Alerts source.
     alert_tests: HashMap<SourceId, Vec<i64>>,
+    /// The Chat overlay sources (id, settings), for routing chat lines to their pages.
+    chat_overlays: Vec<(String, serde_json::Value)>,
+    /// Whether any overlay source exists (the chat is then read even with its panel closed).
+    has_overlays: bool,
     overlay_synced: Instant,
     chat_shown: Option<(
         Vec<crate::ui::ChatStateRow>,
@@ -772,6 +776,8 @@ impl App {
             missing_sounds: Default::default(),
             overlay: None,
             alert_tests: HashMap::new(),
+            chat_overlays: Vec::new(),
+            has_overlays: false,
             overlay_synced: Instant::now(),
             chat_shown: None,
             chat_reply_to: Vec::new(),
@@ -1151,8 +1157,8 @@ impl App {
         }
     }
 
-    /// Keeps each Alerts source's page settings current and plays Test presses (a few times
-    /// a second).
+    /// Keeps each Alerts and Chat overlay source's page settings current and plays Test presses
+    /// (a few times a second).
     fn tick_overlays(&mut self) {
         if self.overlay_synced.elapsed() < Duration::from_millis(250) {
             return;
@@ -1184,6 +1190,15 @@ impl App {
         }
         self.alert_tests
             .retain(|id, _| keep.contains(&id.to_string()));
+        use crate::overlay::chat;
+        self.chat_overlays.clear();
+        for def in snapshot.sources.iter().filter(|d| d.kind == chat::KIND) {
+            let id = def.id.to_string();
+            server.set_config(&id, chat::config(&def.settings));
+            self.chat_overlays.push((id.clone(), def.settings.clone()));
+            keep.push(id);
+        }
+        self.has_overlays = !keep.is_empty();
         server.retain_sources(&keep);
     }
 
@@ -1236,9 +1251,23 @@ impl App {
             .find_map(|m| m.event.as_ref().map(|e| e.kind))
             .filter(|_| self.settings.chat_chime);
         for m in new {
-            if let (Some(event), Some(server)) = (&m.event, &self.overlay) {
-                let msg = crate::overlay::alerts::alert_message(event, m.platform, false);
-                server.send(None, &msg);
+            if let Some(server) = &self.overlay {
+                if let Some(event) = &m.event {
+                    let msg = crate::overlay::alerts::alert_message(event, m.platform, false);
+                    server.send(None, &msg);
+                }
+                let mut line = None;
+                for (id, settings) in &self.chat_overlays {
+                    if crate::overlay::chat::shows(settings, &m) {
+                        let line =
+                            line.get_or_insert_with(|| crate::overlay::chat::page_message(&m));
+                        server.send_kept(id, line);
+                    }
+                }
+            }
+            // A moderator's removal: the overlay drops the lines; the panel keeps its list.
+            if m.removal.is_some() {
+                continue;
             }
             let parts = if self.settings.chat_emotes {
                 m.parts
@@ -2334,6 +2363,7 @@ impl App {
         // Overlay pages need the server's address before their sources are created.
         self.start_overlay_server();
         registry.register(crate::overlay::alerts::source_type());
+        registry.register(crate::overlay::chat::source_type());
         if let Some(w) = self.window() {
             w.set_source_types(ModelRc::new(VecModel::from(source_types(&registry))));
         }
@@ -2439,6 +2469,10 @@ impl App {
         let mut changed = false;
         if w.get_chat_visible() {
             self.tick_chat();
+        } else if self.has_overlays {
+            // Overlays need the chat (events, lines) even while no chat panel is on screen.
+            self.refresh_chat_tabs();
+            self.tick_live_chat(&w);
         }
         self.tick_twitch();
         self.tick_youtube();

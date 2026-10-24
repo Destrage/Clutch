@@ -164,6 +164,12 @@ impl SourceType {
         self
     }
 
+    /// Drops the audio part (a page that never makes sound shouldn't get a mixer knob).
+    pub fn without_audio(mut self) -> Self {
+        self.audio = None;
+        self
+    }
+
     pub fn has_video(&self) -> bool {
         self.factory.is_some()
     }

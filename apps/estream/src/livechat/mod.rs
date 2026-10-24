@@ -56,9 +56,39 @@ pub struct Message {
     pub time: chrono::DateTime<chrono::Local>,
     /// A follow, subscription, gift, donation or raid (shown highlighted), not a chat message.
     pub event: Option<event::StreamEvent>,
+    /// The platform's id for the message ("" when it gives none).
+    pub id: String,
+    /// Set when this isn't a message but a moderator removing earlier ones.
+    pub removal: Option<Removal>,
+}
+
+/// Messages a moderator removed.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Removal {
+    /// One message, by its id.
+    Message(String),
+    /// Everything a viewer sent (a timeout or ban), by name.
+    User(String),
+    /// The whole chat was cleared.
+    All,
 }
 
 impl Message {
+    /// A removal notice (not shown as a line).
+    fn removal(platform: Platform, removal: Removal) -> Self {
+        Self {
+            platform,
+            author: String::new(),
+            color: String::new(),
+            text: String::new(),
+            parts: Vec::new(),
+            time: chrono::Local::now(),
+            event: None,
+            id: String::new(),
+            removal: Some(removal),
+        }
+    }
+
     /// Sets `parts` (kept only when they hold an emote) and the plain `text` from them.
     fn with_parts(mut self, parts: Vec<emotes::Part>) -> Self {
         self.text = emotes::plain(&parts);
@@ -426,6 +456,8 @@ mod tests {
             parts: Vec::new(),
             time: chrono::Local::now(),
             event: None,
+            id: String::new(),
+            removal: None,
         }
     }
 

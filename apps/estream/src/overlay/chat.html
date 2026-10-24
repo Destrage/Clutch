@@ -1,0 +1,164 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Clutch chat</title>
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
+  #list {
+    position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: flex-end;
+    gap: var(--gap); padding: var(--gap); box-sizing: border-box;
+    font-family: var(--font), "Segoe UI", sans-serif; font-size: var(--size); color: var(--text);
+    line-height: 1.3;
+  }
+  .line { flex: none; overflow-wrap: anywhere; animation: enter 250ms ease both; }
+  .line.out { opacity: 0; transition: opacity 600ms ease; }
+  @keyframes enter { from { opacity: 0; transform: translateY(0.5em); } }
+  .name { font-weight: 700; }
+  .badge {
+    display: inline-block; width: 1em; height: 1em; vertical-align: -0.14em; margin-right: 0.35em;
+    border-radius: 0.22em;
+  }
+  .emote { height: 1.5em; vertical-align: -0.45em; margin: 0 0.05em; }
+  .event .body { font-style: italic; }
+
+  .boxed .line {
+    background: var(--bg); border-radius: var(--radius); padding: 0.35em 0.6em;
+    align-self: flex-start; max-width: 100%; box-sizing: border-box;
+  }
+  .boxed .event { box-shadow: inset 0.2em 0 0 var(--accent); }
+  .plain .line, .compact .line {
+    paint-order: stroke fill; -webkit-text-stroke: 0.12em rgba(0, 0, 0, 0.9);
+    text-shadow: 0 0.05em 0.2em rgba(0, 0, 0, 0.7);
+  }
+  .compact .line { font-size: 0.85em; }
+  .plain .event .body, .compact .event .body { color: var(--accent); }
+</style>
+</head>
+<body>
+<div id="list"></div>
+<script>
+"use strict";
+const params = new URLSearchParams(location.search);
+const list = document.getElementById("list");
+let config = { style: "boxed", max_lines: 12, fade_after: 60, badges: true };
+
+const COLORS = { twitch: "#9146ff", kick: "#53fc18", youtube: "#ff0033" };
+// A simple glyph per platform, in its colour.
+const GLYPHS = {
+  twitch: '<rect width="16" height="16" rx="3" fill="#9146ff"/><path fill="#fff" d="M6 4h1.6v4.5H6zM9.6 4h1.6v4.5H9.6z"/>',
+  kick: '<rect width="16" height="16" rx="3" fill="#53fc18"/><path fill="#000" d="M4 3h3v4l3-4h3.5l-4 5 4 5H10L7 9v4H4z"/>',
+  youtube: '<rect width="16" height="16" rx="3" fill="#ff0033"/><path fill="#fff" d="M6.2 4.6v6.8L11.6 8z"/>',
+};
+
+function connect() {
+  const ws = new WebSocket(`ws://${location.host}/ws?t=${params.get("t")}&source=${params.get("source")}`);
+  ws.onmessage = (e) => {
+    let msg;
+    try { msg = JSON.parse(e.data); } catch { return; }
+    switch (msg.type) {
+      case "config": apply(msg.config); break;
+      case "chat": add(msg); break;
+      case "remove": removeWhere((l) => l.platform === msg.platform && l.id && l.id === msg.id); break;
+      case "clear_user": {
+        const name = String(msg.name).toLowerCase();
+        removeWhere((l) => l.platform === msg.platform && l.name === name);
+        break;
+      }
+      case "clear": removeWhere((l) => l.platform === msg.platform); break;
+    }
+  };
+  // The server replays its kept lines on connect: start clean so none show twice.
+  ws.onopen = () => { list.replaceChildren(); };
+  ws.onclose = () => setTimeout(connect, 2000);
+}
+
+function apply(c) {
+  config = c;
+  document.body.className = c.style || "boxed";
+  const s = document.body.style;
+  s.setProperty("--font", JSON.stringify(c.font || "Segoe UI"));
+  s.setProperty("--size", `${c.size || 26}px`);
+  s.setProperty("--text", c.text_color || "#fff");
+  s.setProperty("--bg", c.background || "rgba(16, 18, 24, 0.67)");
+  s.setProperty("--radius", `${c.radius ?? 10}px`);
+  s.setProperty("--gap", c.style === "compact" ? "0.15em" : "0.35em");
+  s.setProperty("--accent", "#8ec5ff");
+  for (const el of list.querySelectorAll(".badge")) el.style.display = c.badges ? "" : "none";
+  trim();
+}
+
+function add(m) {
+  const fade = (config.fade_after || 0) * 1000;
+  const age = Date.now() - (m.time || Date.now());
+  if (fade > 0 && age >= fade) return; // already faded (a kept line from earlier)
+
+  const line = document.createElement("div");
+  line.className = "line" + (m.event ? " event" : "");
+  line.dataset.platform = m.platform;
+  line.dataset.id = m.id || "";
+  line.dataset.name = String(m.name || "").toLowerCase();
+
+  if (GLYPHS[m.platform]) {
+    const badge = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    badge.setAttribute("viewBox", "0 0 16 16");
+    badge.setAttribute("class", "badge");
+    badge.innerHTML = GLYPHS[m.platform]; // fixed markup above, never chat text
+    if (!config.badges) badge.style.display = "none";
+    line.append(badge);
+  }
+  const name = document.createElement("span");
+  name.className = "name";
+  name.textContent = m.name;
+  name.style.color = m.color || COLORS[m.platform] || "#8ec5ff";
+  line.append(name, document.createTextNode(m.event ? " " : ": "));
+
+  const body = document.createElement("span");
+  body.className = "body";
+  for (const p of m.parts || []) {
+    if (p.emote) {
+      const img = document.createElement("img");
+      img.className = "emote";
+      img.src = p.emote;
+      img.alt = p.alt || "";
+      img.onerror = () => img.replaceWith(document.createTextNode(p.alt || ""));
+      body.append(img);
+    } else {
+      body.append(document.createTextNode(p.text || ""));
+    }
+  }
+  line.append(body);
+  list.append(line);
+  if (fade > 0) setTimeout(() => fadeOut(line), Math.max(0, fade - age));
+  trim();
+}
+
+function fadeOut(line) {
+  if (!line.isConnected || line.classList.contains("out")) return;
+  line.classList.add("out");
+  setTimeout(() => line.remove(), 650);
+}
+
+function removeWhere(test) {
+  for (const el of [...list.children]) {
+    const l = { platform: el.dataset.platform, id: el.dataset.id, name: el.dataset.name };
+    if (test(l)) el.remove();
+  }
+}
+
+/// At most `max_lines`, and none that don't fit: the oldest go first.
+function trim() {
+  const max = Math.max(1, config.max_lines || 12);
+  const live = [...list.children].filter((el) => !el.classList.contains("out"));
+  for (const el of live.slice(0, Math.max(0, live.length - max))) el.remove();
+  // Lines grow upwards from the bottom; one pushed past the top no longer fits. (Not
+  // scrollHeight: a line sliding in sits a little below the bottom for a moment.)
+  while (list.children.length > 1 && list.firstElementChild.offsetTop < 0) {
+    list.firstElementChild.remove();
+  }
+}
+
+connect();
+</script>
+</body>
+</html>
