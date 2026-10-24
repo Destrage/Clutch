@@ -1214,7 +1214,8 @@ impl App {
         }
     }
 
-    /// The device event sounds are heard on: the monitoring device (empty = default output).
+    /// The device event sounds and clip playback are heard on: the monitoring device (empty =
+    /// default output).
     fn monitor_device(&self) -> String {
         self.engine
             .as_ref()
@@ -4945,14 +4946,6 @@ impl App {
             .as_ref()
             .and_then(|p| self.shown_library().get(p))
             .map_or(0.0, |c| c.meta.duration)
-    }
-
-    /// The device clip playback is heard on: the monitoring device (empty = default output).
-    fn monitor_device(&self) -> String {
-        self.engine
-            .as_ref()
-            .map(|e| e.snapshot().audio.monitor_device.clone())
-            .unwrap_or_default()
     }
 
     /// The in-app player's actions. Returns `false` for other actions.
