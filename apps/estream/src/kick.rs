@@ -332,13 +332,15 @@ impl Session {
         details_of(&body).ok_or_else(|| "Couldn't read your Kick channel".into())
     }
 
-    /// Saves the connected channel's stream title and category.
+    /// Saves the connected channel's stream title and category (the ones that are set).
     pub fn set_channel_details(&self, details: &ChannelDetails) -> Result<(), String> {
+        let Some(body) = channel_update(details) else {
+            return Ok(());
+        };
         let account = self
             .account()
             .ok_or("Connect Kick in Settings → Stream first")?;
         let url = format!("{API}/channels");
-        let body = channel_update(details);
         let (mut status, mut reply) = send_json_bearer("PATCH", &url, &account.access, &[], &body)
             .ok_or("Couldn't reach Kick")?;
         if status == 401
@@ -396,12 +398,18 @@ fn details_of(body: &Value) -> Option<ChannelDetails> {
     })
 }
 
-fn channel_update(details: &ChannelDetails) -> Value {
-    let mut body = serde_json::json!({ "stream_title": details.title });
-    if details.category_id != 0 {
-        body["category_id"] = details.category_id.into();
+/// The `PATCH /channels` body, or `None` when there's nothing to set. Kick refuses an empty
+/// title ("Invalid request"), and an offline channel reports one, so it's left out.
+fn channel_update(details: &ChannelDetails) -> Option<Value> {
+    let mut body = serde_json::Map::new();
+    let title = details.title.trim();
+    if !title.is_empty() {
+        body.insert("stream_title".into(), title.into());
     }
-    body
+    if details.category_id != 0 {
+        body.insert("category_id".into(), details.category_id.into());
+    }
+    (!body.is_empty()).then_some(Value::Object(body))
 }
 
 /// `(id, name, thumbnail address)` for each category found.
@@ -447,14 +455,28 @@ mod tests {
                 category: "Just Chatting".into(),
             }
         );
-        let update = channel_update(&details);
+        let update = channel_update(&details).unwrap();
         assert_eq!(update["stream_title"], "Ranked");
         assert_eq!(update["category_id"], 15);
         let no_category = channel_update(&ChannelDetails {
             title: "x".into(),
             ..Default::default()
-        });
+        })
+        .unwrap();
         assert!(no_category.get("category_id").is_none());
+    }
+
+    /// An offline channel reports an empty title, which Kick refuses to save.
+    #[test]
+    fn empty_titles_are_not_sent() {
+        let category_only = channel_update(&ChannelDetails {
+            title: "  ".into(),
+            category_id: 1,
+            category: "Apex Legends".into(),
+        })
+        .unwrap();
+        assert_eq!(category_only, serde_json::json!({ "category_id": 1 }));
+        assert_eq!(channel_update(&ChannelDetails::default()), None);
     }
 
     #[test]
