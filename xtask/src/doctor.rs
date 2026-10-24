@@ -216,12 +216,7 @@ fn check_rust() -> Check {
                 )
             }
         }
-        None => Check::fail(
-            "Rust",
-            "not found",
-            "Install from https://rustup.rs",
-            None,
-        ),
+        None => Check::fail("Rust", "not found", "Install from https://rustup.rs", None),
     }
 }
 
@@ -229,12 +224,7 @@ fn check_rust() -> Check {
 fn check_cargo() -> Check {
     match version_output("cargo", &["--version"]) {
         Some(v) => Check::pass("Cargo", v),
-        None => Check::fail(
-            "Cargo",
-            "not found",
-            "Install from https://rustup.rs",
-            None,
-        ),
+        None => Check::fail("Cargo", "not found", "Install from https://rustup.rs", None),
     }
 }
 
@@ -259,16 +249,17 @@ fn check_msvc() -> Check {
                             "installationPath",
                         ],
                     ) {
-                        Some(path) if !path.is_empty() => Check::pass(
-                            "MSVC",
-                            format!("VS found at {path}"),
-                        ),
+                        Some(path) if !path.is_empty() => {
+                            Check::pass("MSVC", format!("VS found at {path}"))
+                        }
                         _ => Check::fail(
                             "MSVC",
                             "Visual Studio Build Tools not found",
                             "winget install Microsoft.VisualStudio.2022.BuildTools  \
                              \u{2192} select \"Desktop development with C++\"",
-                            Some("winget install --id Microsoft.VisualStudio.2022.BuildTools --override \"--add Microsoft.VisualStudio.Workload.VCTools --passive --wait\""),
+                            Some(
+                                "winget install --id Microsoft.VisualStudio.2022.BuildTools --override \"--add Microsoft.VisualStudio.Workload.VCTools --passive --wait\"",
+                            ),
                         ),
                     }
                 } else {
@@ -277,7 +268,9 @@ fn check_msvc() -> Check {
                         "Visual Studio Build Tools not found",
                         "winget install Microsoft.VisualStudio.2022.BuildTools  \
                          \u{2192} select \"Desktop development with C++\"",
-                        Some("winget install --id Microsoft.VisualStudio.2022.BuildTools --override \"--add Microsoft.VisualStudio.Workload.VCTools --passive --wait\""),
+                        Some(
+                            "winget install --id Microsoft.VisualStudio.2022.BuildTools --override \"--add Microsoft.VisualStudio.Workload.VCTools --passive --wait\"",
+                        ),
                     )
                 }
             }
@@ -319,7 +312,9 @@ fn check_llvm() -> Check {
                 "LLVM / Clang",
                 "not found at C:\\Program Files\\LLVM",
                 "Run: winget install LLVM.LLVM",
-                Some("winget install --id LLVM.LLVM --accept-source-agreements --accept-package-agreements"),
+                Some(
+                    "winget install --id LLVM.LLVM --accept-source-agreements --accept-package-agreements",
+                ),
             )
         }
     } else {
@@ -349,7 +344,9 @@ fn check_cmake() -> Check {
             "CMake",
             "not found",
             "Run: winget install Kitware.CMake",
-            Some("winget install --id Kitware.CMake --accept-source-agreements --accept-package-agreements"),
+            Some(
+                "winget install --id Kitware.CMake --accept-source-agreements --accept-package-agreements",
+            ),
         ),
     }
 }
@@ -362,7 +359,9 @@ fn check_ninja() -> Check {
             "Ninja",
             "not found",
             "Run: winget install Ninja-build.Ninja",
-            Some("winget install --id Ninja-build.Ninja --accept-source-agreements --accept-package-agreements"),
+            Some(
+                "winget install --id Ninja-build.Ninja --accept-source-agreements --accept-package-agreements",
+            ),
         ),
     }
 }
@@ -412,11 +411,11 @@ fn check_ffmpeg() -> Check {
     } else {
         bin.join("ffmpeg")
     };
-    if ffmpeg_bin.exists() {
-        if let Some(v) = version_output(ffmpeg_bin.to_str().unwrap_or("ffmpeg"), &["-version"]) {
-            let ver = v.lines().next().unwrap_or(&v);
-            return Check::pass("FFmpeg", ver.to_string());
-        }
+    if ffmpeg_bin.exists()
+        && let Some(v) = version_output(ffmpeg_bin.to_str().unwrap_or("ffmpeg"), &["-version"])
+    {
+        let ver = v.lines().next().unwrap_or(&v);
+        return Check::pass("FFmpeg", ver.to_string());
     }
 
     Check::pass(
@@ -460,9 +459,7 @@ fn run_shell(cmd: &str) {
     } else {
         ("sh", "-c")
     };
-    let status = Command::new(shell.0)
-        .args([shell.1, cmd])
-        .status();
+    let status = Command::new(shell.0).args([shell.1, cmd]).status();
     match status {
         Ok(s) if s.success() => println!("  \u{2714} Success"),
         Ok(s) => println!("  \u{2718} Command exited with {s}"),

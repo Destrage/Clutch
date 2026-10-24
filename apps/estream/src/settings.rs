@@ -780,7 +780,7 @@ mod tests {
         let text = r#"{
             "theme": "light",
             "destinations": [{ "name": "Twitch" }],
-            "clips": { "connected": ["cs2_gsi", "pubg_replay"], "hotkey_seconds": 45 }
+            "clips": { "connected": ["cs2_gsi", "a_future_game"], "hotkey_seconds": 45 }
         }"#;
         let (s, dropped) = Settings::parse_lenient(text).unwrap();
         assert_eq!(dropped, ["clips.connected[1]"]);
