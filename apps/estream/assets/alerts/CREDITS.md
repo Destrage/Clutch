@@ -1,4 +1,16 @@
-# Built-in alert sounds
+# Built-in alert pack
+
+## Animations
+
+Drawn for Clutch by `make-animations.mjs` (part of Clutch, same licence): per kind an emblem
+in the Clutch logo's colours that pops in with a spark burst (confetti for gifts) and a
+shockwave, then a banner the alerts page writes the text on. 960×540, 30 fps, VP9 WebM with
+alpha. Each kind's `alert.json` holds the banner's text box and the text timing.
+
+To rebuild: `node make-animations.mjs <pack folder>` from a folder where `sharp` resolves
+(for example `npm i --no-save sharp` in a temporary folder), with `ffmpeg` on the PATH.
+
+## Sounds
 
 Made with `make-sounds.sh` from these packs by Kenney (kenney.nl), released under
 Creative Commons Zero (CC0 1.0, public domain):
