@@ -4,6 +4,7 @@
 pub use ffmpeg_next as ffmpeg;
 
 pub mod audio_file;
+pub mod clip_player;
 pub mod encode;
 pub mod frames;
 pub mod media_source;
@@ -13,6 +14,7 @@ pub mod mux;
 pub mod output;
 pub mod player;
 pub mod settings;
+pub mod sounds;
 pub mod stream;
 pub mod thumbnail;
 pub mod trim;

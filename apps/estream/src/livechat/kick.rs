@@ -309,16 +309,24 @@ fn relay_connection(cx: &Context<'_>, token: &str) -> RelayEnd {
 
 /// The chat line for a Kick event (`None` for ones not shown).
 fn event_line(kind: &str, e: &Value) -> Option<Message> {
+    use super::event::{StreamEvent, StreamEventKind as K};
     let name = |v: &Value| v["username"].as_str().unwrap_or_default().to_owned();
-    let (author, text) = match kind {
-        "channel.followed" => (name(&e["follower"]), "followed".to_owned()),
-        "channel.subscription.new" => (name(&e["subscriber"]), "subscribed".to_owned()),
+    let (author, text, event) = match kind {
+        "channel.followed" => {
+            let who = name(&e["follower"]);
+            let event = StreamEvent::new(K::Follow, who.clone());
+            (who, "followed".to_owned(), event)
+        }
+        "channel.subscription.new" => {
+            let who = name(&e["subscriber"]);
+            let event = StreamEvent::new(K::Sub, who.clone());
+            (who, "subscribed".to_owned(), event)
+        }
         "channel.subscription.renewal" => {
             let months = e["duration"].as_u64().unwrap_or(1);
-            (
-                name(&e["subscriber"]),
-                format!("resubscribed for {months} months"),
-            )
+            let who = name(&e["subscriber"]);
+            let event = StreamEvent::new(K::Resub, who.clone()).months(months as u32);
+            (who, format!("resubscribed for {months} months"), event)
         }
         "channel.subscription.gifts" => {
             let count = e["giftees"].as_array().map_or(1, Vec::len).max(1);
@@ -330,20 +338,24 @@ fn event_line(kind: &str, e: &Value) -> Option<Message> {
             let gifter = Some(name(&e["gifter"]))
                 .filter(|n| !n.is_empty() && e["is_anonymous"].as_bool() != Some(true))
                 .unwrap_or_else(|| "Anonymous".to_owned());
-            (gifter, format!("gifted {subs}"))
+            let event = StreamEvent::new(K::Gift, gifter.clone()).amount(count as f64);
+            (gifter, format!("gifted {subs}"), event)
         }
         "kicks.gifted" => {
             let amount = e["gift"]["amount"].as_u64().unwrap_or(0);
             let note = e["gift"]["message"].as_str().unwrap_or_default();
             let head = format!("sent {amount} Kicks");
-            (
-                name(&e["sender"]),
-                if note.is_empty() {
-                    head
-                } else {
-                    format!("{head}: {note}")
-                },
-            )
+            let who = name(&e["sender"]);
+            let event = StreamEvent::new(K::Paid, who.clone())
+                .amount(amount as f64)
+                .amount_text(format!("{amount} Kicks"))
+                .message(note);
+            let text = if note.is_empty() {
+                head
+            } else {
+                format!("{head}: {note}")
+            };
+            (who, text, event)
         }
         _ => return None,
     };
@@ -357,7 +369,7 @@ fn event_line(kind: &str, e: &Value) -> Option<Message> {
         text,
         parts: Vec::new(),
         time: chrono::Local::now(),
-        event: true,
+        event: Some(event),
     })
 }
 
@@ -381,7 +393,7 @@ fn parse(data: &Value) -> Option<Message> {
             text: String::new(),
             parts: Vec::new(),
             time: chrono::Local::now(),
-            event: false,
+            event: None,
         }
         .with_parts(parts),
     )
@@ -413,8 +425,12 @@ mod tests {
             "follower": { "user_id": 2, "username": "ali" } });
         let line = event_line("channel.followed", &follow).unwrap();
         assert_eq!(
-            (line.author.as_str(), line.text.as_str(), line.event),
-            ("ali", "followed", true)
+            (line.author.as_str(), line.text.as_str()),
+            ("ali", "followed")
+        );
+        assert_eq!(
+            line.event.map(|e| e.kind),
+            Some(crate::livechat::event::StreamEventKind::Follow)
         );
         let gifts = serde_json::json!({ "gifter": null, "is_anonymous": true,
             "giftees": [{ "username": "a" }, { "username": "b" }, { "username": "c" }] });
@@ -429,6 +445,12 @@ mod tests {
             event_line("kicks.gifted", &kicks).unwrap().text,
             "sent 500 Kicks: gg"
         );
+        let paid = event_line("kicks.gifted", &kicks)
+            .and_then(|m| m.event)
+            .unwrap();
+        assert_eq!(paid.amount, Some(500.0));
+        assert_eq!(paid.amount_text.as_deref(), Some("500 Kicks"));
+        assert_eq!(paid.message.as_deref(), Some("gg"));
         let renewal = serde_json::json!({ "subscriber": { "username": "sam" }, "duration": 3 });
         assert_eq!(
             event_line("channel.subscription.renewal", &renewal)

@@ -10,7 +10,7 @@ Stream, record and clip your best moments, then cut them into beat-synced montag
 - studio mode with transitions, including stingers and custom shaders;
 - video filters;
 - multiple canvases (for example horizontal and vertical at the same time);
-- a virtual camera for Zoom, Teams, Discord, Meet and other apps (Windows 11, or Linux with v4l2loopback);
+- a virtual camera for Zoom, Teams, Discord, Meet and other apps (Windows 10/11, or Linux with v4l2loopback);
 - automation: macros started by global hotkeys, a window coming to the front, timers, scenes or outputs;
 - stats and health: live numbers with 5 minutes of history, and plain-language alerts (rendering lag, encoder overload, network trouble, CPU/GPU load, low disk) with advice;
 - performance profiles (Gaming, Balanced, Quality) and "Optimize for this PC", so recording and streaming leave your game alone;
@@ -202,7 +202,7 @@ Macros are saved with the scene collection, and every change they make can be un
 
 ## Virtual camera
 
-Click the camera button in the top bar, then pick **Clutch Virtual Camera** in your call app. Windows lists it as "Clutch Virtual Camera (Windows Virtual Camera)". It needs Windows 11. On Linux it uses `v4l2loopback`; see [Linux](#what-differs-on-linux).
+Click the camera button in the top bar, then pick **Clutch Virtual Camera** in your call app. On Windows 11, Windows lists it as "Clutch Virtual Camera (Windows Virtual Camera)". On Windows 10 it's listed as "Clutch Virtual Camera" and works in apps that use DirectShow cameras (Zoom, Discord, Teams, browsers). On Linux it uses `v4l2loopback`; see [Linux](#what-differs-on-linux).
 
 - **First start:** Windows asks once for permission to install the camera component, so expect a UAC prompt. Clutch copies the component to `%ProgramData%\Clutch\VirtualCamera` and registers it there.
 - **Choosing what it shows:** pick the canvas in **Settings → Virtual camera**.

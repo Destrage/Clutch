@@ -541,6 +541,95 @@ pub fn source_type() -> SourceType {
     .with_audio(|settings| Ok(Box::new(BrowserAudio::new(settings))))
 }
 
+/// Turns a source's own settings into browser source settings (`url`, `width`, `height`,
+/// `fps`, `css`).
+pub type PageFn = dyn Fn(&Value) -> Value + Send + Sync;
+
+/// A source type that shows a page Clutch generates (Alerts, Chat overlay): its own settings
+/// and schema, rendered by the browser source with the settings `page` derives from them.
+pub fn page_source_type(
+    kind: &str,
+    name: &str,
+    description: &str,
+    schema: impl Fn(&Value) -> PropertySchema + Send + Sync + 'static,
+    page: impl Fn(&Value) -> Value + Send + Sync + 'static,
+) -> SourceType {
+    let page: Arc<PageFn> = Arc::new(page);
+    let audio_page = page.clone();
+    SourceType::new(kind, name, description, schema, move |_, settings| {
+        let page = page.clone();
+        Ok(Box::new(PageVideo {
+            inner: BrowserVideo::new(&page_settings(page.as_ref(), settings)),
+            page,
+        }))
+    })
+    .with_audio(move |settings| {
+        let page = audio_page.clone();
+        Ok(Box::new(PageAudio {
+            inner: BrowserAudio::new(&page_settings(page.as_ref(), settings)),
+            page,
+        }))
+    })
+}
+
+/// `page(settings)`, keeping the engine-provided source id.
+fn page_settings(page: &PageFn, settings: &Value) -> Value {
+    let mut out = page(settings);
+    if let (Some(map), Some(id)) = (out.as_object_mut(), settings.get("_source_id")) {
+        map.insert("_source_id".into(), id.clone());
+    }
+    out
+}
+
+struct PageVideo {
+    inner: BrowserVideo,
+    page: Arc<PageFn>,
+}
+
+impl VideoSource for PageVideo {
+    fn update(&mut self, ctx: &SourceContext<'_>, settings: &Value) -> Result<(), SourceError> {
+        self.inner
+            .update(ctx, &page_settings(self.page.as_ref(), settings))
+    }
+
+    fn tick(
+        &mut self,
+        ctx: &SourceContext<'_>,
+        encoder: &mut wgpu::CommandEncoder,
+        now: Timestamp,
+    ) {
+        self.inner.tick(ctx, encoder, now);
+    }
+
+    fn frame(&self) -> Option<SourceFrame<'_>> {
+        self.inner.frame()
+    }
+
+    fn status(&self) -> SourceStatus {
+        self.inner.status()
+    }
+}
+
+struct PageAudio {
+    inner: BrowserAudio,
+    page: Arc<PageFn>,
+}
+
+impl AudioSource for PageAudio {
+    fn update(&mut self, settings: &Value) -> Result<(), String> {
+        self.inner
+            .update(&page_settings(self.page.as_ref(), settings))
+    }
+
+    fn read(&mut self, block: &mut Block, now: Timestamp) -> usize {
+        self.inner.read(block, now)
+    }
+
+    fn status(&self) -> SourceStatus {
+        self.inner.status()
+    }
+}
+
 /// Reloads the page of browser source `id` (the refresh action).
 pub fn reload(id: &str) {
     host().reload(id);

@@ -14,13 +14,22 @@ already has, with no account or web service.
   platforms are follow, sub, resub, gift, bits, raid and paid message (Super Chat, Super Sticker,
   Kicks).
 - **Event sounds in the chat:** each kind can have its own sound file (WAV, OGG, MP3), replacing
-  the single chime; kinds without a sound fall back to the chime. Volume setting; the bell still
+  the single chime; kinds without a sound use the built-in pack's sound. Volume setting; the bell still
   mutes them all.
 - **Alerts source:** a new source type, "Alerts", added from Add source like any other. For each
   kind: on/off, an animation (WebM with alpha recommended; animated WebP, PNG, GIF also work), a
   sound, a text template (`{name} subscribed for {months} months`) with font, size and colour,
   a duration, and for amounts a minimum (e.g. only bits of 100+). Alerts play one at a time from
   a queue; a "Test" button per kind plays a sample.
+- **Live text over the animation:** animations contain no text. Clutch fills the template per
+  event (`{name}`, `{platform}` or a platform icon, `{amount}`, `{months}`, `{tier}`,
+  `{message}`) and draws it in a text box on the animation, appearing and leaving at set times,
+  shrinking to fit long names.
+- **Alert packs:** a pack is a folder with, per kind, the animation, one or more sounds and an
+  `alert.json` saying where the text box is, when the text appears and its style. Clutch ships a
+  built-in pack (sounds made from CC0 packs now; animations from the project owner later); users can pick another pack,
+  share their own, or replace single files. Several sounds for a kind play in turn or at random,
+  and a kind can have a bigger variant above an amount (e.g. 10+ gifted subs).
 - **Local overlay server:** Clutch serves its overlay pages and pushes events to them over a
   WebSocket on `127.0.0.1` only, with a random per-install token in the page address. The Alerts
   source is a browser page on this server, so animations, fonts and transparency come from the
@@ -32,6 +41,7 @@ already has, with no account or web service.
 - Affected code: `apps/estream` (`livechat` typed events, chat sounds, alerts settings UI,
   overlay server start/stop), `estream-capture` (Alerts source type on top of the browser
   source), new overlay page assets (HTML/CSS/JS bundled into the app).
-- Needs from the project owner: default animation and sound per kind (alpha WebM and WAV), or
-  Clutch ships without defaults and each kind starts empty.
+- Needs from the project owner: the built-in pack: per kind an alpha WebM without text (with
+  where its text box sits and when the text appears) and a WAV sound. Users can change or add
+  their own.
 - Builds on `fix-settings-and-clip-sound` (the built-in short-sound player) and `add-stream-events`.

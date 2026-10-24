@@ -89,8 +89,11 @@ impl GpuContext {
             })
             .await?;
         // A live show must not abort on a GPU validation error: log it instead.
-        device.on_uncaptured_error(Arc::new(|e: wgpu::Error| {
+        let dev = device.clone();
+        device.on_uncaptured_error(Arc::new(move |e: wgpu::Error| {
             tracing::error!(error = %e, "GPU validation error");
+            #[cfg(windows)]
+            log_device_removed_reason(&dev);
         }));
         Ok(Self {
             instance,
@@ -126,5 +129,122 @@ impl GpuContext {
                 | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         })
+    }
+
+    /// Asks the OS GPU scheduler to favour this process, so a game using the whole GPU can't
+    /// starve the compositor: high priority with hardware-accelerated GPU scheduling, realtime
+    /// without. Skipped on Intel GPUs. Usually needs administrator rights; failure is harmless.
+    pub fn raise_scheduling_priority(&self) {
+        #[cfg(windows)]
+        raise_scheduling_priority(self);
+    }
+}
+
+#[cfg(windows)]
+const INTEL_VENDOR: u32 = 0x8086;
+
+#[cfg(windows)]
+fn raise_scheduling_priority(gpu: &GpuContext) {
+    use windows::Wdk::Graphics::Direct3D::{
+        D3DKMT_SCHEDULINGPRIORITYCLASS_HIGH, D3DKMT_SCHEDULINGPRIORITYCLASS_REALTIME,
+        D3DKMTSetProcessSchedulingPriorityClass,
+    };
+    use windows::Win32::System::Threading::GetCurrentProcess;
+
+    if gpu.info.vendor == INTEL_VENDOR {
+        return;
+    }
+    // SAFETY: as_hal reads the underlying raw device pointer when using the Dx12 backend.
+    let Some(luid) = (unsafe { gpu.device.as_hal::<wgpu::hal::api::Dx12>() })
+        // SAFETY: GetAdapterLuid has no preconditions on a valid device.
+        .map(|hal| unsafe { hal.raw_device().GetAdapterLuid() })
+    else {
+        return;
+    };
+    let hags = hardware_scheduling_enabled(luid);
+    let class = if hags {
+        D3DKMT_SCHEDULINGPRIORITYCLASS_HIGH
+    } else {
+        D3DKMT_SCHEDULINGPRIORITYCLASS_REALTIME
+    };
+    // SAFETY: the pseudo handle from GetCurrentProcess is always valid for this process.
+    let status = unsafe { D3DKMTSetProcessSchedulingPriorityClass(GetCurrentProcess(), class) };
+    if status.is_ok() {
+        tracing::info!(hags, "GPU scheduling priority raised");
+    } else {
+        tracing::debug!(
+            status = status.0,
+            hags,
+            "GPU scheduling priority not raised (not admin?)"
+        );
+    }
+}
+
+/// Whether hardware-accelerated GPU scheduling is on for the adapter.
+#[cfg(windows)]
+fn hardware_scheduling_enabled(luid: windows::Win32::Foundation::LUID) -> bool {
+    use windows::Wdk::Graphics::Direct3D::{
+        D3DKMT_CLOSEADAPTER, D3DKMT_OPENADAPTERFROMLUID, D3DKMT_QUERYADAPTERINFO,
+        D3DKMT_WDDM_2_7_CAPS, D3DKMTCloseAdapter, D3DKMTOpenAdapterFromLuid,
+        D3DKMTQueryAdapterInfo, KMTQAITYPE_WDDM_2_7_CAPS,
+    };
+    /// `HwSchEnabled` in D3DKMT_WDDM_2_7_CAPS (bit 0 is `HwSchSupported`).
+    const HW_SCH_ENABLED: u32 = 1 << 1;
+
+    let mut open = D3DKMT_OPENADAPTERFROMLUID {
+        AdapterLuid: luid,
+        hAdapter: 0,
+    };
+    // SAFETY: `open` is a valid, writable struct; the handle is closed below.
+    if unsafe { D3DKMTOpenAdapterFromLuid(&mut open) }.is_err() {
+        return false;
+    }
+    let mut caps = D3DKMT_WDDM_2_7_CAPS::default();
+    let mut query = D3DKMT_QUERYADAPTERINFO {
+        hAdapter: open.hAdapter,
+        Type: KMTQAITYPE_WDDM_2_7_CAPS,
+        pPrivateDriverData: (&raw mut caps).cast(),
+        PrivateDriverDataSize: size_of::<D3DKMT_WDDM_2_7_CAPS>() as u32,
+    };
+    // SAFETY: the query points at a caps struct of the size it declares.
+    let ok = unsafe { D3DKMTQueryAdapterInfo(&mut query) }.is_ok();
+    let close = D3DKMT_CLOSEADAPTER {
+        hAdapter: open.hAdapter,
+    };
+    // SAFETY: closes the adapter handle opened above.
+    let _ = unsafe { D3DKMTCloseAdapter(&close) };
+    // SAFETY: every bit pattern of the union is a valid u32.
+    ok && unsafe { caps.Anonymous.Value } & HW_SCH_ENABLED != 0
+}
+
+#[cfg(windows)]
+fn log_device_removed_reason(device: &wgpu::Device) {
+    // SAFETY: as_hal reads the underlying raw device pointer when using the Dx12 backend.
+    if let Some(hal) = unsafe { device.as_hal::<wgpu::hal::api::Dx12>() } {
+        let raw = hal.raw_device();
+        // SAFETY: GetDeviceRemovedReason queries the DXGI device status on the D3D12 device.
+        let reason = unsafe { raw.GetDeviceRemovedReason() };
+        if let Err(err) = reason {
+            let code = err.code().0 as u32;
+            let name = match code {
+                0x887A0006 => "DXGI_ERROR_DEVICE_HUNG (GPU stopped responding to commands)",
+                0x887A0005 => {
+                    "DXGI_ERROR_DEVICE_REMOVED (GPU physically removed or driver crashed)"
+                }
+                0x887A0007 => {
+                    "DXGI_ERROR_DEVICE_RESET (GPU driver reset due to timeout or invalid command)"
+                }
+                0x887A002B => {
+                    "DXGI_ERROR_DRIVER_INTERNAL_ERROR (GPU driver encountered an internal error)"
+                }
+                0x887A0001 => "DXGI_ERROR_INVALID_CALL (application provided invalid parameters)",
+                _ => "Unknown DXGI device removed error",
+            };
+            tracing::error!(
+                code = format!("{code:#010x}"),
+                name,
+                "GPU device was lost or removed"
+            );
+        }
     }
 }

@@ -5,7 +5,7 @@ import "fonts/Figtree.ttf";
 import "fonts/Jost.ttf";
 import { Theme, Platform } from "theme.slint";
 import { Icons } from "icons.slint";
-import { CanvasTab, SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SourceType, PropRow, MixerStrip, AudioInspect, SettingsForm, LiveRow, DestinationRow, VideoFilterRow, MediaInspect, AutomationForm, MacroRow, TriggerRow, StepRow, ClipsForm, ClipRow, MontageForm, StatsForm, StatTile, StatRow, AlertRow } from "types.slint";
+import { CanvasTab, SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SourceType, PropRow, MixerStrip, AudioInspect, SettingsForm, LiveRow, DestinationRow, VideoFilterRow, MediaInspect, AutomationForm, MacroRow, TriggerRow, StepRow, ClipsForm, ClipRow, ClipPlayerState, MontageForm, StatsForm, StatTile, StatRow, AlertRow } from "types.slint";
 import { VSplitter, HSplitter, TooltipLayer, Hint } from "widgets.slint";
 import { Preview } from "preview.slint";
 import { TopBar, ScenesPanel, SourcesPanel, InspectorPanel, MixerPanel, StatusBar, TransitionColumn, ProgramView, CanvasTabs } from "panels.slint";
@@ -39,6 +39,7 @@ export component AppWindow inherits Window {
 
     // Preview
     in property <image> preview-frame;
+    in property <bool> scroll-pan;
     // Studio mode and transitions
     in property <bool> studio-mode;
     in property <[CanvasTab]> canvas-tabs;
@@ -224,6 +225,7 @@ export component AppWindow inherits Window {
     in-out property <bool> stats-open;
     in-out property <bool> clips-open;
     in property <ClipsForm> clips-form;
+    in property <ClipPlayerState> clip-player;
     callback clips-action(string, int, float);
     callback clips-text(string, string);
     in-out property <bool> montage-open;
@@ -463,6 +465,7 @@ export component AppWindow inherits Window {
                             guides: root.guides;
                             cursor: root.cursor;
                             space-down: root.space-down;
+                            scroll-pan: root.scroll-pan;
                             pointer(kind, x, y, px, shift, alt, ctrl) => {
                                 if (kind == "down") { main-keys.focus(); }
                                 root.preview-pointer(kind, x, y, px, shift, alt, ctrl);
@@ -713,6 +716,72 @@ export component AppWindow inherits Window {
         }
     }
 
+    if root.montage-open: MontageDialog {
+        as-page: true;
+        x: root.sidebar-width;
+        width: root.width - root.sidebar-width;
+        form: root.montage-form;
+        action(f, i, v) => { root.montage-action(f, i, v); }
+        text(f, s) => { root.montage-text(f, s); }
+        key(t, c, s) => { root.montage-key(t, c, s); }
+        dismiss => {
+            root.montage-action("close", 0, 0);
+            root.montage-open = false;
+            main-keys.focus();
+        }
+    }
+
+    // The Chat page (beside the sidebar), for chatting when not live.
+    if root.chat-open && !root.deck-visible: Rectangle {
+        x: root.sidebar-width;
+        width: root.width - root.sidebar-width;
+        background: Theme.bg;
+        VerticalLayout {
+            padding: 20px;
+            spacing: 14px;
+            Text { text: "Chat"; color: Theme.text; font-family: Theme.font-display; font-size: 28px; font-weight: 600; }
+            HorizontalLayout {
+                alignment: start;
+                vertical-stretch: 1;
+                ChatPanel {
+                    width: min(560px, root.width - root.sidebar-width - 40px);
+                    tabs: root.chat-tabs;
+                    selected: root.chat-selected;
+                    frame: root.chat-frame;
+                    message: root.chat-message;
+                    people-total: root.chat-people-total;
+                    people: root.chat-people;
+                    live: root.chat-live;
+                    select(i) => { root.chat-select(i); }
+                    pointer(k, x, y, b, dx, dy) => { root.chat-pointer(k, x, y, b, dx, dy); }
+                    key(t, d, c, s, a) => { root.chat-key(t, d, c, s, a); }
+                    home => { root.chat-home(); }
+                    reload => { root.chat-reload(); }
+                    resized(w, h) => { root.chat-resized(w, h); }
+                    send(t, i) => { root.chat-send(t, i); }
+                    toggle-chime => { root.chat-toggle-chime(); }
+                    emote-ms: root.chat-emote-ms;
+                    text-width(w) => { root.chat-text-width(w); }
+                }
+            }
+        }
+    }
+
+    if root.clips-open: ClipsDialog {
+        as-page: true;
+        x: root.sidebar-width;
+        width: root.width - root.sidebar-width;
+        form: root.clips-form;
+        player: root.clip-player;
+        action(f, i, v) => { root.clips-action(f, i, v); }
+        text(f, s) => { root.clips-text(f, s); }
+        dismiss => {
+            root.clips-action("close", 0, 0);
+            root.clips-open = false;
+            main-keys.focus();
+        }
+    }
+
     if root.add-source-open: AddSourceDialog {
         types: root.source-types;
         pick(kind) => {
@@ -825,71 +894,6 @@ export component AppWindow inherits Window {
         // Rust closes it (it stays open while the details are being applied).
         dismiss => {
             root.details-closed();
-            main-keys.focus();
-        }
-    }
-
-    if root.montage-open: MontageDialog {
-        as-page: true;
-        x: root.sidebar-width;
-        width: root.width - root.sidebar-width;
-        form: root.montage-form;
-        action(f, i, v) => { root.montage-action(f, i, v); }
-        text(f, s) => { root.montage-text(f, s); }
-        key(t, c, s) => { root.montage-key(t, c, s); }
-        dismiss => {
-            root.montage-action("close", 0, 0);
-            root.montage-open = false;
-            main-keys.focus();
-        }
-    }
-
-    // The Chat page (beside the sidebar), for chatting when not live.
-    if root.chat-open && !root.deck-visible: Rectangle {
-        x: root.sidebar-width;
-        width: root.width - root.sidebar-width;
-        background: Theme.bg;
-        VerticalLayout {
-            padding: 20px;
-            spacing: 14px;
-            Text { text: "Chat"; color: Theme.text; font-family: Theme.font-display; font-size: 28px; font-weight: 600; }
-            HorizontalLayout {
-                alignment: start;
-                vertical-stretch: 1;
-                ChatPanel {
-                    width: min(560px, root.width - root.sidebar-width - 40px);
-                    tabs: root.chat-tabs;
-                    selected: root.chat-selected;
-                    frame: root.chat-frame;
-                    message: root.chat-message;
-                    people-total: root.chat-people-total;
-                    people: root.chat-people;
-                    live: root.chat-live;
-                    select(i) => { root.chat-select(i); }
-                    pointer(k, x, y, b, dx, dy) => { root.chat-pointer(k, x, y, b, dx, dy); }
-                    key(t, d, c, s, a) => { root.chat-key(t, d, c, s, a); }
-                    home => { root.chat-home(); }
-                    reload => { root.chat-reload(); }
-                    resized(w, h) => { root.chat-resized(w, h); }
-                    send(t, i) => { root.chat-send(t, i); }
-                    toggle-chime => { root.chat-toggle-chime(); }
-                    emote-ms: root.chat-emote-ms;
-                    text-width(w) => { root.chat-text-width(w); }
-                }
-            }
-        }
-    }
-
-    if root.clips-open: ClipsDialog {
-        as-page: true;
-        x: root.sidebar-width;
-        width: root.width - root.sidebar-width;
-        form: root.clips-form;
-        action(f, i, v) => { root.clips-action(f, i, v); }
-        text(f, s) => { root.clips-text(f, s); }
-        dismiss => {
-            root.clips-action("close", 0, 0);
-            root.clips-open = false;
             main-keys.focus();
         }
     }

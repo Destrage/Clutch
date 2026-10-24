@@ -52,11 +52,17 @@ pub struct HypeConfig {
 impl HypeConfig {
     /// For game or desktop audio. Games go quiet often (menus, looting, waiting), and a jump
     /// from silence is not a highlight, so the baseline has a floor and the cooldown is long.
+    /// Low keeps only the loudest moments: in shooters every gunfight clears a jump from a quiet
+    /// stretch (fights peak around −14 to −21 dBFS), so it also needs −16 dBFS outright.
     pub fn game(sensitivity: Sensitivity) -> Self {
+        let (floor_db, baseline_floor_db) = match sensitivity {
+            Sensitivity::Low => (-16.0, -34.0),
+            Sensitivity::Medium | Sensitivity::High => (-35.0, -40.0),
+        };
         Self {
             sensitivity,
-            floor_db: -35.0,
-            baseline_floor_db: -40.0,
+            floor_db,
+            baseline_floor_db,
             cooldown: 45.0,
             sustain: 0.3,
             short_window: 0.4,
@@ -137,8 +143,9 @@ impl HypeDetector {
         &self.cfg
     }
 
-    pub fn set_sensitivity(&mut self, sensitivity: Sensitivity) {
-        self.cfg.sensitivity = sensitivity;
+    /// Switches to another configuration (e.g. a new sensitivity), keeping the history.
+    pub fn set_config(&mut self, cfg: HypeConfig) {
+        self.cfg = cfg;
     }
 
     /// The current baseline (dB), once there is history.
@@ -269,6 +276,27 @@ mod tests {
         // Loud, with a little flutter.
         let peaks = run(&mut d, 0.0, 300.0, |t| -12.0 + (t * 7.0).sin() as f32 * 2.0);
         assert!(peaks.is_empty(), "{peaks:?}");
+    }
+
+    #[test]
+    fn low_game_sensitivity_skips_ordinary_fights() {
+        // A gunfight at −18 dBFS after a quiet minute: medium fires, low doesn't.
+        let fight = |t: f64| if t < 60.0 { -45.0 } else { -18.0 };
+        let mut medium = HypeDetector::new(HypeConfig::game(Sensitivity::Medium));
+        assert_eq!(run(&mut medium, 0.0, 70.0, fight).len(), 1);
+        let mut low = HypeDetector::new(HypeConfig::game(Sensitivity::Low));
+        assert!(run(&mut low, 0.0, 70.0, fight).is_empty());
+        // A really loud moment still counts on low.
+        let mut low = HypeDetector::new(HypeConfig::game(Sensitivity::Low));
+        assert_eq!(
+            run(&mut low, 0.0, 70.0, |t| if t < 60.0 {
+                -45.0
+            } else {
+                -13.0
+            })
+            .len(),
+            1
+        );
     }
 
     #[test]

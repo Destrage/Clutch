@@ -13,7 +13,7 @@ use windows::Win32::System::Threading::{
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GW_OWNER, GWL_EXSTYLE, GetClassNameW, GetForegroundWindow, GetWindow,
     GetWindowLongW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
-    IsIconic, IsWindowVisible, WS_EX_TOOLWINDOW,
+    IsIconic, IsWindow, IsWindowVisible, WS_EX_TOOLWINDOW,
 };
 use windows::core::{BOOL, PWSTR};
 
@@ -97,6 +97,10 @@ pub struct WindowInfo {
     pub pid: u32,
 }
 
+// SAFETY: HWND is a Win32 window handle that can be safely referenced across threads.
+unsafe impl Send for WindowInfo {}
+unsafe impl Sync for WindowInfo {}
+
 impl WindowInfo {
     /// Stable match key stored in settings: `exe:class:title`.
     pub fn key(&self) -> String {
@@ -159,28 +163,39 @@ pub fn find_window(key: &str, windows: &[WindowInfo]) -> Option<WindowInfo> {
         .find_map(|rule| windows.iter().find(|w| rule(w)).cloned())
 }
 
+/// Windows that can be captured now (minimized ones can't).
 pub fn windows() -> Vec<WindowInfo> {
+    list_windows(false)
+}
+
+/// Windows to offer in the window pickers: also minimized ones (fullscreen games minimize
+/// while another window has focus), which are captured once restored.
+pub fn picker_windows() -> Vec<WindowInfo> {
+    list_windows(true)
+}
+
+fn list_windows(minimized: bool) -> Vec<WindowInfo> {
     unsafe extern "system" fn callback(hwnd: HWND, data: LPARAM) -> BOOL {
-        // SAFETY: `data` is the `&mut Vec<WindowInfo>` passed below.
-        let out = unsafe { &mut *(data.0 as *mut Vec<WindowInfo>) };
-        if let Some(info) = describe(hwnd) {
+        // SAFETY: `data` is the `&mut (Vec<WindowInfo>, bool)` passed below.
+        let (out, minimized) = unsafe { &mut *(data.0 as *mut (Vec<WindowInfo>, bool)) };
+        if let Some(info) = describe(hwnd, *minimized) {
             out.push(info);
         }
         BOOL(1)
     }
-    let mut out: Vec<WindowInfo> = Vec::new();
-    // SAFETY: the callback only touches `out` through the LPARAM during the call.
+    let mut state: (Vec<WindowInfo>, bool) = (Vec::new(), minimized);
+    // SAFETY: the callback only touches `state` through the LPARAM during the call.
     unsafe {
-        let _ = EnumWindows(Some(callback), LPARAM(&mut out as *mut _ as isize));
+        let _ = EnumWindows(Some(callback), LPARAM(&mut state as *mut _ as isize));
     }
-    out
+    state.0
 }
 
 /// The foreground window if it is a capturable fullscreen application.
 pub fn foreground_fullscreen() -> Option<WindowInfo> {
     // SAFETY: simple Win32 query.
     let hwnd = unsafe { GetForegroundWindow() };
-    let info = describe(hwnd)?;
+    let info = describe(hwnd, false)?;
     let ignored = [
         "explorer.exe",
         "clutch.exe",
@@ -192,11 +207,28 @@ pub fn foreground_fullscreen() -> Option<WindowInfo> {
         .then_some(info)
 }
 
-/// Describes a window if it's a normal, visible, capturable top-level window.
-fn describe(hwnd: HWND) -> Option<WindowInfo> {
+/// Returns true if the window handle is valid and belongs to the expected process.
+pub fn is_window_valid(hwnd: HWND, expected_pid: u32) -> bool {
+    // SAFETY: simple Win32 queries on an HWND handle.
+    unsafe {
+        if !IsWindow(Some(hwnd)).as_bool() {
+            return false;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        pid == expected_pid
+    }
+}
+
+/// Describes a window if it's a normal, visible, capturable top-level window (or a minimized
+/// one, with `minimized`).
+fn describe(hwnd: HWND, minimized: bool) -> Option<WindowInfo> {
     // SAFETY: Win32 queries on a window handle; buffers are sized correctly.
     unsafe {
-        if hwnd.is_invalid() || !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
+        if hwnd.is_invalid()
+            || !IsWindowVisible(hwnd).as_bool()
+            || (!minimized && IsIconic(hwnd).as_bool())
+        {
             return None;
         }
         // Skip our own windows *before* any call that may send them a message
@@ -306,5 +338,10 @@ mod tests {
             assert!(monitors.iter().any(|m| m.primary));
         }
         let _ = windows();
+    }
+
+    #[test]
+    fn invalid_window_is_not_valid() {
+        assert!(!is_window_valid(HWND::default(), 0));
     }
 }

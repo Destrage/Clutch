@@ -1,5 +1,5 @@
-//! Clutch's virtual camera: Windows 11 (Media Foundation), and Linux (a `v4l2loopback`
-//! device, see `control_linux.rs`).
+//! Clutch's virtual camera: Windows 11 (Media Foundation), Windows 10 (a DirectShow filter,
+//! see `dshow.rs`), and Linux (a `v4l2loopback` device, see `control_linux.rs`).
 //!
 //! On Windows the crate builds two things:
 //! - `estream_vcam.dll`: the camera source that Windows' Frame Server loads (COM, registered
@@ -19,6 +19,8 @@ pub mod control;
 pub mod control;
 #[cfg(windows)]
 mod dll;
+#[cfg(windows)]
+pub mod dshow;
 #[cfg(windows)]
 pub mod source;
 

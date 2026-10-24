@@ -10,6 +10,8 @@ pub enum EventKind {
     /// The clip hotkey (or a macro step).
     Manual,
     Kill,
+    /// An enemy downed but not yet eliminated (battle royales).
+    Knock,
     /// `n` kills in quick succession (as the game counts them).
     MultiKill {
         n: u8,
@@ -19,6 +21,8 @@ pub enum EventKind {
     Death,
     RoundWin,
     MatchWin,
+    /// A goal scored by the player.
+    Goal,
     /// A game objective, e.g. `"dragon"` or `"baron"`.
     Objective {
         name: String,
@@ -33,6 +37,7 @@ impl EventKind {
         match self {
             EventKind::Manual => "Clip".into(),
             EventKind::Kill => "Kill".into(),
+            EventKind::Knock => "Knock".into(),
             EventKind::MultiKill { n } => match n {
                 2 => "Double kill".into(),
                 3 => "Triple kill".into(),
@@ -44,6 +49,7 @@ impl EventKind {
             EventKind::Death => "Death".into(),
             EventKind::RoundWin => "Round win".into(),
             EventKind::MatchWin => "Victory".into(),
+            EventKind::Goal => "Goal".into(),
             EventKind::Objective { name } => {
                 let mut c = name.chars();
                 c.next()
@@ -58,9 +64,10 @@ impl EventKind {
     pub fn window(&self) -> (f64, f64) {
         match self {
             EventKind::Manual => (30.0, 0.0),
-            EventKind::Kill | EventKind::Death => (10.0, 3.0),
+            EventKind::Kill | EventKind::Knock | EventKind::Death => (10.0, 3.0),
             EventKind::MultiKill { .. } | EventKind::Ace => (15.0, 4.0),
             EventKind::RoundWin | EventKind::MatchWin => (15.0, 5.0),
+            EventKind::Goal => (12.0, 4.0),
             EventKind::Objective { .. } => (12.0, 3.0),
             EventKind::Hype => (12.0, 4.0),
         }
@@ -72,9 +79,10 @@ impl EventKind {
             EventKind::Ace => 1.0,
             EventKind::MultiKill { n } => (0.7 + 0.1 * *n as f32).min(1.0),
             EventKind::MatchWin => 0.9,
-            EventKind::Objective { .. } | EventKind::RoundWin => 0.8,
+            EventKind::Objective { .. } | EventKind::RoundWin | EventKind::Goal => 0.8,
             EventKind::Manual => 0.75,
             EventKind::Kill => 0.6,
+            EventKind::Knock => 0.55,
             EventKind::Hype => 0.5,
             EventKind::Death => 0.2,
         }

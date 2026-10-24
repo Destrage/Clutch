@@ -8,6 +8,9 @@ use std::sync::atomic::{Ordering, fence};
 
 /// The mapping the Frame Server's camera source creates.
 pub const MAPPING_NAME: &str = "Global\\estream-vcam-v1";
+/// The mapping the Windows 10 DirectShow filter creates inside the app using the camera. That
+/// app runs as the user, who can't create `Global\` objects, so it lives in the session.
+pub const DSHOW_MAPPING_NAME: &str = "Local\\estream-vcam-dshow-v1";
 /// SYSTEM, LOCAL SERVICE, Administrators and interactive users may read and write.
 pub const SDDL: &str = "D:(A;;GA;;;SY)(A;;GA;;;LS)(A;;GA;;;BA)(A;;GA;;;IU)";
 

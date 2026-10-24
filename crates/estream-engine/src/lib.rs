@@ -21,6 +21,7 @@ pub mod history;
 pub mod properties;
 pub mod source;
 pub mod video;
+mod watchdog;
 
 pub use command::{CanvasPatch, Change, Command, CommandError, ItemPatch};
 pub use engine::{Engine, EngineConfig, EngineError, Event, Origin, Subscription, VideoTap};

@@ -5,6 +5,7 @@
 //! YouTube's API quota is shared by everyone using Clutch: a streaming call costs as much as one
 //! poll, so streaming keeps the cost low.
 
+use super::event::StreamEvent;
 use super::{Context, Message, Platform, State, backoff};
 use serde_json::Value;
 use std::io::Read;
@@ -234,6 +235,10 @@ fn messages(reply: &Value, skip_before: Option<chrono::DateTime<chrono::Utc>>) -
                 .and_then(Value::as_str)
                 .unwrap_or("Someone")
                 .to_owned();
+            let event = event.map(|mut e| {
+                e.name = author.clone();
+                e
+            });
             Some(Message {
                 platform: Platform::YouTube,
                 color: super::name_color(&author),
@@ -248,10 +253,28 @@ fn messages(reply: &Value, skip_before: Option<chrono::DateTime<chrono::Utc>>) -
         .collect()
 }
 
-/// A chat item's text and whether it is a stream event (Super Chat, membership, …): `None` for
-/// kinds that aren't shown.
-fn describe(snippet: &Value) -> Option<(String, bool)> {
+/// A chat item's text and, for stream events (Super Chat, membership, …), the event (its name is
+/// filled in by the caller): `None` for kinds that aren't shown.
+fn describe(snippet: &Value) -> Option<(String, Option<StreamEvent>)> {
+    use super::event::StreamEventKind as K;
     let s = |v: Option<&Value>| v.and_then(Value::as_str).unwrap_or_default().to_owned();
+    // YouTube sends `amountMicros` as a string.
+    let micros = |d: &Value| {
+        d.get("amountMicros")
+            .and_then(|v| {
+                v.as_str()
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .or(v.as_f64())
+            })
+            .map(|m| m / 1e6)
+    };
+    let paid = |d: &Value, comment: String| {
+        let mut e = StreamEvent::new(K::Paid, "")
+            .amount_text(s(d.get("amountDisplayString")))
+            .message(comment);
+        e.amount = micros(d);
+        e
+    };
     let details = |key: &str| snippet.get(key);
     let with_comment = |head: String, comment: String| {
         if comment.is_empty() {
@@ -264,37 +287,47 @@ fn describe(snippet: &Value) -> Option<(String, bool)> {
         .get("type")
         .and_then(Value::as_str)
         .unwrap_or("textMessageEvent");
-    let line = match kind {
+    let (line, event) = match kind {
         "textMessageEvent" => {
             let text = s(snippet.get("displayMessage"));
-            return (!text.is_empty()).then_some((text, false));
+            return (!text.is_empty()).then_some((text, None));
         }
         "superChatEvent" => {
             let d = details("superChatDetails")?;
-            with_comment(
+            let comment = s(d.get("userComment"));
+            let line = with_comment(
                 format!("sent a {} Super Chat", s(d.get("amountDisplayString"))),
-                s(d.get("userComment")),
-            )
+                comment.clone(),
+            );
+            (line, paid(d, comment))
         }
         "superStickerEvent" => {
             let d = details("superStickerDetails")?;
-            format!("sent a {} Super Sticker", s(d.get("amountDisplayString")))
+            let line = format!("sent a {} Super Sticker", s(d.get("amountDisplayString")));
+            (line, paid(d, String::new()))
         }
         "newSponsorEvent" => {
             let level = s(details("newSponsorDetails").and_then(|d| d.get("memberLevelName")));
-            if level.is_empty() {
+            let line = if level.is_empty() {
                 "became a member".to_owned()
             } else {
                 format!("became a member ({level})")
-            }
+            };
+            (line, StreamEvent::new(K::Sub, "").tier(level))
         }
         "memberMilestoneChatEvent" => {
             let d = details("memberMilestoneChatDetails")?;
             let months = d.get("memberMonth").and_then(Value::as_u64).unwrap_or(0);
-            with_comment(
+            let comment = s(d.get("userComment"));
+            let line = with_comment(
                 format!("has been a member for {months} months"),
-                s(d.get("userComment")),
-            )
+                comment.clone(),
+            );
+            let event = StreamEvent::new(K::Resub, "")
+                .months(months as u32)
+                .tier(s(d.get("memberLevelName")))
+                .message(comment);
+            (line, event)
         }
         "membershipGiftingEvent" => {
             let d = details("membershipGiftingDetails")?;
@@ -302,15 +335,16 @@ fn describe(snippet: &Value) -> Option<(String, bool)> {
                 .get("giftMembershipsCount")
                 .and_then(Value::as_u64)
                 .unwrap_or(1);
-            if count == 1 {
+            let line = if count == 1 {
                 "gifted a membership".to_owned()
             } else {
                 format!("gifted {count} memberships")
-            }
+            };
+            (line, StreamEvent::new(K::Gift, "").amount(count as f64))
         }
         _ => return None,
     };
-    Some((line, true))
+    Some((line, Some(event)))
 }
 
 /// Splits a JSON array arriving in pieces into its whole top-level objects.
@@ -368,17 +402,30 @@ mod tests {
 
     #[test]
     fn paid_and_member_messages_are_events() {
+        use crate::livechat::event::StreamEventKind as K;
         let chat = serde_json::json!({ "type": "superChatEvent",
-            "superChatDetails": { "amountDisplayString": "$5.00", "userComment": "great stream" } });
-        assert_eq!(
-            describe(&chat),
-            Some(("sent a $5.00 Super Chat: great stream".into(), true))
-        );
+            "superChatDetails": { "amountDisplayString": "$5.00", "amountMicros": "5000000",
+                "userComment": "great stream" } });
+        let (line, event) = describe(&chat).unwrap();
+        assert_eq!(line, "sent a $5.00 Super Chat: great stream");
+        let event = event.unwrap();
+        assert_eq!((event.kind, event.amount), (K::Paid, Some(5.0)));
+        assert_eq!(event.amount_text.as_deref(), Some("$5.00"));
+        assert_eq!(event.message.as_deref(), Some("great stream"));
         let gift = serde_json::json!({ "type": "membershipGiftingEvent",
             "membershipGiftingDetails": { "giftMembershipsCount": 5 } });
-        assert_eq!(describe(&gift), Some(("gifted 5 memberships".into(), true)));
+        let (line, event) = describe(&gift).unwrap();
+        assert_eq!(line, "gifted 5 memberships");
+        assert_eq!(
+            event.map(|e| (e.kind, e.amount)),
+            Some((K::Gift, Some(5.0)))
+        );
+        let milestone = serde_json::json!({ "type": "memberMilestoneChatEvent",
+            "memberMilestoneChatDetails": { "memberMonth": 7 } });
+        let event = describe(&milestone).and_then(|(_, e)| e).unwrap();
+        assert_eq!((event.kind, event.months), (K::Resub, Some(7)));
         let text = serde_json::json!({ "type": "textMessageEvent", "displayMessage": "hi" });
-        assert_eq!(describe(&text), Some(("hi".into(), false)));
+        assert_eq!(describe(&text), Some(("hi".into(), None)));
         let other = serde_json::json!({ "type": "pollEvent" });
         assert_eq!(describe(&other), None);
     }

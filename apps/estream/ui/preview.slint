@@ -14,6 +14,7 @@ export component Preview inherits Rectangle {
     // Cursor requested by Rust for the current hover target.
     in property <string> cursor: "default";
     in property <bool> space-down;
+    in property <bool> scroll-pan: false;
     in-out property <float> zoom: 1;
     in-out property <length> pan-x;
     in-out property <length> pan-y;
@@ -193,11 +194,13 @@ export component Preview inherits Rectangle {
                 root.zoom = new-zoom;
                 root.pan-x = self.mouse-x - cx * new-scale - (root.width - root.canvas-w * new-scale * 1px) / 2;
                 root.pan-y = self.mouse-y - cy * new-scale - (root.height - root.canvas-h * new-scale * 1px) / 2;
-            } else if (e.modifiers.shift) {
-                root.pan-x += e.delta-y;
-            } else {
-                root.pan-x += e.delta-x;
-                root.pan-y += e.delta-y;
+            } else if (root.scroll-pan) {
+                if (e.modifiers.shift) {
+                    root.pan-x += e.delta-y;
+                } else {
+                    root.pan-x += e.delta-x;
+                    root.pan-y += e.delta-y;
+                }
             }
             return EventResult.accept;
         }

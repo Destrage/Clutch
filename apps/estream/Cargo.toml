@@ -46,16 +46,19 @@ tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 slint.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+serde_path_to_error = "0.1.20"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
     "Win32_Foundation",
+    "Win32_Media_Audio",
     "Win32_Security_Cryptography",
     "Win32_System_DataExchange",
     "Win32_System_Diagnostics_Debug",
     "Win32_System_Memory",
     "Win32_System_Ole",
     "Win32_System_Registry",
+    "Win32_System_Threading",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }

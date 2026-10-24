@@ -146,6 +146,9 @@ pub struct App {
     recordings: estream_clips::Library,
     /// Markers for the recording in progress: its file, when it started, the markers so far.
     markers: Option<(PathBuf, Instant, estream_clips::markers::Markers)>,
+    /// Recordings finished this session (file, started, stopped), newest last, so events that
+    /// arrive late (from replay files) still get a marker in the recording that covered them.
+    finished_recordings: Vec<(PathBuf, Instant, Instant)>,
     /// A fullscreen program offered as a game (exe, window title), until answered.
     clip_ask: Option<(String, String)>,
     /// The Clips view.
@@ -167,6 +170,15 @@ pub struct App {
     /// Emote images and the layout of chat lines with emotes (one entry per `chat_lines` row).
     chat_emotes: crate::emotes::ChatEmotes,
     chat_seen: u64,
+    /// Plays stream event sounds on the monitoring device (started on first use).
+    event_sounds: Option<estream_media::sounds::SoundPlayer>,
+    /// Event sound files found missing (reported once each).
+    missing_sounds: std::collections::HashSet<PathBuf>,
+    /// Serves the overlay pages (Alerts) to browser sources on this PC.
+    overlay: Option<crate::overlay::OverlayServer>,
+    /// The Test button counts last seen per Alerts source.
+    alert_tests: HashMap<SourceId, Vec<i64>>,
+    overlay_synced: Instant,
     chat_shown: Option<(
         Vec<crate::ui::ChatStateRow>,
         Vec<Option<crate::livechat::Platform>>,
@@ -744,6 +756,7 @@ impl App {
             clipper,
             recordings,
             markers: None,
+            finished_recordings: Vec::new(),
             clip_ask: None,
             clips_ui: crate::clips::ClipsUi::default(),
             chat: crate::chat::ChatUi::default(),
@@ -755,6 +768,11 @@ impl App {
             chat_lines: Rc::new(VecModel::default()),
             chat_emotes: crate::emotes::ChatEmotes::new(),
             chat_seen: 0,
+            event_sounds: None,
+            missing_sounds: Default::default(),
+            overlay: None,
+            alert_tests: HashMap::new(),
+            overlay_synced: Instant::now(),
             chat_shown: None,
             chat_reply_to: Vec::new(),
             chat_sending: None,
@@ -1115,6 +1133,96 @@ impl App {
         w.set_chat_message(message.into());
     }
 
+    /// Starts the overlay server once (with a token made on first use and kept in settings).
+    fn start_overlay_server(&mut self) {
+        if self.overlay.is_some() {
+            return;
+        }
+        if self.settings.overlay_token.is_empty() {
+            self.settings.overlay_token = crate::overlay::new_token();
+            self.settings.save(&self.paths.settings());
+        }
+        match crate::overlay::OverlayServer::start(
+            self.settings.overlay_port,
+            &self.settings.overlay_token,
+        ) {
+            Ok(server) => self.overlay = Some(server),
+            Err(e) => tracing::warn!(error = %e, "overlay server didn't start; Alerts won't show"),
+        }
+    }
+
+    /// Keeps each Alerts source's page settings current and plays Test presses (a few times
+    /// a second).
+    fn tick_overlays(&mut self) {
+        if self.overlay_synced.elapsed() < Duration::from_millis(250) {
+            return;
+        }
+        self.overlay_synced = Instant::now();
+        let (Some(server), Some(engine)) = (&self.overlay, &self.engine) else {
+            return;
+        };
+        use crate::overlay::alerts;
+        let snapshot = engine.snapshot();
+        let mut keep = Vec::new();
+        for def in snapshot.sources.iter().filter(|d| d.kind == alerts::KIND) {
+            let id = def.id.to_string();
+            server.set_config(&id, alerts::config(&def.settings, server));
+            let presses = alerts::test_presses(&def.settings);
+            let counts: Vec<i64> = presses.iter().map(|(_, n)| *n).collect();
+            if let Some(seen) = self.alert_tests.get(&def.id) {
+                for ((kind, n), before) in presses.iter().zip(seen) {
+                    if n != before {
+                        let event = alerts::sample(*kind);
+                        let msg =
+                            alerts::alert_message(&event, crate::livechat::Platform::Twitch, true);
+                        server.send(Some(&id), &msg);
+                    }
+                }
+            }
+            self.alert_tests.insert(def.id, counts);
+            keep.push(id);
+        }
+        self.alert_tests
+            .retain(|id, _| keep.contains(&id.to_string()));
+        server.retain_sources(&keep);
+    }
+
+    /// Plays the sound chosen for `kind` on the monitoring device, or Clutch's built-in one when
+    /// none is set (or its file is gone); the system chime when even that can't be had.
+    fn play_event_sound(&mut self, kind: crate::livechat::event::StreamEventKind) {
+        let chosen = self.settings.event_sounds.get(&kind).cloned().filter(|p| {
+            let found = p.is_file();
+            if !found && self.missing_sounds.insert(p.clone()) {
+                tracing::warn!(path = %p.display(), "event sound file is missing; built-in sound instead");
+            }
+            found
+        });
+        let Some(path) = chosen.or_else(|| crate::overlay::alerts::builtin_sound(kind)) else {
+            crate::livechat::chime();
+            return;
+        };
+        let device = self.monitor_device();
+        if self
+            .event_sounds
+            .as_ref()
+            .is_none_or(|p| p.device() != device)
+        {
+            self.event_sounds = Some(estream_media::sounds::SoundPlayer::start(&device));
+        }
+        if let Some(player) = &self.event_sounds {
+            player.play(&path, self.settings.event_sound_volume);
+        }
+    }
+
+    /// The device event sounds and clip playback are heard on: the monitoring device (empty =
+    /// default output).
+    fn monitor_device(&self) -> String {
+        self.engine
+            .as_ref()
+            .map(|e| e.snapshot().audio.monitor_device.clone())
+            .unwrap_or_default()
+    }
+
     /// The combined chat: adds new messages to the list, and updates the reader states and the
     /// "Send to" choices when they change.
     fn tick_live_chat(&mut self, w: &AppWindow) {
@@ -1122,8 +1230,16 @@ impl App {
         let feed = self.livechat.feed().clone();
         let (new, seen) = feed.since(self.chat_seen);
         self.chat_seen = seen;
-        let chime = self.settings.chat_chime && new.iter().any(|m| m.event);
+        // One sound per batch, for the first event in it.
+        let sound_for = new
+            .iter()
+            .find_map(|m| m.event.as_ref().map(|e| e.kind))
+            .filter(|_| self.settings.chat_chime);
         for m in new {
+            if let (Some(event), Some(server)) = (&m.event, &self.overlay) {
+                let msg = crate::overlay::alerts::alert_message(event, m.platform, false);
+                server.send(None, &msg);
+            }
             let parts = if self.settings.chat_emotes {
                 m.parts
             } else {
@@ -1131,7 +1247,7 @@ impl App {
             };
             let (pieces, body_height) = self.chat_emotes.push(parts);
             self.chat_lines.push(crate::ui::ChatLine {
-                event: m.event,
+                event: m.event.is_some(),
                 kind: m.platform.key().into(),
                 author: m.author.into(),
                 author_color: parse_color(&m.color)
@@ -1142,8 +1258,8 @@ impl App {
                 body_height,
             });
         }
-        if chime {
-            crate::livechat::chime();
+        if let Some(kind) = sound_for {
+            self.play_event_sound(kind);
         }
         // Keep the list as long as the feed.
         while self.chat_lines.row_count() > 300 {
@@ -2215,6 +2331,9 @@ impl App {
             self.paths.now_playing(),
         );
         estream_media::music_source::register(&mut registry);
+        // Overlay pages need the server's address before their sources are created.
+        self.start_overlay_server();
+        registry.register(crate::overlay::alerts::source_type());
         if let Some(w) = self.window() {
             w.set_source_types(ModelRc::new(VecModel::from(source_types(&registry))));
         }
@@ -2448,6 +2567,7 @@ impl App {
         self.tick_api();
         self.tick_clips();
         self.tick_clips_view();
+        self.tick_overlays();
         self.tick_montages();
         self.tick_automation();
         if self.health_at.elapsed() >= Duration::from_secs(1) {
@@ -2765,6 +2885,7 @@ impl App {
     /// Rebuilds every UI model from the latest engine snapshot.
     pub fn refresh(&mut self) {
         let Some(w) = self.window() else { return };
+        w.set_scroll_pan(self.settings.scroll_pan);
         w.set_clip_hotkey(self.settings.clips.hotkey.clone().into());
         if w.get_automation_open() {
             self.refresh_automation(); // edits, undo and redo
@@ -4373,10 +4494,17 @@ impl App {
                     };
                     self.toast(message, false);
                     // The markers follow the recording if it was remuxed to MP4.
-                    if let (Some((original, ..)), Some(last)) = (self.markers.take(), paths.first())
-                        && let Err(e) = estream_clips::markers::Markers::rename(&original, last)
+                    if let (Some((original, started, _)), Some(last)) =
+                        (self.markers.take(), paths.first())
                     {
-                        tracing::warn!(error = %e, "couldn't move the recording markers");
+                        if let Err(e) = estream_clips::markers::Markers::rename(&original, last) {
+                            tracing::warn!(error = %e, "couldn't move the recording markers");
+                        }
+                        self.finished_recordings
+                            .push((last.clone(), started, Instant::now()));
+                        if self.finished_recordings.len() > 8 {
+                            self.finished_recordings.remove(0);
+                        }
                     }
                     self.last_recording = paths.first().cloned();
                     self.last_output = paths.into_iter().next();
@@ -4530,11 +4658,31 @@ impl App {
                     runner.game_event(game.as_deref().unwrap_or(""), t, at);
                     self.runner = Some(runner);
                 }
-                if let Some((path, started, markers)) = &mut self.markers {
+                // Into the recording that was running at `at`: the current one, or (for events
+                // read from replay files after the match) one that has finished since.
+                if let Some((path, started, markers)) = &mut self.markers
+                    && at >= *started
+                {
                     markers.push(estream_clips::markers::Marker {
                         kind,
                         game,
-                        at: at.saturating_duration_since(*started).as_secs_f64(),
+                        at: at.duration_since(*started).as_secs_f64(),
+                    });
+                    if let Err(e) = markers.save(path) {
+                        tracing::warn!(error = %e, "couldn't save the recording markers");
+                    }
+                } else if let Some((path, started, _)) = self
+                    .finished_recordings
+                    .iter()
+                    .rev()
+                    .find(|(_, started, stopped)| at >= *started && at <= *stopped)
+                {
+                    let mut markers =
+                        estream_clips::markers::Markers::load(path).unwrap_or_default();
+                    markers.push(estream_clips::markers::Marker {
+                        kind,
+                        game,
+                        at: at.duration_since(*started).as_secs_f64(),
                     });
                     if let Err(e) = markers.save(path) {
                         tracing::warn!(error = %e, "couldn't save the recording markers");
@@ -4762,8 +4910,15 @@ impl App {
 
     /// While the Clips view is open: frame previews, trims, and a rescan every 30 s.
     fn tick_clips_view(&mut self) {
-        if !self.window().is_some_and(|w| w.get_clips_open()) {
+        let Some(w) = self.window() else { return };
+        if !w.get_clips_open() {
+            // Left the Clips view (however it closed): stop playback and free the file.
+            self.clips_ui.stop_playback();
             return;
+        }
+        let duration = self.selected_clip_duration();
+        if self.clips_ui.tick_player(&self.gpu, duration) {
+            w.set_clip_player(self.clips_ui.player_state());
         }
         let (mut changed, done) = self.clips_ui.poll();
         if let Some(done) = done {
@@ -4782,6 +4937,47 @@ impl App {
         if changed {
             self.refresh_clips();
         }
+    }
+
+    /// The selected clip's or recording's length in seconds (0 when none).
+    fn selected_clip_duration(&self) -> f64 {
+        self.clips_ui
+            .selected
+            .as_ref()
+            .and_then(|p| self.shown_library().get(p))
+            .map_or(0.0, |c| c.meta.duration)
+    }
+
+    /// The in-app player's actions. Returns `false` for other actions.
+    fn clip_player_action(&mut self, field: &str, index: usize, value: f32) -> bool {
+        let monitor = self.monitor_device();
+        let duration = self.selected_clip_duration();
+        match field {
+            "play-toggle" => self.clips_ui.play_toggle(&monitor),
+            "seek" => self.clips_ui.seek(value as f64, true, &monitor),
+            "seek-done" => self.clips_ui.seek_done(),
+            "seek-by" => self.clips_ui.seek_by(value as f64, duration, &monitor),
+            "seek-event" => {
+                let at = self
+                    .clips_ui
+                    .selected
+                    .as_ref()
+                    .and_then(|p| self.shown_library().get(p))
+                    .and_then(|c| c.meta.events.get(index))
+                    .map(|e| e.at);
+                if let Some(at) = at {
+                    let to = (at - crate::clips::TICK_LEAD).max(0.0);
+                    self.clips_ui.seek(to, false, &monitor);
+                }
+            }
+            "volume" => self.clips_ui.set_volume(value),
+            "mute" => self.clips_ui.toggle_mute(),
+            _ => return false,
+        }
+        if let Some(w) = self.window() {
+            w.set_clip_player(self.clips_ui.player_state());
+        }
+        true
     }
 
     /// The games in the filter: "All games" first.
@@ -4895,6 +5091,18 @@ impl App {
                     .join(" · ")
             })
             .unwrap_or_default();
+        let ticks: Vec<crate::ui::ClipTick> = clip
+            .map(|c| {
+                c.meta
+                    .events
+                    .iter()
+                    .map(|m| crate::ui::ClipTick {
+                        at: m.at as f32,
+                        label: format!("{} {}", m.kind.label(), format_length(m.at)).into(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let subtitle = clip
             .map(|c| {
                 let mut parts = Vec::new();
@@ -4928,6 +5136,7 @@ impl App {
             recordings,
             subtitle: subtitle.into(),
             events: events.into(),
+            ticks: ModelRc::new(VecModel::from(ticks)),
             favorite: clip.is_some_and(|c| c.meta.favorite),
             duration: clip.map_or(0.0, |c| c.meta.duration as f32),
             trim_in: self.clips_ui.trim_in as f32,
@@ -4950,8 +5159,14 @@ impl App {
         } else {
             "clip"
         };
+        if self.clip_player_action(field, i, value) {
+            return;
+        }
         match field {
-            "close" => self.clips_ui.cancel_trim(),
+            "close" => {
+                self.clips_ui.cancel_trim();
+                self.clips_ui.stop_playback();
+            }
             "select" => {
                 if let Some(p) = at(self) {
                     let d = duration(self, &p);
@@ -4966,10 +5181,23 @@ impl App {
                 }
             }
             "play" => {
-                if let Some(p) = at(self)
-                    && let Err(e) = crate::shell::open(&p)
-                {
-                    self.toast(format!("Couldn't open the {noun}: {e}"), true);
+                // Double-click on a tile: select it and play it here.
+                if let Some(p) = at(self) {
+                    if self.clips_ui.selected.as_ref() != Some(&p) {
+                        let d = duration(self, &p);
+                        self.clips_ui.select(Some((&p, d)));
+                    }
+                    if !self.clips_ui.playing_file(&p) {
+                        self.clips_ui.play_toggle(&self.monitor_device());
+                    }
+                }
+            }
+            "open-external" => {
+                if let Some(p) = at(self) {
+                    self.clips_ui.stop_playback();
+                    if let Err(e) = crate::shell::open(&p) {
+                        self.toast(format!("Couldn't open the {noun}: {e}"), true);
+                    }
                 }
             }
             "reveal" => {
@@ -4999,6 +5227,9 @@ impl App {
             }
             "delete" => {
                 if let Some(p) = at(self) {
+                    if self.clips_ui.playing_file(&p) {
+                        self.clips_ui.stop_playback();
+                    }
                     match self.shown_library_mut().delete(&p) {
                         Ok(()) => {
                             if self.showing_recordings() {
@@ -5025,6 +5256,15 @@ impl App {
                 if let Some(p) = self.clips_ui.selected.clone() {
                     let d = duration(self, &p);
                     self.clips_ui.set_trim(field == "trim-out", value as f64, d);
+                    // With the player open, show the new trim point in it.
+                    if self.clips_ui.playing_file(&p) {
+                        let t = if field == "trim-out" {
+                            self.clips_ui.trim_out
+                        } else {
+                            self.clips_ui.trim_in
+                        };
+                        self.clips_ui.seek(t, true, &self.monitor_device());
+                    }
                 }
             }
             "trim-mode" => self.clips_ui.precise = i == 1,
@@ -5033,6 +5273,10 @@ impl App {
                     return;
                 };
                 let replace = field == "trim-replace";
+                if replace {
+                    // The replaced file must not be open.
+                    self.clips_ui.stop_playback();
+                }
                 let output = if replace {
                     source.clone()
                 } else {
@@ -5498,8 +5742,26 @@ impl App {
                 GameAudio::Skip => 2,
             },
             chat_emotes: self.settings.chat_emotes,
+            scroll_pan: self.settings.scroll_pan,
             chat_third_party: self.settings.chat_third_party,
             chat_animate: self.settings.chat_animate,
+            event_sounds: ModelRc::new(VecModel::from(
+                crate::livechat::event::StreamEventKind::ALL
+                    .iter()
+                    .map(|k| crate::ui::EventSoundRow {
+                        label: k.label().into(),
+                        file: self
+                            .settings
+                            .event_sounds
+                            .get(k)
+                            .and_then(|p| p.file_name())
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default()
+                            .into(),
+                    })
+                    .collect::<Vec<_>>(),
+            )),
+            event_sound_volume: self.settings.event_sound_volume,
             remote_enabled: self.settings.remote.enabled,
             remote_port: self.settings.remote.port as f32,
             remote_auth: self.settings.remote.auth,
@@ -5521,12 +5783,16 @@ impl App {
     }
 
     /// The integrations shown in Settings → Clips, in order.
-    const CLIP_INTEGRATIONS: [(estream_clips::Integration, &'static str); 3] = [
+    const CLIP_INTEGRATIONS: [(estream_clips::Integration, &'static str); 4] = [
         (estream_clips::Integration::Cs2Gsi, "Counter-Strike 2"),
         (estream_clips::Integration::Dota2Gsi, "Dota 2"),
         (
             estream_clips::Integration::LeagueLiveClient,
             "League of Legends",
+        ),
+        (
+            estream_clips::Integration::PubgReplay,
+            estream_clips::integrations::replay::pubg::GAME,
         ),
     ];
 
@@ -5543,6 +5809,15 @@ impl App {
                     (false, _) => "Not connected".to_owned(),
                     (true, Integration::LeagueLiveClient) => {
                         "Connected · events arrive while a match is on".to_owned()
+                    }
+                    (true, Integration::PubgReplay) => {
+                        if estream_clips::integrations::replay::pubg::folder()
+                            .is_some_and(|f| f.is_dir())
+                        {
+                            "Connected · events arrive when a Battle Royale match ends (other modes save no replay)".to_owned()
+                        } else {
+                            "Turn on replays in PUBG to get events".to_owned()
+                        }
                     }
                     (true, _) => match self.clipper.last_seen(*integration) {
                         Some(t) if t.elapsed() < Duration::from_secs(30) => {
@@ -5712,6 +5987,18 @@ impl App {
                         }
                         self.toast(
                             format!("{name} connected: clips start in your next match"),
+                            false,
+                        );
+                        return true;
+                    }
+                    Integration::PubgReplay => {
+                        if !c.connected.contains(&integration) {
+                            c.connected.push(integration);
+                        }
+                        self.toast(
+                            format!(
+                                "{name} connected: kills, knocks and wins are read from its replay when each match ends"
+                            ),
                             false,
                         );
                         return true;
@@ -6197,11 +6484,42 @@ impl App {
                 };
             }
             "chat-emotes" => self.settings.chat_emotes = value > 0.5,
+            "scroll-pan" => {
+                self.settings.scroll_pan = value > 0.5;
+                if let Some(w) = self.window() {
+                    w.set_scroll_pan(self.settings.scroll_pan);
+                }
+            }
             "chat-third-party" => {
                 self.settings.chat_third_party = value > 0.5;
                 crate::livechat::emotes::set_third_party(value > 0.5);
             }
             "chat-animate" => self.settings.chat_animate = value > 0.5,
+            "event-sound-pick" | "event-sound-play" | "event-sound-clear" => {
+                use crate::livechat::event::StreamEventKind;
+                let Some(&kind) = StreamEventKind::ALL.get(value.round().max(0.0) as usize) else {
+                    return;
+                };
+                match field {
+                    "event-sound-pick" => {
+                        let Some(path) = rfd::FileDialog::new()
+                            .set_title(format!("Sound for {}", kind.label()))
+                            .add_filter("Sound", &["wav", "ogg", "mp3", "flac", "m4a"])
+                            .pick_file()
+                        else {
+                            return;
+                        };
+                        self.missing_sounds.remove(&path);
+                        self.settings.event_sounds.insert(kind, path);
+                        self.play_event_sound(kind);
+                    }
+                    "event-sound-play" => self.play_event_sound(kind),
+                    _ => {
+                        self.settings.event_sounds.remove(&kind);
+                    }
+                }
+            }
+            "event-sound-volume" => self.settings.event_sound_volume = value.clamp(0.0, 1.0),
             "remote-enable" => {
                 self.settings.remote.enabled = value > 0.5;
                 self.remote_restart_at = Some(Instant::now());
@@ -9404,7 +9722,7 @@ impl estream_api::Studio for App {
                 Output::Stream => "couldn't go live (check the stream destinations in Clutch)",
                 Output::Record => "couldn't start recording (see Clutch for details)",
                 Output::ReplayBuffer => "couldn't start the replay buffer",
-                Output::VirtualCam => "couldn't start the virtual camera (needs Windows 11)",
+                Output::VirtualCam => "couldn't start the virtual camera (see Clutch for details)",
             }
             .into());
         }

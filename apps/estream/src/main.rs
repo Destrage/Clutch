@@ -15,6 +15,7 @@ mod kick;
 mod livechat;
 mod montage;
 mod oauth;
+mod overlay;
 mod performance;
 mod presets;
 mod secret;
@@ -62,6 +63,22 @@ fn set_app_user_model_id() {
         windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
     } {
         tracing::warn!("couldn't set the AppUserModelID: {e}");
+    }
+}
+
+/// Configures Clutch to run at Above Normal priority so Windows GPU scheduling and DWM
+/// do not starve the compositor when games or other apps run at 100% GPU utilization.
+#[cfg(windows)]
+fn set_process_priority() {
+    // SAFETY: GetCurrentProcess returns a valid pseudo-handle to the current process.
+    unsafe {
+        let process = windows::Win32::System::Threading::GetCurrentProcess();
+        if let Err(e) = windows::Win32::System::Threading::SetPriorityClass(
+            process,
+            windows::Win32::System::Threading::ABOVE_NORMAL_PRIORITY_CLASS,
+        ) {
+            tracing::warn!("couldn't set process priority to Above Normal: {e}");
+        }
     }
 }
 
@@ -140,6 +157,8 @@ fn main() -> anyhow::Result<()> {
     };
     #[cfg(windows)]
     set_app_user_model_id();
+    #[cfg(windows)]
+    set_process_priority();
     estream_capture::set_state_dir(paths.root.clone());
     #[cfg(target_os = "linux")]
     register_portal_app();
@@ -156,6 +175,7 @@ fn main() -> anyhow::Result<()> {
         _ => {}
     }
     let gpu = GpuContext::new_headless(&GpuOptions::default())?;
+    gpu.raise_scheduling_priority();
     // Slint keeps the device and queue in a thread-local that is dropped during process
     // exit, after wgpu's own thread-locals are gone (which panics in wgpu's lock tracing).
     // Holding one reference for the life of the process means the GPU objects are never

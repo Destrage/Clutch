@@ -20,6 +20,8 @@ pub enum Integration {
     Dota2Gsi,
     /// League of Legends Live Client Data API.
     LeagueLiveClient,
+    /// PUBG: Battlegrounds replay files (events arrive when the player's match ends).
+    PubgReplay,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
