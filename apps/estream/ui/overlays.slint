@@ -1406,7 +1406,7 @@ export component SettingsDialog inherits Modal {
                     spacing: 12px;
                     SectionTitle { text: "VIRTUAL CAMERA"; }
                     Text {
-                        text: "Shows a canvas as a camera in Zoom, Teams, Discord, Meet and other apps (Windows 11, or Linux with v4l2loopback).";
+                        text: "Shows a canvas as a camera in Zoom, Teams, Discord, Meet and other apps (Windows 10/11, or Linux with v4l2loopback).";
                         color: Theme.text-faint;
                         font-size: Theme.font-s;
                         wrap: word-wrap;
@@ -1503,6 +1503,15 @@ export component SettingsDialog inherits Modal {
                             options: ["Dark", "Light", "Follow system"];
                             current-index: root.form.theme;
                             selected(i) => { root.set("theme", i); }
+                        }
+                    }
+                    SectionTitle { text: "CANVAS"; }
+                    SettingRow {
+                        label: "Mouse wheel pans preview";
+                        hint: "Off: panning uses middle mouse button drag or Space+drag.";
+                        HorizontalLayout {
+                            alignment: start;
+                            Toggle { checked: root.form.scroll-pan; toggled(v) => { root.set("scroll-pan", v ? 1 : 0); } }
                         }
                     }
                     SectionTitle { text: "SOURCES"; }

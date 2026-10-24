@@ -1,7 +1,8 @@
 //! Virtual camera output: sends a canvas to "Clutch Virtual Camera".
 //!
-//! On Windows 11 a feed thread creates the session camera, then watches the shared memory the
-//! camera source opens while an app uses it. Only then does it take canvas frames from the
+//! On Windows a feed thread creates the session camera (Windows 11; on Windows 10 the
+//! DirectShow filter is always registered), then watches the shared memory the camera source
+//! opens while an app uses it. Only then does it take canvas frames from the
 //! engine, scale them to the size the app asked for, and write them; otherwise it costs
 //! nothing. On Linux it writes every canvas frame to a `v4l2loopback` device (which can't tell
 //! whether an app is watching).
@@ -38,7 +39,11 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 impl VirtualCamOutput {
     /// Turns the camera on (asynchronously: watch [`VirtualCamOutput::state`]).
     pub fn start(engine: &Engine, canvas: CanvasId) -> Self {
-        Self::start_with(engine.video_tap(), canvas, shared::MAPPING_NAME, true)
+        #[cfg(windows)]
+        let mapping = estream_vcam::control::mapping_name();
+        #[cfg(not(windows))]
+        let mapping = shared::MAPPING_NAME;
+        Self::start_with(engine.video_tap(), canvas, mapping, true)
     }
 
     /// `create_camera: false` skips the system camera (tests drive the shared memory directly).

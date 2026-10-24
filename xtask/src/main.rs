@@ -1,7 +1,8 @@
-//! Developer tasks: `cargo xtask icon` and `cargo xtask package` (the Windows installer, or
-//! on Linux the AppImage).
+//! Developer tasks: `cargo xtask doctor`, `cargo xtask icon` and `cargo xtask package`
+//! (the Windows installer, or on Linux the AppImage).
 
 mod appimage;
+mod doctor;
 mod icon;
 
 use std::fmt::Write as _;
@@ -29,9 +30,10 @@ const WIX_URL: &str =
 fn main() {
     let task = std::env::args().nth(1).unwrap_or_default();
     let result = match task.as_str() {
+        "doctor" => doctor::doctor(),
         "icon" => write_icon(),
         "package" => package(),
-        _ => Err("usage: cargo xtask <icon|package>".into()),
+        _ => Err("usage: cargo xtask <doctor|icon|package>".into()),
     };
     if let Err(e) = result {
         eprintln!("error: {e}");
@@ -39,7 +41,7 @@ fn main() {
     }
 }
 
-fn root() -> PathBuf {
+pub(crate) fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .map(Path::to_path_buf)
