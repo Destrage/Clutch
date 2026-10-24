@@ -6,6 +6,7 @@ use crate::filters::Filters;
 use crate::frame_clock::{FrameClock, FrameTick, wait_until};
 use crate::graph::{CanvasGraph, FlatItem, RenderGraph};
 use crate::source::{SourceContext, SourceRegistry, SourceStatus, VideoSource};
+use crate::watchdog::{FinishGuard, Stage, VideoProgress};
 use estream_core::color::srgb_to_linear;
 use estream_core::{CanvasId, EngineClock, Rgba8, SourceId, Timestamp};
 use estream_gpu::{
@@ -281,6 +282,7 @@ pub struct VideoCore {
     scratch_extra: Vec<DrawItem<'static>>,
     transitions: TransitionRenderer,
     filters: Filters,
+    progress: Arc<VideoProgress>,
 }
 
 impl VideoCore {
@@ -298,7 +300,13 @@ impl VideoCore {
             graph: Arc::new(RenderGraph::default()),
             scratch: Vec::new(),
             scratch_extra: Vec::new(),
+            progress: Arc::new(VideoProgress::new(EngineClock::new())),
         }
+    }
+
+    /// Where the video loop is, for the stall watchdog.
+    pub(crate) fn progress(&self) -> Arc<VideoProgress> {
+        self.progress.clone()
     }
 
     /// Studio-mode Preview outputs of canvases that have one.
@@ -488,6 +496,7 @@ impl VideoCore {
     pub fn tick_sources(&mut self, encoder: &mut wgpu::CommandEncoder, now: Timestamp) {
         for (id, slot) in &mut self.sources {
             if let Some(instance) = &mut slot.instance {
+                self.progress.enter_source(*id);
                 let ctx = SourceContext {
                     gpu: &self.gpu,
                     compositor: &self.compositor,
@@ -497,6 +506,7 @@ impl VideoCore {
             }
         }
         // Video filters run on the fresh source frames.
+        self.progress.enter(Stage::Filters);
         let Self {
             gpu,
             sources,
@@ -715,6 +725,7 @@ impl VideoCore {
         let started = Instant::now();
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
         self.tick_sources(&mut encoder, now);
+        self.progress.enter(Stage::Render);
         // Up to 64 canvases are tracked in fixed arrays to stay allocation-free.
         let mut ticks = [None::<(FrameTick, usize)>; 64];
         let mut maps = [None::<(usize, Timestamp)>; 64];
@@ -729,13 +740,16 @@ impl VideoCore {
                     .map(|idx| (idx, tick.timestamp));
             }
         }
+        self.progress.enter(Stage::Submit);
         self.gpu.queue.submit([encoder.finish()]);
+        self.progress.enter(Stage::Poll);
         for (canvas, map) in self.canvases.iter_mut().zip(maps) {
             if let (Some(ring), Some((idx, ts))) = (&mut canvas.readback, map) {
                 ring.request_map(idx, ts);
             }
         }
         let _ = self.gpu.device.poll(wgpu::PollType::Poll);
+        self.progress.enter(Stage::Deliver);
         for canvas in &mut self.canvases {
             if let Some(ring) = &mut canvas.readback {
                 ring.deliver(
@@ -795,10 +809,13 @@ pub(crate) fn run(mut core: VideoCore, clock: EngineClock, sink: Arc<dyn VideoSi
     let mut revision = u64::MAX;
     let mut last_statuses = HashMap::new();
     let mut statuses_checked = Instant::now();
+    let progress = core.progress();
+    let _finished = FinishGuard(progress.clone());
     while !sink.shutdown_requested().load(Ordering::Acquire) {
         let graph = sink.graph();
         let changed = graph.revision != revision;
         if changed {
+            progress.enter(Stage::Sync);
             revision = graph.revision;
             core.sync(graph, clock.now());
             sink.publish_previews(core.preview_outputs());
@@ -807,6 +824,7 @@ pub(crate) fn run(mut core: VideoCore, clock: EngineClock, sink: Arc<dyn VideoSi
         // frame sizes change), so re-check a few times per second.
         if changed || statuses_checked.elapsed() >= Duration::from_millis(250) {
             statuses_checked = Instant::now();
+            progress.enter(Stage::Publish);
             let statuses = core.statuses();
             if changed || statuses != last_statuses {
                 sink.publish(core.outputs(), statuses.clone());
@@ -814,12 +832,15 @@ pub(crate) fn run(mut core: VideoCore, clock: EngineClock, sink: Arc<dyn VideoSi
             }
         }
         let Some(deadline) = core.next_deadline() else {
+            progress.enter(Stage::Idle);
             std::thread::sleep(Duration::from_millis(5));
             continue;
         };
+        progress.enter(Stage::Wait);
         wait_until(&clock, deadline);
         core.render_due(clock.now(), &sink.consumers());
     }
     // Let in-flight GPU work finish before resources drop.
+    progress.enter(Stage::Shutdown);
     let _ = core.gpu.device.poll(wgpu::PollType::wait_indefinitely());
 }

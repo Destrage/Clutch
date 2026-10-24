@@ -8,6 +8,7 @@ use crate::graph::{ActiveTransition, RenderGraph, ViewState};
 use crate::history::History;
 use crate::source::{SourceRegistry, SourceStatus};
 use crate::video::{self, CanvasOutput, SourceInfo, VideoCore, VideoSink};
+use crate::watchdog;
 use arc_swap::ArcSwap;
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TrySendError};
 use estream_audio::mixer::MeterSet;
@@ -331,11 +332,23 @@ impl Engine {
                 core.sync(shared.graph.load_full(), clock.now());
                 shared.publish(core.outputs(), core.statuses());
                 let sink: Arc<dyn VideoSink> = shared.clone();
-                Some(
-                    std::thread::Builder::new()
-                        .name("estream-video".into())
-                        .spawn(move || video::run(core, clock, sink))?,
-                )
+                let progress = core.progress();
+                let handle = std::thread::Builder::new()
+                    .name("estream-video".into())
+                    .spawn(move || video::run(core, clock, sink))?;
+                let names = shared.clone();
+                let name_of = move |id| {
+                    let graph = names.graph.load();
+                    graph
+                        .sources
+                        .iter()
+                        .find(|s| s.id == id)
+                        .map(|s| s.name.clone())
+                };
+                if let Err(e) = watchdog::spawn(progress, name_of) {
+                    tracing::warn!(error = %e, "video watchdog not started");
+                }
+                Some(handle)
             }
             None => None,
         };
