@@ -4763,8 +4763,15 @@ impl App {
 
     /// While the Clips view is open: frame previews, trims, and a rescan every 30 s.
     fn tick_clips_view(&mut self) {
-        if !self.window().is_some_and(|w| w.get_clips_open()) {
+        let Some(w) = self.window() else { return };
+        if !w.get_clips_open() {
+            // Left the Clips view (however it closed): stop playback and free the file.
+            self.clips_ui.stop_playback();
             return;
+        }
+        let duration = self.selected_clip_duration();
+        if self.clips_ui.tick_player(&self.gpu, duration) {
+            w.set_clip_player(self.clips_ui.player_state());
         }
         let (mut changed, done) = self.clips_ui.poll();
         if let Some(done) = done {
@@ -4783,6 +4790,55 @@ impl App {
         if changed {
             self.refresh_clips();
         }
+    }
+
+    /// The selected clip's or recording's length in seconds (0 when none).
+    fn selected_clip_duration(&self) -> f64 {
+        self.clips_ui
+            .selected
+            .as_ref()
+            .and_then(|p| self.shown_library().get(p))
+            .map_or(0.0, |c| c.meta.duration)
+    }
+
+    /// The device clip playback is heard on: the monitoring device (empty = default output).
+    fn monitor_device(&self) -> String {
+        self.engine
+            .as_ref()
+            .map(|e| e.snapshot().audio.monitor_device.clone())
+            .unwrap_or_default()
+    }
+
+    /// The in-app player's actions. Returns `false` for other actions.
+    fn clip_player_action(&mut self, field: &str, index: usize, value: f32) -> bool {
+        let monitor = self.monitor_device();
+        let duration = self.selected_clip_duration();
+        match field {
+            "play-toggle" => self.clips_ui.play_toggle(&monitor),
+            "seek" => self.clips_ui.seek(value as f64, true, &monitor),
+            "seek-done" => self.clips_ui.seek_done(),
+            "seek-by" => self.clips_ui.seek_by(value as f64, duration, &monitor),
+            "seek-event" => {
+                let at = self
+                    .clips_ui
+                    .selected
+                    .as_ref()
+                    .and_then(|p| self.shown_library().get(p))
+                    .and_then(|c| c.meta.events.get(index))
+                    .map(|e| e.at);
+                if let Some(at) = at {
+                    let to = (at - crate::clips::TICK_LEAD).max(0.0);
+                    self.clips_ui.seek(to, false, &monitor);
+                }
+            }
+            "volume" => self.clips_ui.set_volume(value),
+            "mute" => self.clips_ui.toggle_mute(),
+            _ => return false,
+        }
+        if let Some(w) = self.window() {
+            w.set_clip_player(self.clips_ui.player_state());
+        }
+        true
     }
 
     /// The games in the filter: "All games" first.
@@ -4896,6 +4952,18 @@ impl App {
                     .join(" · ")
             })
             .unwrap_or_default();
+        let ticks: Vec<crate::ui::ClipTick> = clip
+            .map(|c| {
+                c.meta
+                    .events
+                    .iter()
+                    .map(|m| crate::ui::ClipTick {
+                        at: m.at as f32,
+                        label: format!("{} {}", m.kind.label(), format_length(m.at)).into(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let subtitle = clip
             .map(|c| {
                 let mut parts = Vec::new();
@@ -4929,6 +4997,7 @@ impl App {
             recordings,
             subtitle: subtitle.into(),
             events: events.into(),
+            ticks: ModelRc::new(VecModel::from(ticks)),
             favorite: clip.is_some_and(|c| c.meta.favorite),
             duration: clip.map_or(0.0, |c| c.meta.duration as f32),
             trim_in: self.clips_ui.trim_in as f32,
@@ -4951,8 +5020,14 @@ impl App {
         } else {
             "clip"
         };
+        if self.clip_player_action(field, i, value) {
+            return;
+        }
         match field {
-            "close" => self.clips_ui.cancel_trim(),
+            "close" => {
+                self.clips_ui.cancel_trim();
+                self.clips_ui.stop_playback();
+            }
             "select" => {
                 if let Some(p) = at(self) {
                     let d = duration(self, &p);
@@ -4967,10 +5042,23 @@ impl App {
                 }
             }
             "play" => {
-                if let Some(p) = at(self)
-                    && let Err(e) = crate::shell::open(&p)
-                {
-                    self.toast(format!("Couldn't open the {noun}: {e}"), true);
+                // Double-click on a tile: select it and play it here.
+                if let Some(p) = at(self) {
+                    if self.clips_ui.selected.as_ref() != Some(&p) {
+                        let d = duration(self, &p);
+                        self.clips_ui.select(Some((&p, d)));
+                    }
+                    if !self.clips_ui.playing_file(&p) {
+                        self.clips_ui.play_toggle(&self.monitor_device());
+                    }
+                }
+            }
+            "open-external" => {
+                if let Some(p) = at(self) {
+                    self.clips_ui.stop_playback();
+                    if let Err(e) = crate::shell::open(&p) {
+                        self.toast(format!("Couldn't open the {noun}: {e}"), true);
+                    }
                 }
             }
             "reveal" => {
@@ -5000,6 +5088,9 @@ impl App {
             }
             "delete" => {
                 if let Some(p) = at(self) {
+                    if self.clips_ui.playing_file(&p) {
+                        self.clips_ui.stop_playback();
+                    }
                     match self.shown_library_mut().delete(&p) {
                         Ok(()) => {
                             if self.showing_recordings() {
@@ -5026,6 +5117,15 @@ impl App {
                 if let Some(p) = self.clips_ui.selected.clone() {
                     let d = duration(self, &p);
                     self.clips_ui.set_trim(field == "trim-out", value as f64, d);
+                    // With the player open, show the new trim point in it.
+                    if self.clips_ui.playing_file(&p) {
+                        let t = if field == "trim-out" {
+                            self.clips_ui.trim_out
+                        } else {
+                            self.clips_ui.trim_in
+                        };
+                        self.clips_ui.seek(t, true, &self.monitor_device());
+                    }
                 }
             }
             "trim-mode" => self.clips_ui.precise = i == 1,
@@ -5034,6 +5134,10 @@ impl App {
                     return;
                 };
                 let replace = field == "trim-replace";
+                if replace {
+                    // The replaced file must not be open.
+                    self.clips_ui.stop_playback();
+                }
                 let output = if replace {
                     source.clone()
                 } else {

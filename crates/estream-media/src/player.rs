@@ -273,6 +273,16 @@ impl Player {
     pub fn buffered_audio(&self) -> usize {
         self.shared.audio.try_lock().map_or(0, |r| r.len() / 2)
     }
+
+    /// Stops decoding and waits until the file is closed (so it can be deleted or replaced
+    /// right away). Not for real-time threads.
+    pub fn stop_and_join(&self) {
+        self.shared.stop.store(true, Ordering::Release);
+        let thread = self.thread.lock().ok().and_then(|mut t| t.take());
+        if let Some(t) = thread {
+            let _ = t.join();
+        }
+    }
 }
 
 impl Drop for Player {

@@ -894,6 +894,126 @@ pub struct ClipsUi {
     details_rx: Option<Receiver<(PathBuf, Result<ClipMeta, String>)>>,
     /// Recordings whose details couldn't be worked out (not retried).
     pub details_failed: std::collections::HashSet<PathBuf>,
+    /// The in-app player for the selected clip or recording.
+    playback: Option<Playback>,
+    pub volume: f32,
+    pub muted: bool,
+    yuv: Option<std::sync::Arc<estream_gpu::YuvConverter>>,
+}
+
+/// How often a seek bar drag seeks (each seek restarts decoding).
+const SCRUB_EVERY: Duration = Duration::from_millis(120);
+/// Clicking an event tick starts playback this far before it.
+pub const TICK_LEAD: f64 = 3.0;
+
+/// A clip playing in the Clips view and the GPU textures its frames go through.
+struct Playback {
+    clip: estream_media::clip_player::ClipPlayer,
+    nv12: Option<estream_gpu::Nv12Frame>,
+    rgba: Option<estream_gpu::wgpu::Texture>,
+    /// The last picture shown.
+    shown: u64,
+    frame: Option<slint::Image>,
+    /// A seek the drag asked for but that waits for [`SCRUB_EVERY`].
+    pending_seek: Option<f64>,
+    last_seek: Instant,
+    /// Where the last seek went (shown until the player gets there).
+    target: Option<(f64, Instant)>,
+    /// Whether the view last showed it playing.
+    reported_playing: bool,
+}
+
+/// Puts the player's newest picture on the GPU and into `frame`. Returns whether it changed.
+fn upload_picture(
+    p: &mut Playback,
+    gpu: &estream_gpu::GpuContext,
+    yuv: &estream_gpu::YuvConverter,
+) -> bool {
+    use estream_gpu::wgpu;
+    use estream_media::player::PixelLayout;
+    if p.clip.player().sequence() == p.shown {
+        return false;
+    }
+    let Playback {
+        clip,
+        nv12,
+        rgba,
+        shown,
+        frame,
+        ..
+    } = p;
+    let Some(guard) = clip.player().try_picture() else {
+        return false; // the decoder is writing it; next tick
+    };
+    let Some(picture) = guard.as_ref() else {
+        return false;
+    };
+    if picture.sequence == *shown {
+        return false;
+    }
+    *shown = picture.sequence;
+    let (w, h) = (picture.width, picture.height);
+    let texture = match picture.layout {
+        PixelLayout::Nv12 => {
+            let fits = nv12
+                .as_ref()
+                .is_some_and(|f| f.width == (w.max(2) & !1) && f.height == (h.max(2) & !1));
+            if !fits {
+                *nv12 = Some(yuv.create_frame(gpu, w, h));
+            }
+            let Some(f) = nv12.as_ref() else { return false };
+            f.upload(
+                gpu,
+                &picture.data,
+                w,
+                estream_gpu::YuvMatrix::for_height(h),
+                picture.full_range,
+            );
+            // The converter writes an sRGB texture; the UI would decode it again (too dark),
+            // so its bytes are copied into a plain RGBA texture, like the studio preview.
+            if rgba
+                .as_ref()
+                .is_none_or(|t| t.width() != f.width || t.height() != f.height)
+            {
+                *rgba = Some(estream_gpu::create_preview_texture(gpu, f.width, f.height));
+            }
+            let Some(t) = rgba.as_ref() else { return false };
+            let mut encoder = gpu.device.create_command_encoder(&Default::default());
+            f.convert(yuv, &mut encoder);
+            encoder.copy_texture_to_texture(
+                f.output.as_image_copy(),
+                t.as_image_copy(),
+                f.output.size(),
+            );
+            gpu.queue.submit([encoder.finish()]);
+            t.clone()
+        }
+        PixelLayout::Rgba => {
+            if rgba
+                .as_ref()
+                .is_none_or(|t| t.width() != w || t.height() != h)
+            {
+                *rgba = Some(estream_gpu::create_preview_texture(gpu, w, h));
+            }
+            let Some(t) = rgba.as_ref() else { return false };
+            gpu.queue.write_texture(
+                t.as_image_copy(),
+                &picture.data,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(w * 4),
+                    rows_per_image: Some(h),
+                },
+                t.size(),
+            );
+            t.clone()
+        }
+    };
+    match slint::Image::try_from(texture) {
+        Ok(image) => *frame = Some(image),
+        Err(e) => tracing::warn!(error = %e, "clip frame rejected"),
+    }
+    true
 }
 
 impl Default for ClipsUi {
@@ -916,6 +1036,10 @@ impl Default for ClipsUi {
             refreshed_at: Instant::now(),
             details_rx: None,
             details_failed: Default::default(),
+            playback: None,
+            volume: 1.0,
+            muted: false,
+            yuv: None,
         }
     }
 }
@@ -939,11 +1063,189 @@ impl ClipsUi {
 
     /// Selects a clip (or none), resetting the trim to the whole clip.
     pub fn select(&mut self, clip: Option<(&Path, f64)>) {
+        if self.playback.as_ref().map(|p| p.clip.path()) != clip.map(|(p, _)| p) {
+            self.stop_playback();
+        }
         self.selected = clip.map(|(p, _)| p.to_path_buf());
         self.trim_in = 0.0;
         self.trim_out = clip.map_or(0.0, |(_, d)| d);
         self.preview = None;
         self.preview_wanted = clip.map(|(p, _)| (p.to_path_buf(), 0.0));
+    }
+
+    // ------------------------------------------------------------ in-app player
+
+    /// Plays or pauses the selected clip, opening it in the player first if needed.
+    pub fn play_toggle(&mut self, monitor_device: &str) {
+        match &self.playback {
+            Some(p) => p.clip.toggle(),
+            None => self.start_playback(monitor_device),
+        }
+    }
+
+    fn start_playback(&mut self, monitor_device: &str) {
+        let Some(path) = self.selected.clone() else {
+            return;
+        };
+        let clip = estream_media::clip_player::ClipPlayer::open(
+            &path,
+            monitor_device,
+            self.volume,
+            self.muted,
+        );
+        // A trimmed range plays from its start.
+        if self.trim_in > 0.0 {
+            clip.seek(Duration::from_secs_f64(self.trim_in));
+        }
+        self.playback = Some(Playback {
+            clip,
+            nv12: None,
+            rgba: None,
+            shown: 0,
+            frame: None,
+            pending_seek: None,
+            last_seek: Instant::now(),
+            target: (self.trim_in > 0.0).then(|| (self.trim_in, Instant::now())),
+            reported_playing: false,
+        });
+    }
+
+    /// Closes the player (and its file). Call before deleting or replacing the file.
+    pub fn stop_playback(&mut self) {
+        self.playback = None;
+    }
+
+    /// Whether the player has `path` open.
+    pub fn playing_file(&self, path: &Path) -> bool {
+        self.playback
+            .as_ref()
+            .is_some_and(|p| p.clip.path() == path)
+    }
+
+    /// Seeks to `seconds` (opening the player if needed). With `scrub`, seeks at most every
+    /// [`SCRUB_EVERY`] (a seek bar drag); [`Self::seek_done`] lands the last one.
+    pub fn seek(&mut self, seconds: f64, scrub: bool, monitor_device: &str) {
+        if self.playback.is_none() {
+            self.start_playback(monitor_device);
+        }
+        let Some(p) = &mut self.playback else { return };
+        let seconds = seconds.max(0.0);
+        p.target = Some((seconds, Instant::now()));
+        if scrub && p.last_seek.elapsed() < SCRUB_EVERY {
+            p.pending_seek = Some(seconds);
+            return;
+        }
+        p.pending_seek = None;
+        p.last_seek = Instant::now();
+        p.clip.seek(Duration::from_secs_f64(seconds));
+    }
+
+    pub fn seek_done(&mut self) {
+        if let Some(p) = &mut self.playback
+            && let Some(t) = p.pending_seek.take()
+        {
+            p.last_seek = Instant::now();
+            p.clip.seek(Duration::from_secs_f64(t));
+        }
+    }
+
+    /// Skips `delta` seconds from the current position.
+    pub fn seek_by(&mut self, delta: f64, duration: f64, monitor_device: &str) {
+        let now = self.position();
+        let to = (now + delta).clamp(0.0, (duration - 0.1).max(0.0));
+        self.seek(to, false, monitor_device);
+    }
+
+    pub fn set_volume(&mut self, volume: f32) {
+        self.volume = volume.clamp(0.0, 1.0);
+        if self.volume > 0.0 {
+            self.muted = false;
+        }
+        if let Some(p) = &self.playback {
+            p.clip.set_volume(self.volume);
+            p.clip.set_muted(self.muted);
+        }
+    }
+
+    pub fn toggle_mute(&mut self) {
+        self.muted = !self.muted;
+        if let Some(p) = &self.playback {
+            p.clip.set_muted(self.muted);
+        }
+    }
+
+    /// The playback position in seconds (where a seek is heading, until it gets there).
+    pub fn position(&self) -> f64 {
+        let Some(p) = &self.playback else {
+            return self.trim_in;
+        };
+        let at = p.clip.status().position.as_secs_f64();
+        match p.target {
+            Some((t, since))
+                if (at - t).abs() > 0.5 && since.elapsed() < Duration::from_secs(2) =>
+            {
+                t
+            }
+            _ => at,
+        }
+    }
+
+    /// Advances the player: shows a new frame, lands a pending scrub, and loops a trimmed
+    /// range. Returns whether the player's view changed.
+    pub fn tick_player(&mut self, gpu: &estream_gpu::GpuContext, duration: f64) -> bool {
+        let (trim_in, trim_out) = (self.trim_in, self.trim_out);
+        let yuv = self
+            .yuv
+            .get_or_insert_with(|| estream_gpu::YuvConverter::new(gpu))
+            .clone();
+        let Some(p) = &mut self.playback else {
+            return false;
+        };
+        if p.last_seek.elapsed() >= SCRUB_EVERY
+            && let Some(t) = p.pending_seek.take()
+        {
+            p.last_seek = Instant::now();
+            p.clip.seek(Duration::from_secs_f64(t));
+        }
+        let status = p.clip.status();
+        if let Some((t, _)) = p.target
+            && (status.position.as_secs_f64() - t).abs() <= 0.5
+        {
+            p.target = None;
+        }
+        // A trimmed range loops while playing.
+        let trimmed = trim_in > 0.05 || trim_out < duration - 0.05;
+        if trimmed
+            && status.state == estream_media::player::PlayState::Playing
+            && p.target.is_none()
+            && status.position.as_secs_f64() >= trim_out
+        {
+            p.target = Some((trim_in, Instant::now()));
+            p.last_seek = Instant::now();
+            p.clip.seek(Duration::from_secs_f64(trim_in));
+        }
+        let playing = status.state == estream_media::player::PlayState::Playing;
+        let toggled = playing != p.reported_playing;
+        p.reported_playing = playing;
+        upload_picture(p, gpu, &yuv) || toggled || p.target.is_some()
+    }
+
+    /// What the player shows, for the Clips view.
+    pub fn player_state(&self) -> crate::ui::ClipPlayerState {
+        let playing = self
+            .playback
+            .as_ref()
+            .is_some_and(|p| p.clip.status().state == estream_media::player::PlayState::Playing);
+        let frame = self.playback.as_ref().and_then(|p| p.frame.clone());
+        crate::ui::ClipPlayerState {
+            active: self.playback.is_some(),
+            playing,
+            position: self.position() as f32,
+            volume: self.volume,
+            muted: self.muted,
+            has_frame: frame.is_some(),
+            frame: frame.unwrap_or_default(),
+        }
     }
 
     /// Moves a trim point and asks for its frame.
@@ -1173,5 +1475,55 @@ pub fn format_when(at: chrono::DateTime<chrono::Utc>) -> String {
         format!("Yesterday {time}")
     } else {
         format!("{} {time}", local.format("%-d %b %Y"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ui_with(path: &str) -> ClipsUi {
+        let mut ui = ClipsUi::default();
+        ui.select(Some((Path::new(path), 30.0)));
+        ui
+    }
+
+    #[test]
+    fn selecting_another_clip_closes_the_player() {
+        let mut ui = ui_with("missing-a.mp4");
+        ui.play_toggle("");
+        assert!(ui.playing_file(Path::new("missing-a.mp4")));
+        // Selecting the same clip again keeps it playing.
+        ui.select(Some((Path::new("missing-a.mp4"), 30.0)));
+        assert!(ui.playing_file(Path::new("missing-a.mp4")));
+        ui.select(Some((Path::new("missing-b.mp4"), 30.0)));
+        assert!(!ui.player_state().active);
+    }
+
+    #[test]
+    fn a_seek_shows_where_it_is_heading() {
+        let mut ui = ui_with("missing-c.mp4");
+        ui.seek(12.0, false, "");
+        assert!(ui.player_state().active, "seeking opens the player");
+        assert!((ui.position() - 12.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn volume_unmutes_and_mute_keeps_the_volume() {
+        let mut ui = ClipsUi::default();
+        ui.toggle_mute();
+        assert!(ui.muted);
+        ui.set_volume(0.4);
+        assert!(!ui.muted);
+        assert!((ui.volume - 0.4).abs() < 1e-6);
+        ui.toggle_mute();
+        assert!((ui.volume - 0.4).abs() < 1e-6);
+    }
+
+    #[test]
+    fn without_a_player_the_position_is_the_trim_start() {
+        let mut ui = ui_with("missing-d.mp4");
+        ui.set_trim(false, 5.0, 30.0);
+        assert!((ui.position() - 5.0).abs() < 1e-6);
     }
 }

@@ -2,7 +2,7 @@
 
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
-import { ClipsForm, ClipRow } from "types.slint";
+import { ClipsForm, ClipRow, ClipPlayerState } from "types.slint";
 import { Button, IconButton, TextField, NumberField, Select, Slider, SectionTitle, EmptyState, Badge } from "widgets.slint";
 import { Modal } from "overlays.slint";
 
@@ -68,6 +68,7 @@ component ClipTile inherits Rectangle {
 
 export component ClipsDialog inherits Modal {
     in property <ClipsForm> form;
+    in property <ClipPlayerState> player;
     callback action(string, int, float);
     callback text(string, string);
 
@@ -99,6 +100,13 @@ export component ClipsDialog inherits Modal {
         running: root.confirm-delete;
         triggered => { root.confirm-delete = false; }
     }
+    /// "1:05" for 65 seconds.
+    pure function clock(seconds: float) -> string {
+        let s = floor(max(seconds, 0));
+        let m = floor(s / 60);
+        let rest = s - m * 60;
+        return m + ":" + (rest < 10 ? "0" : "") + rest;
+    }
 
     FocusScope {
         height: 0px;
@@ -111,6 +119,21 @@ export component ClipsDialog inherits Modal {
             if (e.text == Key.Delete && root.form.selected >= 0) {
                 root.delete-pressed();
                 return EventResult.accept;
+            }
+            // The player: Space plays or pauses, the arrows skip 5 s, M mutes.
+            if (root.form.selected >= 0) {
+                if (e.text == " ") {
+                    root.action("play-toggle", root.form.selected, 0);
+                    return EventResult.accept;
+                }
+                if (e.text == Key.LeftArrow || e.text == Key.RightArrow) {
+                    root.action("seek-by", root.form.selected, e.text == Key.LeftArrow ? -5 : 5);
+                    return EventResult.accept;
+                }
+                if (e.text == "m" || e.text == "M") {
+                    root.action("mute", root.form.selected, 0);
+                    return EventResult.accept;
+                }
             }
             return EventResult.reject;
         }
@@ -209,13 +232,78 @@ export component ClipsDialog inherits Modal {
                 border-radius: Theme.radius-m;
                 background: #000000;
                 clip: true;
-                if root.form.has-preview: Image {
+                if root.player.active && root.player.has-frame: Image {
+                    width: parent.width;
+                    height: parent.height;
+                    source: root.player.frame;
+                    image-fit: contain;
+                }
+                if !(root.player.active && root.player.has-frame) && root.form.has-preview: Image {
                     width: parent.width;
                     height: parent.height;
                     source: root.form.preview;
                     image-fit: contain;
                 }
-                if !root.form.has-preview: Text { text: "Loading frame…"; color: Theme.text-faint; font-size: Theme.font-s; }
+                if !root.player.active && !root.form.has-preview: Text { text: "Loading frame…"; color: Theme.text-faint; font-size: Theme.font-s; }
+                // Click the picture to play or pause.
+                TouchArea {
+                    clicked => { root.action("play-toggle", root.form.selected, 0); }
+                    double-clicked => { root.action("play-toggle", root.form.selected, 0); }
+                }
+            }
+            // Player controls: play/pause, seek bar with event ticks, time, volume.
+            HorizontalLayout {
+                spacing: 8px;
+                IconButton {
+                    icon: root.player.playing ? Icons.pause : Icons.play;
+                    tooltip: root.player.playing ? "Pause (Space)" : "Play (Space)";
+                    clicked => { root.action("play-toggle", root.form.selected, 0); }
+                }
+                Rectangle {
+                    horizontal-stretch: 1;
+                    Slider {
+                        y: (parent.height - self.height) / 2;
+                        width: parent.width;
+                        label: "Playback position";
+                        value: root.player.position;
+                        minimum: 0;
+                        maximum: max(root.form.duration, 0.1);
+                        changed(v) => { root.action("seek", root.form.selected, v); }
+                        committed => { root.action("seek-done", root.form.selected, 0); }
+                    }
+                    for t[i] in root.form.ticks: Rectangle {
+                        x: (parent.width - 14px) * clamp(t.at / max(root.form.duration, 0.1), 0, 1) + 7px - 3px;
+                        y: 0;
+                        width: 6px;
+                        height: 7px;
+                        border-radius: 2px;
+                        background: #ffd54a;
+                        accessible-role: button;
+                        accessible-label: t.label;
+                        TouchArea {
+                            mouse-cursor: MouseCursor.pointer;
+                            clicked => { root.action("seek-event", i, 0); }
+                        }
+                    }
+                }
+                Text {
+                    text: root.clock(root.player.position) + " / " + root.clock(root.form.duration);
+                    color: Theme.text-muted;
+                    font-size: Theme.font-xs;
+                    vertical-alignment: center;
+                }
+                IconButton {
+                    icon: root.player.muted || root.player.volume <= 0 ? Icons.volume-x : Icons.volume;
+                    toggled: root.player.muted;
+                    tooltip: root.player.muted ? "Unmute (M)" : "Mute (M)";
+                    clicked => { root.action("mute", root.form.selected, 0); }
+                }
+                Slider {
+                    width: 70px;
+                    label: "Volume";
+                    value: root.player.volume;
+                    changed(v) => { root.action("volume", root.form.selected, v); }
+                }
             }
             HorizontalLayout {
                 spacing: 8px;
@@ -236,7 +324,7 @@ export component ClipsDialog inherits Modal {
             HorizontalLayout {
                 spacing: 6px;
                 alignment: start;
-                Button { text: "Play"; has-icon: true; icon: Icons.play; clicked => { root.action("play", root.form.selected, 0); } }
+                Button { text: "Open in player"; has-icon: true; icon: Icons.app-window; kind: "ghost"; tooltip: "Open in your default video player"; clicked => { root.action("open-external", root.form.selected, 0); } }
                 Button { text: "Show in folder"; has-icon: true; icon: Icons.folder; kind: "ghost"; clicked => { root.action("reveal", root.form.selected, 0); } }
                 Button { text: "Copy"; has-icon: true; icon: Icons.copy; kind: "ghost"; tooltip: "Copy the file, to paste into Discord or a folder"; clicked => { root.action("copy", root.form.selected, 0); } }
                 Button {
@@ -271,6 +359,7 @@ export component ClipsDialog inherits Modal {
                     suffix: "s";
                     changed(v) => { root.action("trim-in", root.form.selected, v); }
                 }
+                Button { text: "Set"; kind: "ghost"; tooltip: "Start the trim at the playback position"; clicked => { root.action("trim-in", root.form.selected, root.player.position); } }
             }
             HorizontalLayout {
                 spacing: 8px;
@@ -293,6 +382,7 @@ export component ClipsDialog inherits Modal {
                     suffix: "s";
                     changed(v) => { root.action("trim-out", root.form.selected, v); }
                 }
+                Button { text: "Set"; kind: "ghost"; tooltip: "End the trim at the playback position"; clicked => { root.action("trim-out", root.form.selected, root.player.position); } }
             }
             HorizontalLayout {
                 spacing: 8px;

@@ -1,0 +1,52 @@
+# Design: Play clips and recordings inside Clutch
+
+## Decoding
+`estream-media::player::Player` already demuxes and decodes on a helper thread, paces video
+against a playback clock, supports pause and seek, publishes the latest picture (`Picture`, NV12
+or RGBA) and pushes 48 kHz stereo audio into a ring. The clip player creates one `Player` with
+`PlayerSettings { items: [clip], looping: false, .. }`, outside the media-source registry (it is
+not a source), and drops it when the selection changes or the view closes.
+
+## Showing frames
+Each UI tick (every 4 ms), if `Player::sequence()` moved on, the app takes the picture (`try_picture`, never
+blocking) and uploads it through `estream-gpu::YuvConverter` (NV12 → RGBA on the GPU, BT.709/601
+and range from the picture). The converter's output is an sRGB texture, which Slint would decode
+again when drawing (too dark), so its bytes are copied (`copy_texture_to_texture`, formats that
+differ only in sRGB-ness) into a plain RGBA preview texture created like the engine's own preview
+textures, which Slint already accepts (`slint::Image::try_from(wgpu::Texture)`). The textures are
+reused while the size stays the same, so a new frame costs an upload and one draw. Seek bar drags
+seek at most every 120 ms and once more on release. The UI
+requests redraws only while playing.
+
+## Audio
+The player's audio ring is drained by a cpal output stream on the monitoring device (default
+output if none), opened when playback starts and closed on pause or stop. A volume and mute
+setting scale the samples there. The stream lives in `estream-audio` next to the existing
+monitoring output and never feeds the mixer, so preview audio can't reach streams, recordings
+or the replay buffer. `AUDIO_LEAD` delays video by the same amount the audio is pushed ahead, so
+they stay in sync.
+
+## Controls
+- Play/pause, a seek bar (drag to seek; position from `PlayerStatus`), elapsed / total time,
+  volume slider and mute.
+- Event ticks: clip metadata already lists events with their times; recordings have
+  `<recording>.markers.json`. Clicking a tick seeks to 3 s before it.
+- Trimming: "Set" next to the In and Out fields copies the current position into them; while
+  the trim range is narrower than the clip, playback starts at the in point and reaching the out
+  point seeks back to it. Moving a trim point with the player open seeks the player there.
+- Keyboard (when the Clips view has focus): Space, Left/Right (±5 s), M (mute).
+
+## Play action
+`"play"` starts in-app playback of the selected item. The old behaviour moves to a new
+`"open-external"` action ("Open in default player"), for formats the player can't decode or for
+users who prefer their own player.
+
+## Performance
+Decoding uses FFmpeg's software decoders on the player thread (as media sources do). The player
+only runs while the Clips view is open with a clip selected and playing, so it doesn't compete
+with a live show. Frames are decoded at the file's own resolution.
+
+## Alternatives considered
+- **Embedding a native player (Media Foundation, libVLC):** another dependency, a native child
+  window that Slint can't draw over, and no cross-platform path.
+- **Keep opening the default player:** loses the trim-by-watching workflow.
