@@ -13,4 +13,4 @@
 ## 3. Verification
 - [x] 3.1 Tests: message and removal JSON, filters (commands, bot names, platforms), backlog
 - [x] 3.2 `cargo test --workspace`, `cargo clippy --workspace --all-targets`
-- [ ] 3.3 Live check with Twitch and Kick chat at once: order, emotes, fading, a deleted message disappears
+- [x] 3.3 Live check with Twitch and Kick chat at once: order, emotes, fading, a deleted message disappears
