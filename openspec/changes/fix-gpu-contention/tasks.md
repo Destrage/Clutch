@@ -6,8 +6,8 @@
 - [x] 1.3 Unit-test stall and recovery detection with a fake progress source
 
 ## 2. GPU Scheduling Priority
-- [ ] 2.1 Set the process GPU scheduling class on Windows (HIGH with HAGS, REALTIME otherwise; skipped on Intel; debug log on failure)
-- [ ] 2.2 Set `SetGPUThreadPriority` on the D3D11 capture interop device
+- [x] 2.1 Set the process GPU scheduling class on Windows (HIGH with HAGS, REALTIME otherwise; skipped on Intel; debug log on failure)
+- [x] 2.2 Set `SetGPUThreadPriority` on the D3D11 capture interop device
 
 ## 3. Separate Engine Device (Windows)
 - [ ] 3.1 Create the UI and engine `GpuContext`s on the same adapter (LUID match); hand the UI one to Slint and the engine one to the main engine
