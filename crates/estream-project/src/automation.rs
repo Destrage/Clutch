@@ -138,10 +138,13 @@ pub enum GameEventKind {
     Objective,
     /// A loudness spike in game audio or the mic.
     Hype,
+    /// An enemy downed but not yet eliminated (battle royales).
+    Knock,
+    Goal,
 }
 
 impl GameEventKind {
-    pub const ALL: [GameEventKind; 8] = [
+    pub const ALL: [GameEventKind; 10] = [
         GameEventKind::Kill,
         GameEventKind::MultiKill,
         GameEventKind::Ace,
@@ -150,6 +153,8 @@ impl GameEventKind {
         GameEventKind::MatchWin,
         GameEventKind::Objective,
         GameEventKind::Hype,
+        GameEventKind::Knock,
+        GameEventKind::Goal,
     ];
 
     pub fn label(self) -> &'static str {
@@ -162,6 +167,8 @@ impl GameEventKind {
             GameEventKind::MatchWin => "Match win",
             GameEventKind::Objective => "Objective",
             GameEventKind::Hype => "Hype",
+            GameEventKind::Knock => "Knock",
+            GameEventKind::Goal => "Goal",
         }
     }
 }

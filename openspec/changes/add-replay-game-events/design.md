@@ -8,53 +8,66 @@ follow the same split.
 
 ## Replay watcher
 ```rust
-pub trait ReplayFormat: Send {
+pub trait ReplayFormat: Send + 'static {
     /// Game name as in games.json.
     fn game(&self) -> &'static str;
-    /// Folder holding the replays (resolved per user / Steam library).
+    /// Folder holding the replays, if this system has one.
     fn folder(&self) -> Option<PathBuf>;
-    /// Whether this path is (part of) a replay this format reads.
-    fn matches(&self, path: &Path) -> bool;
-    /// Reads events past `cursor` from a replay that may still be growing.
-    fn read(&mut self, replay: &Path, cursor: &mut Cursor) -> Result<Vec<ReplayEvent>, ReplayError>;
+    /// The replays (one path per match) currently in `folder`.
+    fn replays(&self, folder: &Path) -> Vec<PathBuf>;
+    /// Reads the local player's events from a finished replay.
+    fn parse(&self, replay: &Path) -> Result<ParsedReplay, ReplayError>;
 }
 
-pub struct ReplayEvent {
-    pub kind: EventKind,
-    /// Time into the match, from the replay's own clock.
-    pub match_time: Duration,
-}
+pub struct ParsedReplay { pub started: SystemTime, pub events: Vec<ReplayEvent> }
+pub struct ReplayEvent { pub kind: EventKind, pub match_time: Duration }
 ```
 
-`ReplayWatcher` owns one thread per enabled game:
-- It polls the folder every 2 s while the game is running (`games.rs` detection) and once more
-  after it exits. Polling is simpler and more robust than `ReadDirectoryChangesW` for files that
-  are rewritten in place, and the cost is a directory listing.
-- It opens files with full sharing (`FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE`), so
-  the game can keep writing, renaming and deleting.
-- It keeps a `Cursor` per replay (byte offset or chunk index plus parser state), so a growing file
-  is parsed incrementally, not from the start each time.
-- The thread runs at below-normal priority with an I/O budget: no more than one parse per poll per
-  game, and it never runs on the video, audio or UI threads.
+`ReplayWatcher` (`estream-clips::integrations::replay`) owns one thread per watched game:
+- It starts when the game is detected (and the integration is connected) and stops when the game
+  exits, after one last scan. Replays already in the folder when it starts are ignored.
+- It polls the folder every 2 s. Polling is simpler and more robust than `ReadDirectoryChangesW`
+  for folders written in bursts, and the cost is a directory listing.
+- Rust's `std::fs` opens files with full sharing on Windows, so the game can keep writing,
+  renaming and deleting.
+- A replay that isn't finished (`NotReady`, I/O errors) is retried on the next poll, up to 30
+  times. `Unsupported` replays are logged once per format description and skipped. A parser panic
+  is caught at the thread boundary, logged, and that replay skipped.
+- Parsing never runs on the video, audio or UI threads.
 
-**Live vs post-match.** A replay that is still growing while the game runs is *live*: its events
-are sent as `GameEvent`s with `at = now - (replay_time_now - match_time)` and go through the
-existing auto-clip scheduler, which cuts from the replay buffer. Events found only after the
-replay is finalized are *post-match*.
+**Incremental parsing deferred.** No supported game writes its replay during a match (PUBG was
+checked on real replays, below), so formats parse finished replays only. A per-replay `Cursor`
+for growing files is added when a live format is confirmed (Fortnite, task 1.1).
 
-**Post-match markers.** The replay's start is converted to wall-clock time (replay metadata
-timestamp, or the file's creation time as a fallback). If a recording covered that time, each
-event becomes a `Marker` in `<recording>.markers.json` at `start_offset + match_time`. The
-recordings view lists them, and the existing clip trimmer saves a clip from any marker. Without a
-recording, post-match events are dropped, since the replay buffer has already moved on.
+**Times.** Each event's wall-clock time is `started + match_time`, turned into an `Instant`
+(`instant_of`) and sent as a normal `GameEvent`. Events still covered by clip mode's buffer
+(`now - at + pre <= buffer_seconds`) go through the auto-clip scheduler like any integration;
+older ones are not clipped.
+
+**Post-match markers.** Every event reaches the existing `Notice::Event` path, which writes a
+`Marker` into the running recording's `<recording>.markers.json` at `at - recording start`. The
+app keeps the last 8 recordings finished this session with their start and stop times; an event
+that falls in one of those (the recording stopped before the replay appeared) is added to that
+recording's marker file. Events before a recording started, or with no covering recording, add
+no marker.
 
 ## Per-game notes
-**PUBG.** Unreal Engine 4. Replays start when the player boards the plane. Each match is a folder
-in `Saved\Demos` with `PUBG.replayinfo` (JSON: length, timestamp, map, mode, `bShouldKeep`) and
-the recorder's stream, checkpoint and event chunks. The recorder writes directly to disk, so
-chunks may appear during the match; **task 1.1 confirms this with a captured replay**. Kill and
-knock ("groggy") events are expected among the replay events; the local player is identified
-from the replay's recorder field.
+**PUBG (implemented).** Checked against 14 real replays (game version 2610.1.1.65):
+- PUBG keeps the replay in memory and writes the whole folder `Saved\Demos\match.<…>\` within half
+  a second at the moment the player's match ends (death or win); the folder's creation time equals
+  `Timestamp + LengthInMS`. `bIsLive` is always false on disk. So PUBG is post-match only: events
+  arrive seconds after the player is out, which still lets clip mode clip the last ~2 minutes.
+- Every file is a little-endian `u32` length followed by the payload (NUL-padded).
+- `PUBG.replayinfo` (JSON, written last): `Timestamp` (Unix ms, replay start), `LengthInMS`,
+  `bIsLive`, `RecordUserNickName`, `GameVersion`.
+- `events/kill<n>`, `events/DBNO<n>`: JSON `{id, group, time1}`, `time1` in ms from the start.
+- `data/<id>`: JSON `{instigatorName, victimName, bDBNO, damageReason, …}` for that event.
+- `data/ReplaySummary<n>`: every byte shifted down by one (`z!` is `{"`); the last one lists
+  `playerStateSummaries` with each player's `ranking` (1 = win).
+- The kill feed shows clan tags (`[MYR] Name`) while `RecordUserNickName` doesn't; names are
+  compared with a leading `[tag] ` removed.
+- Events: kill by the player → `Kill`; knock by the player → `Knock`; kill of the player →
+  `Death`; ranking 1 → `MatchWin` at `LengthInMS`. Being knocked is not an event.
 
 **Fortnite.** Unreal Engine `.replay` file (local file streamer). Its info header has a live
 flag and separate checkpoint and event arrays; eliminations are replay events that community
