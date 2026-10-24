@@ -1,11 +1,13 @@
-//! The overlay server: Clutch's own overlay pages (Alerts) for browser sources, on the loopback
-//! address only. Every request needs the install's token; user files are served by id, never by
-//! path. Pages get their settings and live events over a WebSocket.
+//! The overlay server: Clutch's own overlay pages (Alerts, Chat overlay) for browser sources, on
+//! the loopback address only. Every request needs the install's token; user files are served by
+//! id, never by path. Pages get their settings and live events over a WebSocket.
 //!
-//! Routes (all with `?t=<token>`): `/alerts` (the page), `/asset/<id>` (a registered file),
-//! `/ws?source=<id>` (JSON messages: `config` on connect and when it changes, then `alert`s).
+//! Routes (all with `?t=<token>`): `/alerts` and `/chat` (the pages), `/asset/<id>` (a registered
+//! file), `/ws?source=<id>` (JSON messages: `config` on connect and when it changes, then
+//! `alert`s, or the kept chat lines and new ones).
 
 pub mod alerts;
+pub mod chat;
 
 use serde_json::Value;
 use std::collections::HashMap;
@@ -18,8 +20,11 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 const ALERTS_PAGE: &str = include_str!("alerts.html");
+const CHAT_PAGE: &str = include_str!("chat.html");
 /// Clients are pinged this often so dead ones are noticed.
 const PING_EVERY: Duration = Duration::from_secs(15);
+/// Messages kept per source for pages that connect later.
+const BACKLOG: usize = 60;
 
 /// The running server's base address (`http://127.0.0.1:<port>`) and token, for page URLs.
 static BASE: RwLock<Option<(String, String)>> = RwLock::new(None);
@@ -48,6 +53,8 @@ struct Shared {
     configs: Mutex<HashMap<String, Value>>,
     /// Registered files by id.
     assets: Mutex<HashMap<String, PathBuf>>,
+    /// The latest messages per source, replayed to pages that connect (see `send_kept`).
+    backlog: Mutex<HashMap<String, std::collections::VecDeque<String>>>,
     clients: Mutex<Vec<Client>>,
 }
 
@@ -118,6 +125,22 @@ impl OverlayServer {
         if let Ok(mut c) = self.shared.configs.lock() {
             c.retain(|s, _| keep.contains(s));
         }
+        if let Ok(mut b) = self.shared.backlog.lock() {
+            b.retain(|s, _| keep.contains(s));
+        }
+    }
+
+    /// Sends a message to the pages of `source` and keeps it (the last [`BACKLOG`]), so a page
+    /// that connects later gets it too.
+    pub fn send_kept(&self, source: &str, message: &str) {
+        if let Ok(mut b) = self.shared.backlog.lock() {
+            let kept = b.entry(source.to_owned()).or_default();
+            kept.push_back(message.to_owned());
+            while kept.len() > BACKLOG {
+                kept.pop_front();
+            }
+        }
+        self.send(Some(source), message);
     }
 
     /// Sends a message to the pages of `source`, or to every page.
@@ -237,6 +260,12 @@ fn handle(mut stream: TcpStream, shared: &Shared, token: &str) -> std::io::Resul
             "text/html; charset=utf-8",
             ALERTS_PAGE.as_bytes(),
         ),
+        "/chat" => respond(
+            &mut stream,
+            "200 OK",
+            "text/html; charset=utf-8",
+            CHAT_PAGE.as_bytes(),
+        ),
         "/ws" => websocket(stream, &req, shared),
         p => match p.strip_prefix("/asset/") {
             Some(id) => {
@@ -338,6 +367,14 @@ fn websocket(mut stream: TcpStream, req: &Request, shared: &Shared) -> std::io::
     if let Some(config) = config {
         let _ = tx.send(serde_json::json!({ "type": "config", "config": config }).to_string());
     }
+    let kept = shared
+        .backlog
+        .lock()
+        .ok()
+        .and_then(|b| b.get(&source).cloned());
+    for message in kept.into_iter().flatten() {
+        let _ = tx.send(message);
+    }
     if let Ok(mut clients) = shared.clients.lock() {
         clients.push(Client { source, tx });
     }
@@ -417,5 +454,30 @@ mod tests {
         server.send(Some("src1"), "{\"type\":\"alert\"}");
         let next = ws.read().unwrap().into_text().unwrap();
         assert_eq!(next.as_str(), "{\"type\":\"alert\"}");
+    }
+
+    #[test]
+    fn kept_lines_reach_pages_that_connect_later() {
+        let server = OverlayServer::start(0, "tok").unwrap();
+        server.set_config("chat1", serde_json::json!({ "style": "boxed" }));
+        for n in 0..BACKLOG + 5 {
+            server.send_kept("chat1", &format!("line {n}"));
+        }
+        server.send_kept("chat2", "elsewhere");
+        let url = format!("ws://127.0.0.1:{}/ws?t=tok&source=chat1", server.port());
+        let (mut ws, _) = tungstenite::connect(url).unwrap();
+        let first = ws.read().unwrap().into_text().unwrap();
+        assert!(first.contains("\"config\""), "{first}");
+        // Only the latest are kept, oldest first.
+        let kept = ws.read().unwrap().into_text().unwrap();
+        assert_eq!(kept.as_str(), "line 5");
+
+        server.retain_sources(&["chat2".to_owned()]);
+        let url = format!("ws://127.0.0.1:{}/ws?t=tok&source=chat1", server.port());
+        let (mut ws, _) = tungstenite::connect(url).unwrap();
+        server.send(Some("chat1"), "new");
+        std::thread::sleep(Duration::from_millis(100));
+        server.send(Some("chat1"), "new");
+        assert_eq!(ws.read().unwrap().into_text().unwrap().as_str(), "new");
     }
 }

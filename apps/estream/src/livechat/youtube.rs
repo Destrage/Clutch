@@ -219,6 +219,9 @@ fn messages(reply: &Value, skip_before: Option<chrono::DateTime<chrono::Utc>>) -
         .iter()
         .filter_map(|item| {
             let snippet = item.get("snippet")?;
+            if let Some(r) = removal(snippet) {
+                return Some(Message::removal(Platform::YouTube, r));
+            }
             let (text, event) = describe(snippet)?;
             let published = snippet
                 .get("publishedAt")
@@ -248,9 +251,30 @@ fn messages(reply: &Value, skip_before: Option<chrono::DateTime<chrono::Utc>>) -
                 time: published
                     .map_or_else(chrono::Local::now, |t| t.with_timezone(&chrono::Local)),
                 event,
+                id: item
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+                removal: None,
             })
         })
         .collect()
+}
+
+/// A moderator deleting a message or banning a viewer.
+fn removal(snippet: &Value) -> Option<super::Removal> {
+    use super::Removal;
+    let s = |v: &Value| v.as_str().filter(|s| !s.is_empty()).map(str::to_owned);
+    match snippet.get("type").and_then(Value::as_str)? {
+        "messageDeletedEvent" => {
+            s(&snippet["messageDeletedDetails"]["deletedMessageId"]).map(Removal::Message)
+        }
+        "userBannedEvent" => {
+            s(&snippet["userBannedDetails"]["bannedUserDetails"]["displayName"]).map(Removal::User)
+        }
+        _ => None,
+    }
 }
 
 /// A chat item's text and, for stream events (Super Chat, membership, …), the event (its name is
@@ -428,6 +452,23 @@ mod tests {
         assert_eq!(describe(&text), Some(("hi".into(), None)));
         let other = serde_json::json!({ "type": "pollEvent" });
         assert_eq!(describe(&other), None);
+    }
+
+    #[test]
+    fn deletions_and_bans_become_removals() {
+        use super::super::Removal;
+        let reply = serde_json::json!({ "items": [
+            { "id": "a1", "snippet": { "type": "textMessageEvent", "displayMessage": "hi" },
+              "authorDetails": { "displayName": "Ali" } },
+            { "id": "a2", "snippet": { "type": "messageDeletedEvent",
+              "messageDeletedDetails": { "deletedMessageId": "a1" } } },
+            { "id": "a3", "snippet": { "type": "userBannedEvent",
+              "userBannedDetails": { "bannedUserDetails": { "displayName": "Ali" } } } }
+        ]});
+        let all = messages(&reply, None);
+        assert_eq!(all[0].id, "a1");
+        assert_eq!(all[1].removal, Some(Removal::Message("a1".into())));
+        assert_eq!(all[2].removal, Some(Removal::User("Ali".into())));
     }
 
     #[test]

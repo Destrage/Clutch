@@ -27,9 +27,18 @@ When the overlay page connects it gets the last few messages (up to `max_lines`,
 within `fade_after`), so a reloaded page isn't empty mid-conversation.
 
 ## Moderation
-Where the readers see removals (Twitch `CLEARMSG`/`CLEARCHAT`, Kick and YouTube deletion events)
-they already update the panel; the same removals are forwarded as `remove` / `clear_user`
-messages. Platforms that don't report a removal leave the line until it fades.
+The readers turn removals into removal notices in the feed: Twitch `CLEARMSG` / `CLEARCHAT`,
+Kick `MessageDeletedEvent` / `UserBannedEvent` / `ChatroomClearEvent`, and YouTube
+`messageDeletedEvent` / `userBannedEvent`. They are forwarded as `remove` (by message id),
+`clear_user` (by name, case-insensitive) or `clear` messages, scoped to the platform. The chat
+panel doesn't remove lines yet. Platforms that don't report a removal leave the line until it
+fades.
+
+## Reading the chat without the panel
+Overlays need the chat while no chat panel is on screen. While an Alerts or Chat overlay source
+exists, the app keeps the readers running and reads the feed every tick (this also makes alerts
+arrive on time with the panel closed). Chat overlay sources have no audio, so they get no mixer
+knob.
 
 ## Alternatives considered
 - **Native compositor rendering:** emotes (including animated ones), wrapping and styling would

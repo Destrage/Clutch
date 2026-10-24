@@ -98,6 +98,11 @@ fn connect(cx: &Context<'_>, login: &str) -> bool {
                         cx.push(m.with_parts(parts));
                     }
                 }
+                "CLEARMSG" | "CLEARCHAT" => {
+                    if let Some(r) = removal(line) {
+                        cx.push(Message::removal(Platform::Twitch, r));
+                    }
+                }
                 _ => {}
             }
         }
@@ -307,6 +312,8 @@ fn event_line(kind: &str, e: &serde_json::Value) -> Option<Message> {
         parts: Vec::new(),
         time: chrono::Local::now(),
         event: Some(event),
+        id: String::new(),
+        removal: None,
     })
 }
 
@@ -365,9 +372,27 @@ fn parse(line: &str) -> Option<Message> {
             parts: Vec::new(),
             time: chrono::Local::now(),
             event: None,
+            id: tag("id"),
+            removal: None,
         }
         .with_parts(parts),
     )
+}
+
+/// A `CLEARMSG` (one message deleted) or `CLEARCHAT` (a viewer timed out or banned, or the
+/// whole chat cleared) line.
+fn removal(line: &str) -> Option<super::Removal> {
+    use super::Removal;
+    match command(line) {
+        "CLEARMSG" => tags(line)
+            .find(|(k, _)| *k == "target-msg-id")
+            .map(|(_, id)| Removal::Message(id.to_owned())),
+        "CLEARCHAT" => Some(match line.split_once(" CLEARCHAT ")?.1.split_once(" :") {
+            Some((_, login)) if !login.trim().is_empty() => Removal::User(login.trim().to_owned()),
+            _ => Removal::All,
+        }),
+        _ => None,
+    }
 }
 
 /// Undoes the escaping of tag values.
@@ -506,6 +531,20 @@ mod tests {
             serde_json::json!({ "from_broadcaster_user_name": "Big", "viewers": 40 }),
         );
         assert_eq!((raid.kind, raid.amount), (K::Raid, Some(40.0)));
+    }
+
+    #[test]
+    fn moderation_lines_become_removals() {
+        use super::super::Removal;
+        let one = "@login=ali;room-id=;target-msg-id=abc-123;tmi-sent-ts=1 :tmi.twitch.tv CLEARMSG #chan :bad words";
+        assert_eq!(removal(one), Some(Removal::Message("abc-123".into())));
+        let user =
+            "@ban-duration=600;room-id=1;target-user-id=2 :tmi.twitch.tv CLEARCHAT #chan :ali";
+        assert_eq!(removal(user), Some(Removal::User("ali".into())));
+        let all = "@room-id=1;tmi-sent-ts=1 :tmi.twitch.tv CLEARCHAT #chan";
+        assert_eq!(removal(all), Some(Removal::All));
+        let line = "@color=;display-name=A;id=m-1 :a!a@a.tmi.twitch.tv PRIVMSG #c :hi";
+        assert_eq!(parse(line).unwrap().id, "m-1");
     }
 
     #[test]

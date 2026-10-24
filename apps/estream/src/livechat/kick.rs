@@ -196,7 +196,15 @@ fn connect(
                     cx.push(message.with_parts(parts));
                 }
             }
-            _ => {}
+            name => {
+                let data = event
+                    .get("data")
+                    .and_then(Value::as_str)
+                    .and_then(|d| serde_json::from_str::<Value>(d).ok());
+                if let Some(r) = data.and_then(|d| removal(name, &d)) {
+                    cx.push(Message::removal(Platform::Kick, r));
+                }
+            }
         }
     }
 }
@@ -370,6 +378,8 @@ fn event_line(kind: &str, e: &Value) -> Option<Message> {
         parts: Vec::new(),
         time: chrono::Local::now(),
         event: Some(event),
+        id: String::new(),
+        removal: None,
     })
 }
 
@@ -394,9 +404,28 @@ fn parse(data: &Value) -> Option<Message> {
             parts: Vec::new(),
             time: chrono::Local::now(),
             event: None,
+            id: data["id"].as_str().unwrap_or_default().to_owned(),
+            removal: None,
         }
         .with_parts(parts),
     )
+}
+
+/// A moderation event's data: a deleted message, a banned or timed-out viewer, a cleared chat.
+fn removal(event: &str, data: &Value) -> Option<super::Removal> {
+    use super::Removal;
+    match event {
+        "App\\Events\\MessageDeletedEvent" => data["message"]["id"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .map(|id| Removal::Message(id.to_owned())),
+        "App\\Events\\UserBannedEvent" => {
+            let name = data["user"]["username"].as_str().unwrap_or_default();
+            (!name.is_empty()).then(|| Removal::User(name.to_owned()))
+        }
+        "App\\Events\\ChatroomClearEvent" => Some(Removal::All),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -459,6 +488,30 @@ mod tests {
             "resubscribed for 3 months"
         );
         assert!(event_line("chat.message.sent", &follow).is_none());
+    }
+
+    #[test]
+    fn moderation_events_become_removals() {
+        use super::super::Removal;
+        let deleted =
+            serde_json::json!({ "id": "e1", "message": { "id": "m1" }, "aiModerated": false });
+        assert_eq!(
+            removal(r"App\Events\MessageDeletedEvent", &deleted),
+            Some(Removal::Message("m1".into()))
+        );
+        let banned = serde_json::json!({ "id": "e2", "user": { "id": 3, "username": "ali", "slug": "ali" } });
+        assert_eq!(
+            removal(r"App\Events\UserBannedEvent", &banned),
+            Some(Removal::User("ali".into()))
+        );
+        assert_eq!(
+            removal(r"App\Events\ChatroomClearEvent", &serde_json::json!({})),
+            Some(Removal::All)
+        );
+        assert_eq!(
+            removal(r"App\Events\PinnedMessageCreatedEvent", &deleted),
+            None
+        );
     }
 
     #[test]
