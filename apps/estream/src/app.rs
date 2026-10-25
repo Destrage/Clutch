@@ -129,6 +129,12 @@ pub struct App {
     /// (with the engine's rendered and skipped counts then).
     pictures_shown: u64,
     preview_log: (Instant, u64, u64, u64),
+    /// UI tick pacing since the last preview log line.
+    pub tick_stats: TickStats,
+    /// Troubleshooting (`CLUTCH_PREVIEW_NEW_IMAGE`): hand the main view a new image every frame
+    /// instead of updating its texture in place.
+    new_image_per_frame: bool,
+    alt_picture: estream_engine::UiPreview,
     /// What the shader editor is editing.
     shader_target: ShaderTarget,
     /// Canvas shown and edited in the studio (`None` = the first).
@@ -779,6 +785,9 @@ impl App {
             card_picture: Default::default(),
             pictures_shown: 0,
             preview_log: (Instant::now(), 0, 0, 0),
+            tick_stats: TickStats::default(),
+            new_image_per_frame: std::env::var_os("CLUTCH_PREVIEW_NEW_IMAGE").is_some(),
+            alt_picture: Default::default(),
             shader_target: ShaderTarget::Transition,
             current_canvas: None,
             last_output: None,
@@ -2595,12 +2604,26 @@ impl App {
                             w.set_card_frame(img);
                         }
                     }
+                    if self.new_image_per_frame && !self.studio {
+                        if let Some(t) = self.alt_picture.show(&self.gpu, &output, &frame)
+                            && let Ok(img) = slint::Image::try_from(t)
+                        {
+                            self.pictures_shown += 1;
+                            w.set_preview_frame(img);
+                        }
+                        // Skip the in-place path below.
+                        self.main_picture = None;
+                    }
                     let shown = if self.studio {
                         &mut self.program_picture
                     } else {
                         &mut self.main_picture
                     };
-                    let result = show_picture(&self.gpu, shown, &output, &frame);
+                    let result = if self.new_image_per_frame && !self.studio {
+                        Shown::Kept
+                    } else {
+                        show_picture(&self.gpu, shown, &output, &frame)
+                    };
                     if result != Shown::Kept {
                         self.pictures_shown += 1;
                     }
@@ -2768,15 +2791,28 @@ impl App {
                 self.pictures_shown.saturating_sub(was_shown),
             );
             if self.visibility != Visibility::Hidden && shown_n + 10 < rendered_n {
+                let t = &self.tick_stats;
+                let ms = |d: Duration| (d.as_secs_f64() * 1e4).round() / 10.0;
                 tracing::info!(
                     rendered = rendered_n,
                     skipped = skipped_n,
                     shown = shown_n,
                     visibility = ?self.visibility,
+                    new_image = self.new_image_per_frame,
+                    ticks = t.ticks,
+                    gap_avg_ms = ms(t.gap_sum / t.ticks.max(1)),
+                    gap_max_ms = ms(t.gap_max),
+                    gaps_over_20ms = t.long_gaps,
+                    busy_avg_ms = ms(t.busy_sum / t.ticks.max(1)),
+                    busy_max_ms = ms(t.busy_max),
                     "preview missed frames in the last 10 s"
                 );
             }
             self.preview_log = (Instant::now(), rendered, skipped, self.pictures_shown);
+            self.tick_stats = TickStats {
+                last: self.tick_stats.last,
+                ..Default::default()
+            };
         }
         w.set_target_fps(canvas.fps.as_f64() as f32);
         w.set_render_ms(render_ms(engine, &output) as f32);
@@ -10160,6 +10196,36 @@ fn push_layers(
     }
 }
 
+/// How regularly the UI tick runs: time between tick starts, and time spent inside a tick.
+#[derive(Default)]
+pub struct TickStats {
+    last: Option<Instant>,
+    ticks: u32,
+    gap_sum: Duration,
+    gap_max: Duration,
+    /// Gaps longer than a 60 fps frame and a bit: a new canvas picture may be missed.
+    long_gaps: u32,
+    busy_sum: Duration,
+    busy_max: Duration,
+}
+
+impl TickStats {
+    /// Records a tick that started at `start` and took `busy`.
+    pub fn record(&mut self, start: Instant, busy: Duration) {
+        if let Some(last) = self.last.replace(start) {
+            let gap = start - last;
+            self.ticks += 1;
+            self.gap_sum += gap;
+            self.gap_max = self.gap_max.max(gap);
+            if gap > Duration::from_millis(20) {
+                self.long_gaps += 1;
+            }
+            self.busy_sum += busy;
+            self.busy_max = self.busy_max.max(busy);
+        }
+    }
+}
+
 /// A texture a view shows permanently (the view holds its Slint image).
 struct ShownPicture {
     texture: estream_gpu::wgpu::Texture,
@@ -10666,7 +10732,9 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
             Duration::from_millis(4),
             move || {
                 if let Ok(mut a) = app.try_borrow_mut() {
+                    let start = Instant::now();
                     a.tick();
+                    a.tick_stats.record(start, start.elapsed());
                 }
             },
         );
