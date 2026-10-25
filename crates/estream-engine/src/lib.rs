@@ -32,6 +32,7 @@ pub use source::{
     SourceType, VideoSource,
 };
 pub use video::{CanvasFrame, CanvasOutput, SourceInfo, VideoCore};
+pub use watchdog::{FrameTimings, Stage, StageTiming};
 
 pub use estream_audio as audio_engine;
 pub use estream_core as core;

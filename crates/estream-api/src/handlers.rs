@@ -236,6 +236,10 @@ fn engine(studio: &dyn Studio) -> Result<&Engine, E> {
         .ok_or_else(|| RequestError::new(st::NOT_READY, "no scene collection is open"))
 }
 
+fn ms(d: Duration) -> f64 {
+    d.as_secs_f64() * 1e3
+}
+
 fn exec(engine: &Engine, command: Command) -> Reply {
     engine.execute(command).map(|_| Value::Null).map_err(failed)
 }
@@ -567,6 +571,22 @@ pub fn handle(
                     o.stats.last_render_ns.load(Relaxed),
                 )
             });
+            // Averaged over the last couple of seconds; the last frame's time if none yet.
+            let timings = engine.video_timings().filter(|t| t.frames > 0);
+            let render_ms = timings
+                .as_ref()
+                .map_or(render_ns as f64 / 1e6, |t| ms(t.total.avg));
+            // Clutch extension: CPU time per video-thread stage (other clients ignore it).
+            let stages: Map<String, Value> = timings
+                .iter()
+                .flat_map(|t| &t.stages)
+                .map(|(stage, t)| {
+                    (
+                        stage.label().to_lowercase(),
+                        json!({ "averageMs": ms(t.avg), "p95Ms": ms(t.p95) }),
+                    )
+                })
+                .collect();
             let stream = studio.output_status(Output::Stream);
             let record = studio.output_status(Output::Record);
             let (cpu, memory, disk) = studio.system_stats().unwrap_or_default();
@@ -575,7 +595,9 @@ pub fn handle(
                 "memoryUsage": memory,
                 "availableDiskSpace": disk,
                 "activeFps": ctx.active_fps,
-                "averageFrameRenderTime": render_ns as f64 / 1e6,
+                "averageFrameRenderTime": render_ms,
+                "clutchFrameRenderP95": timings.as_ref().map_or(render_ms, |t| ms(t.total.p95)),
+                "clutchVideoStages": stages,
                 "renderSkippedFrames": lagged,
                 "renderTotalFrames": rendered,
                 "outputSkippedFrames": stream.skipped_frames + record.skipped_frames,

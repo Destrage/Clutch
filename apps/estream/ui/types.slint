@@ -671,4 +671,6 @@ export struct StatsForm {
     encoders: [StatRow],
     destinations: [StatRow],
     alerts: [AlertRow],
+    /// CPU time per video-thread stage: average, p95, share of the frame.
+    stages: [StatRow],
 }

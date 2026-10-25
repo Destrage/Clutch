@@ -1,6 +1,6 @@
 ## 1. Measure
 - [x] 1.1 Move the matched benchmark (`bench.ps1`, `run-pair.ps1`, `compare.ps1`) into `tools/bench/` with a README; record the 2026-10-25 baseline in it
-- [ ] 1.2 Per-stage video thread timings (tick, filters, render, convert, submit, deliver) as rolling averages and p95 in the stats panel and `GetStats` log, without allocating on the video thread
+- [x] 1.2 Per-stage video thread timings (tick, filters, render, convert, submit, deliver) as rolling averages and p95 in the stats panel and `GetStats` log, without allocating on the video thread
 - [ ] 1.3 Take a memory breakdown of the bench scene (VMMap + D3D12 allocations) and note the largest items in this change's design
 
 ## 2. Capture without CPU waits

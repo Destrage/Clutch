@@ -158,7 +158,7 @@ for ($i = 1; $i -le $Seconds; $i++) {
     }
 
     $st = Get-Stats
-    $rows.Add([pscustomobject]@{
+    $row = [pscustomobject]@{
         t                = $i
         app_cpu_pct      = [math]::Round($cpuMs / $elapsedMs / $cores * 100, 2)
         app_mem_mb       = [math]::Round($memMb, 1)
@@ -175,7 +175,15 @@ for ($i = 1; $i -le $Seconds; $i++) {
         render_total     = $st.renderTotalFrames
         output_skipped   = $st.outputSkippedFrames
         output_total     = $st.outputTotalFrames
-    })
+    }
+    # Clutch also reports its p95 and CPU time per video-thread stage.
+    if ($null -ne $st.clutchFrameRenderP95) {
+        $row | Add-Member render_p95_ms ([math]::Round($st.clutchFrameRenderP95, 3))
+        foreach ($p in $st.clutchVideoStages.PSObject.Properties) {
+            $row | Add-Member "stage_$($p.Name)_ms" ([math]::Round($p.Value.averageMs, 3))
+        }
+    }
+    $rows.Add($row)
     if ($i % 30 -eq 0) { Write-Host "  $i / $Seconds s" }
 }
 

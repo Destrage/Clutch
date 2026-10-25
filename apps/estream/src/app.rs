@@ -2631,13 +2631,7 @@ impl App {
         self.stats_rendered = rendered;
         self.stats_at = Instant::now();
         w.set_target_fps(canvas.fps.as_f64() as f32);
-        w.set_render_ms(
-            output
-                .stats
-                .last_render_ns
-                .load(std::sync::atomic::Ordering::Relaxed) as f32
-                / 1e6,
-        );
+        w.set_render_ms(render_ms(engine, &output) as f32);
         w.set_lagged(
             output
                 .stats
@@ -7029,7 +7023,7 @@ impl App {
                     rendered: out.stats.rendered.load(Relaxed),
                     lagged: out.stats.lagged.load(Relaxed),
                     encoder_dropped: out.stats.encoder_dropped.load(Relaxed),
-                    render_ms: out.stats.last_render_ns.load(Relaxed) as f64 / 1e6,
+                    render_ms: render_ms(engine, &out),
                 })
             })
             .collect();
@@ -7330,11 +7324,40 @@ impl App {
                 advice: a.advice.into(),
             })
             .collect();
+        // CPU time per video-thread stage; share of the whole frame in c3.
+        let stages: Vec<StatRow> = self
+            .engine
+            .as_ref()
+            .and_then(|e| e.video_timings())
+            .filter(|t| t.frames > 0)
+            .map(|t| {
+                let total = t.total.avg.as_secs_f64().max(1e-9);
+                let row = |name: &str, s: &estream_engine::StageTiming, share: bool| StatRow {
+                    name: name.into(),
+                    detail: SharedString::new(),
+                    c1: format!("{:.2} ms", s.avg.as_secs_f64() * 1e3).into(),
+                    c2: format!("{:.2} ms", s.p95.as_secs_f64() * 1e3).into(),
+                    c3: if share {
+                        format!("{:.0}%", s.avg.as_secs_f64() / total * 100.0).into()
+                    } else {
+                        SharedString::new()
+                    },
+                    c4: SharedString::new(),
+                    level: 0,
+                };
+                t.stages
+                    .iter()
+                    .map(|(stage, s)| row(stage.label(), s, true))
+                    .chain(std::iter::once(row("Whole frame", &t.total, false)))
+                    .collect()
+            })
+            .unwrap_or_default();
         w.set_stats_form(StatsForm {
             tiles: ModelRc::new(VecModel::from(tiles)),
             encoders: ModelRc::new(VecModel::from(encoders)),
             destinations: ModelRc::new(VecModel::from(destinations)),
             alerts: ModelRc::new(VecModel::from(alerts)),
+            stages: ModelRc::new(VecModel::from(stages)),
         });
     }
 
@@ -9913,6 +9936,19 @@ fn push_layers(
 }
 
 /// Meter position (0..1) for a linear level on a -60..0 dB scale.
+/// Average video-thread time per frame over the last couple of seconds, in milliseconds
+/// (the last frame's time until there is history).
+fn render_ms(engine: &estream_engine::Engine, output: &estream_engine::CanvasOutput) -> f64 {
+    engine.video_timings().filter(|t| t.frames > 0).map_or(
+        output
+            .stats
+            .last_render_ns
+            .load(std::sync::atomic::Ordering::Relaxed) as f64
+            / 1e6,
+        |t| t.total.avg.as_secs_f64() * 1e3,
+    )
+}
+
 /// Copies a scene's current picture into its thumbnail texture (made on first use, and again
 /// when the canvas size changes). Returns whether a new thumbnail was made, so the scene cards
 /// need rebuilding; later copies update the texture the card already shows.

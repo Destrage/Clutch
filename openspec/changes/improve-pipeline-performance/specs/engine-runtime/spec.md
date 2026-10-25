@@ -51,4 +51,4 @@ averages and 95th percentiles to the stats panel, without allocating on the vide
 
 #### Scenario: Stats panel
 - **WHEN** the stats panel is open
-- **THEN** it shows average and p95 time for tick, filters, render, convert, submit and deliver
+- **THEN** it shows average and p95 time for sources, filters, render, convert, submit, poll and deliver, and for the whole frame

@@ -735,9 +735,11 @@ impl VideoCore {
                 let tick = self.canvases[i].clock.advance(now);
                 let slot = self.render_canvas(i, &mut encoder, tick.timestamp);
                 *due = Some((tick, slot));
+                self.progress.enter(Stage::Convert);
                 maps[i] = self
                     .record_readback(i, slot, consumers, &mut encoder)
                     .map(|idx| (idx, tick.timestamp));
+                self.progress.enter(Stage::Render);
             }
         }
         self.progress.enter(Stage::Submit);
@@ -760,6 +762,7 @@ impl VideoCore {
             }
         }
         let elapsed = started.elapsed().as_nanos() as u64;
+        self.progress.end_frame();
         let mut rendered = 0;
         for (canvas, due) in self.canvases.iter_mut().zip(ticks) {
             if let Some((tick, slot)) = due {

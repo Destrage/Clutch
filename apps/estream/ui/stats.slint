@@ -155,6 +155,14 @@ export component StatsDialog inherits Modal {
                 row-data: { name: "Destination", c1: "Bitrate", c2: "Dropped", c3: "Delay", c4: "Reconnects" };
             }
             for r in root.form.destinations: TableRow { row-data: r; }
+
+            SectionTitle { text: "VIDEO THREAD"; }
+            if root.form.stages.length == 0: Text { text: "No frames rendered yet."; color: Theme.text-faint; font-size: Theme.font-s; }
+            if root.form.stages.length > 0: TableRow {
+                header: true;
+                row-data: { name: "Stage (CPU time per frame)", c1: "Average", c2: "p95", c3: "Share" };
+            }
+            for r in root.form.stages: TableRow { row-data: r; }
         }
     }
 }
