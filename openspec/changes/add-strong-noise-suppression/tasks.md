@@ -1,7 +1,7 @@
 ## 1. Spike and license
 - [x] 1.1 Load `DeepFilterNet3` and `DeepFilterNet3_ll` with `tract` (0.21.4: libDF does not build on current tract); enhance 48 kHz TTS speech with synthetic keyboard typing; record CPU per 10 ms hop (release build, p50/p99), delay and remaining typing level against RNNoise in design.md
 - [x] 1.2 Check a warmed-up model run for allocations (counting allocator); decide audio thread vs own thread and vendored vs pinned git dependency; record in design.md
-- [ ] 1.3 Confirm the model weights are covered by MIT/Apache-2.0 (ask upstream if no file says so); add DeepFilterNet to the third-party notices
+- [ ] 1.3 Confirm the model weights are covered by MIT/Apache-2.0; add DeepFilterNet to the third-party notices (clutch-site /licenses/). Status 2026-10-25: already asked upstream in issues #697, #700, #709, #712 with no maintainer reply (emails unanswered too); following #700 rather than opening another
 
 ## 2. Engine
 - [x] 2.1 `estream-denoise` crate (own crate so the vendored code keeps upstream style and edition 2021): DeepFilterNet DSP and model runner vendored (license headers kept), `tract-*` pinned exactly, low-latency model embedded
