@@ -708,6 +708,21 @@ fn identify(ws: &mut Socket, password: Option<&str>) -> Result<Value, u16> {
 }
 
 #[test]
+fn client_close_gets_a_close_reply() {
+    let server = run_server(None);
+    let mut ws = connect(server.port, None);
+    identify(&mut ws, None).unwrap();
+    ws.close(None).unwrap();
+    loop {
+        match ws.read() {
+            Ok(_) => continue,
+            Err(tungstenite::Error::ConnectionClosed) => break,
+            Err(e) => panic!("close handshake not completed: {e}"),
+        }
+    }
+}
+
+#[test]
 fn websocket_sessions_end_to_end() {
     let server = run_server(Some("hunter2"));
 
