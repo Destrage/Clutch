@@ -19,45 +19,43 @@ pub const KIND: &str = "alerts";
 const ANIMATIONS: &[&str] = &["webm", "webp", "png", "apng", "gif"];
 const SOUNDS: &[&str] = &["wav", "ogg", "mp3"];
 
-/// Clutch's built-in pack (sounds only so far), shipped inside the app.
+/// A file of the built-in pack, by its path in the pack.
+macro_rules! pack_file {
+    ($path:literal) => {
+        (
+            $path,
+            include_bytes!(concat!("../../assets/alerts/", $path)) as &[u8],
+        )
+    };
+}
+
+/// Clutch's built-in pack, shipped inside the app: per kind an animation (no text), its text
+/// box and timing, and sounds.
 const BUILTIN: &[(&str, &[u8])] = &[
-    ("pack.json", include_bytes!("../../assets/alerts/pack.json")),
-    (
-        "follow/sound.ogg",
-        include_bytes!("../../assets/alerts/follow/sound.ogg"),
-    ),
-    (
-        "follow/sound-2.ogg",
-        include_bytes!("../../assets/alerts/follow/sound-2.ogg"),
-    ),
-    (
-        "sub/sound.ogg",
-        include_bytes!("../../assets/alerts/sub/sound.ogg"),
-    ),
-    (
-        "resub/sound.ogg",
-        include_bytes!("../../assets/alerts/resub/sound.ogg"),
-    ),
-    (
-        "gift/sound.ogg",
-        include_bytes!("../../assets/alerts/gift/sound.ogg"),
-    ),
-    (
-        "bits/sound.ogg",
-        include_bytes!("../../assets/alerts/bits/sound.ogg"),
-    ),
-    (
-        "bits/sound-2.ogg",
-        include_bytes!("../../assets/alerts/bits/sound-2.ogg"),
-    ),
-    (
-        "raid/sound.ogg",
-        include_bytes!("../../assets/alerts/raid/sound.ogg"),
-    ),
-    (
-        "paid/sound.ogg",
-        include_bytes!("../../assets/alerts/paid/sound.ogg"),
-    ),
+    pack_file!("pack.json"),
+    pack_file!("follow/alert.webm"),
+    pack_file!("follow/alert.json"),
+    pack_file!("follow/sound.ogg"),
+    pack_file!("follow/sound-2.ogg"),
+    pack_file!("sub/alert.webm"),
+    pack_file!("sub/alert.json"),
+    pack_file!("sub/sound.ogg"),
+    pack_file!("resub/alert.webm"),
+    pack_file!("resub/alert.json"),
+    pack_file!("resub/sound.ogg"),
+    pack_file!("gift/alert.webm"),
+    pack_file!("gift/alert.json"),
+    pack_file!("gift/sound.ogg"),
+    pack_file!("bits/alert.webm"),
+    pack_file!("bits/alert.json"),
+    pack_file!("bits/sound.ogg"),
+    pack_file!("bits/sound-2.ogg"),
+    pack_file!("raid/alert.webm"),
+    pack_file!("raid/alert.json"),
+    pack_file!("raid/sound.ogg"),
+    pack_file!("paid/alert.webm"),
+    pack_file!("paid/alert.json"),
+    pack_file!("paid/sound.ogg"),
 ];
 
 /// The built-in pack's folder, written to the cache on first use (files that differ are
@@ -443,13 +441,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builtin_pack_has_a_sound_per_kind() {
+    fn builtin_pack_has_an_animation_text_box_and_sound_per_kind() {
         for kind in StreamEventKind::ALL {
-            let name = format!("{}/sound.ogg", key(kind));
-            assert!(
-                BUILTIN.iter().any(|(n, b)| *n == name && !b.is_empty()),
-                "{name}"
-            );
+            for file in ["alert.webm", "alert.json", "sound.ogg"] {
+                let name = format!("{}/{file}", key(kind));
+                assert!(
+                    BUILTIN.iter().any(|(n, b)| *n == name && !b.is_empty()),
+                    "{name}"
+                );
+            }
+            let json = BUILTIN
+                .iter()
+                .find(|(n, _)| *n == format!("{}/alert.json", key(kind)))
+                .map(|(_, b)| serde_json::from_slice::<Value>(b).unwrap())
+                .unwrap();
+            assert!(json["text_box"]["w"].as_f64().is_some_and(|w| w > 0.0));
+            assert!(json["text_out"].as_f64() < json["duration"].as_f64());
         }
     }
 
