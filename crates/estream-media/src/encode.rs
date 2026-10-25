@@ -193,10 +193,23 @@ fn takes_nv12(name: &str) -> bool {
     matches!(family(name), "nvenc" | "amf" | "qsv")
 }
 
+/// Encoders that can take frames on the GPU (D3D11 textures) on this platform.
+pub fn takes_gpu_frames(name: &str) -> bool {
+    cfg!(windows) && matches!(family(name), "nvenc" | "amf")
+}
+
+#[cfg(windows)]
+type GpuInput = crate::gpu_frames::GpuInput;
+/// No GPU frame input off Windows.
+#[cfg(not(windows))]
+enum GpuInput {}
+
 pub struct VideoEncoder {
     encoder: ffmpeg::encoder::Video,
     frame: ffmpeg::frame::Video,
     nv12: bool,
+    /// Set when the encoder takes GPU frames.
+    gpu: Option<GpuInput>,
     pub name: String,
     pub time_base: FfRational,
 }
@@ -208,6 +221,41 @@ impl VideoEncoder {
         height: u32,
         fps: Rational,
         settings: &RecordingSettings,
+    ) -> Result<Self, MediaError> {
+        Self::open_with(name, width, height, fps, settings, None)
+    }
+
+    /// Opens a hardware encoder that takes GPU frames like `first`.
+    #[cfg(windows)]
+    pub fn open_gpu(
+        name: &str,
+        width: u32,
+        height: u32,
+        fps: Rational,
+        settings: &RecordingSettings,
+        first: &estream_engine::GpuFrame,
+    ) -> Result<Self, MediaError> {
+        if !takes_gpu_frames(name) {
+            return Err(MediaError::NoEncoder(format!(
+                "{name} can't take GPU frames"
+            )));
+        }
+        let input = GpuInput::new(first, width, height)?;
+        Self::open_with(name, width, height, fps, settings, Some(input))
+    }
+
+    /// Whether this encoder takes GPU frames.
+    pub fn is_gpu(&self) -> bool {
+        self.gpu.is_some()
+    }
+
+    fn open_with(
+        name: &str,
+        width: u32,
+        height: u32,
+        fps: Rational,
+        settings: &RecordingSettings,
+        gpu: Option<GpuInput>,
     ) -> Result<Self, MediaError> {
         crate::init();
         let codec = ffmpeg::encoder::find_by_name(name)
@@ -225,6 +273,14 @@ impl VideoEncoder {
         enc.set_width(width);
         enc.set_height(height);
         enc.set_format(pixel);
+        #[cfg(windows)]
+        if let Some(input) = &gpu {
+            enc.set_format(format::Pixel::D3D11);
+            // SAFETY: the context is not open yet; it takes ownership of the new reference.
+            unsafe {
+                (*enc.as_mut_ptr()).hw_frames_ctx = input.frames_ref();
+            }
+        }
         enc.set_time_base(time_base);
         enc.set_frame_rate(Some(FfRational(fps.num as i32, fps.den as i32)));
         enc.set_gop((fps.as_f64() * settings.keyframe_seconds.max(1) as f64).round() as u32);
@@ -238,6 +294,7 @@ impl VideoEncoder {
             encoder,
             frame: ffmpeg::frame::Video::new(pixel, width, height),
             nv12,
+            gpu,
             name: name.to_owned(),
             time_base,
         })
@@ -256,6 +313,30 @@ impl VideoEncoder {
         force_key: bool,
         out: &mut dyn FnMut(ffmpeg::Packet),
     ) -> Result<(), MediaError> {
+        let kind = if force_key {
+            ffmpeg::picture::Type::I
+        } else {
+            ffmpeg::picture::Type::None
+        };
+        match (&frame.gpu, self.gpu.as_mut()) {
+            #[cfg(windows)]
+            (Some(gpu_frame), Some(input)) => {
+                let mut hw = input.upload(gpu_frame)?;
+                hw.set_pts(Some(pts));
+                hw.set_kind(kind);
+                self.encoder.send_frame(&hw)?;
+                return self.drain(out);
+            }
+            // GPU frames still queued after an output switched to CPU frames: skip them.
+            (Some(_), _) => return Ok(()),
+            // The engine stopped handing out GPU frames; fail loudly rather than freeze.
+            (None, Some(_)) => {
+                return Err(MediaError::Engine(
+                    "the encoder takes GPU frames but got a CPU frame".into(),
+                ));
+            }
+            (None, None) => {}
+        }
         let (w, h) = (frame.width as usize, frame.height as usize);
         let copy_rows = |dst: &mut [u8], stride: usize, src: &[u8], row: usize, rows: usize| {
             for r in 0..rows {
@@ -280,11 +361,7 @@ impl VideoEncoder {
             }
         }
         self.frame.set_pts(Some(pts));
-        self.frame.set_kind(if force_key {
-            ffmpeg::picture::Type::I
-        } else {
-            ffmpeg::picture::Type::None
-        });
+        self.frame.set_kind(kind);
         self.encoder.send_frame(&self.frame)?;
         self.drain(out)
     }

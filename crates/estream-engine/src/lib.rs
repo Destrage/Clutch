@@ -16,6 +16,7 @@ mod filters;
 pub mod frame_clock {
     pub use estream_core::frame_clock::*;
 }
+pub mod gpu_export;
 pub mod graph;
 pub mod history;
 pub mod properties;
@@ -26,6 +27,7 @@ mod watchdog;
 pub use command::{CanvasPatch, Change, Command, CommandError, ItemPatch};
 pub use engine::{Engine, EngineConfig, EngineError, Event, Origin, Subscription, VideoTap};
 pub use feed::VideoFrame;
+pub use gpu_export::{ExportPlanes, GpuExport, GpuFrame, PlanesHandle};
 pub use properties::{PropKind, Property, PropertySchema, SelectOption};
 pub use source::{
     NOT_ON_THIS_SYSTEM, SourceContext, SourceError, SourceFrame, SourceRegistry, SourceStatus,

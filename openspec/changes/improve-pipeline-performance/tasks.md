@@ -8,16 +8,16 @@
 - [x] 2.2 Engine queue waits on the newest fence value of the slots a frame samples; slot reuse waits for the engine's reading frame to finish (non-blocking check, frame dropped if no slot is free); ring of 4, WGC pool of 3
 - [x] 2.3 Fallback without D3D11.4 fences: wait for the copy as before, sleeping between polls instead of spinning (see design.md for why not a query handoff)
 - [x] 2.4 Capture rate cap: `MinUpdateInterval` where supported plus early frame release, at half the video thread's measured frame interval
-- [ ] 2.5 Tests: interop test for fence ordering; unit tests for the rate cap and busy slots; bench shows the capture thread no longer spinning
+- [x] 2.5 Tests: interop test for fence ordering; unit tests for the rate cap and busy slots; bench shows the capture thread no longer spinning
 
 ## 3. GPU frames to hardware encoders
 - [x] 3.1 Spike: can wgpu 30 render to NV12 plane views on DX12? Record the answer in design.md
-- [ ] 3.2 Shared R8/RG8 plane targets (D3D11-created, rendered by wgpu) and an NV12 texture ring per canvas, filled by a D3D11 plane-copy pass after a shared fence
-- [ ] 3.3 FFmpeg D3D11VA device and frames context over the ring (`av_buffer_pool_init2`), slots returned when FFmpeg releases them
-- [ ] 3.4 Video consumers receive GPU frames (slot + fence value) when their encoder takes D3D11 frames; NVENC and AMF first
-- [ ] 3.5 QuickSync through a derived QSV frames context, CPU fallback when that fails
-- [ ] 3.6 Automatic per-session fallback to the CPU readback (logged) on any setup or first-frame failure; hidden `performance.gpu_encode` switch
-- [ ] 3.7 Tests: encode 120 frames of a known pattern through the GPU path and the CPU path and compare decoded output; fallback test with a forced failure
+- [x] 3.2 Shared R8/RG8 plane slots per canvas (created on D3D12 with simultaneous access, opened in D3D11, rendered by wgpu), copied by a D3D11 pass-through shader into FFmpeg NV12 textures after a shared fence
+- [x] 3.3 FFmpeg D3D11VA device context over our D3D11 device and a frames context per encoder (FFmpeg's own pool, render-target bind flag); slots are reused once every frame holding them is dropped and the copy's release fence passed
+- [x] 3.4 Video consumers receive GPU frames (planes handle + fence value) when their encoder takes D3D11 frames; NVENC and AMF
+- [ ] 3.5 QuickSync through a derived QSV frames context, CPU fallback when that fails (QSV keeps CPU frames for now)
+- [x] 3.6 Fallback to CPU frames (logged) when planes can't be created or the GPU encoder won't open; a GPU encoder that later gets CPU frames fails loudly; hidden `gpu_encode` setting
+- [x] 3.7 Tests: the same frames through the GPU and CPU paths with NVENC decode to the same picture (marker band checked, off-by-one verified to fail); NVENC recording from GPU frames; engine fallback, ordering and held-slot tests with a fake export
 
 ## 4. Encode once, fan out
 - [ ] 4.1 `EncoderHub` with sessions keyed by canvas and resolved encoder settings; per-subscriber bounded packet queues

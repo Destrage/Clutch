@@ -69,6 +69,19 @@ impl Nv12Target {
             uv,
         }
     }
+
+    /// Wraps planes created elsewhere (e.g. shared with another API): `y` is `R8Unorm` at
+    /// full size, `uv` is `Rg8Unorm` at half size, both renderable.
+    pub fn from_planes(y: wgpu::Texture, uv: wgpu::Texture) -> Self {
+        debug_assert_eq!(y.format(), wgpu::TextureFormat::R8Unorm);
+        debug_assert_eq!(uv.format(), wgpu::TextureFormat::Rg8Unorm);
+        Self {
+            y_view: y.create_view(&Default::default()),
+            uv_view: uv.create_view(&Default::default()),
+            y,
+            uv,
+        }
+    }
 }
 
 /// Bind group for one canvas texture; create once per canvas texture and reuse.

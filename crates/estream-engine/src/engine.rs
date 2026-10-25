@@ -4,6 +4,7 @@
 use crate::audio::{self, AudioHost};
 use crate::command::{Change, Command, CommandError};
 use crate::feed::{VideoConsumer, VideoFrame};
+use crate::gpu_export::GpuExport;
 use crate::graph::{ActiveTransition, RenderGraph, ViewState};
 use crate::history::History;
 use crate::source::{SourceRegistry, SourceStatus};
@@ -57,6 +58,8 @@ pub struct EngineConfig {
     pub video: bool,
     /// Run the real-time audio thread.
     pub audio: bool,
+    /// Lets hardware encoders take frames on the GPU instead of CPU readbacks.
+    pub gpu_export: Option<Arc<dyn GpuExport>>,
 }
 
 impl Default for EngineConfig {
@@ -71,6 +74,7 @@ impl Default for EngineConfig {
             coalesce_window: Duration::from_millis(500),
             video: true,
             audio: true,
+            gpu_export: None,
         }
     }
 }
@@ -260,17 +264,38 @@ pub struct VideoTap {
 impl VideoTap {
     /// Delivers NV12 frames of `canvas` to `tx` until [`VideoTap::remove`] is called.
     pub fn add(&self, canvas: CanvasId, tx: crossbeam_channel::Sender<VideoFrame>) -> u64 {
+        self.add_consumer(canvas, tx, false).0
+    }
+
+    /// Like [`VideoTap::add`], but asks for frames on the GPU when the engine has a
+    /// [`GpuExport`]. Clearing the returned flag switches the consumer to CPU frames.
+    pub fn add_gpu(
+        &self,
+        canvas: CanvasId,
+        tx: crossbeam_channel::Sender<VideoFrame>,
+    ) -> (u64, Arc<AtomicBool>) {
+        self.add_consumer(canvas, tx, true)
+    }
+
+    fn add_consumer(
+        &self,
+        canvas: CanvasId,
+        tx: crossbeam_channel::Sender<VideoFrame>,
+        gpu: bool,
+    ) -> (u64, Arc<AtomicBool>) {
         let id = self.shared.next_consumer.fetch_add(1, Ordering::Relaxed);
+        let gpu = Arc::new(AtomicBool::new(gpu));
         self.shared.consumers.rcu(|list| {
             let mut list = (**list).clone();
             list.push(VideoConsumer {
                 id,
                 canvas,
                 tx: tx.clone(),
+                gpu: gpu.clone(),
             });
             list
         });
-        id
+        (id, gpu)
     }
 
     pub fn remove(&self, id: u64) {
@@ -330,6 +355,7 @@ impl Engine {
         let video = match &gpu {
             Some(gpu) => {
                 let mut core = VideoCore::new(gpu.clone(), config.registry.clone());
+                core.set_gpu_export(config.gpu_export.clone());
                 // Create canvases and sources up front so outputs exist when `start` returns.
                 core.sync(shared.graph.load_full(), clock.now());
                 shared.publish(core.outputs(), core.statuses());

@@ -11,8 +11,7 @@
 
 use crate::CaptureError;
 use estream_gpu::{GpuContext, wgpu};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use windows::Win32::Foundation::{CloseHandle, GENERIC_ALL, HMODULE};
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE_UNKNOWN, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_11_1,
@@ -49,10 +48,13 @@ struct Fences {
     /// Signalled by D3D11 after a capture copy; opened on D3D12 as `copied_12`.
     copied_11: ID3D11Fence,
     copied_12: ID3D12Fence,
-    copied: AtomicU64,
+    /// Last values signalled. Each is taken and signalled under its lock: several capture
+    /// threads (or video threads) share a fence, and a later, lower signal would move the
+    /// fence back and strand a waiter.
+    copied: Mutex<u64>,
     /// Signalled by wgpu's queue once earlier submissions no longer read a slot.
     released: ID3D12Fence,
-    release: AtomicU64,
+    release: Mutex<u64>,
 }
 
 // SAFETY: the D3D11 device is created with multithread protection enabled
@@ -142,13 +144,17 @@ impl D3D11Interop {
             self.flush_and_wait()?;
             return Ok(0);
         };
-        let value = f.copied.fetch_add(1, Ordering::Relaxed) + 1;
+        let mut copied = f
+            .copied
+            .lock()
+            .map_err(|_| CaptureError::Interop("fence lock poisoned".into()))?;
         // SAFETY: the fence and context belong to this device; the context is multithread-protected.
         unsafe {
-            f.context.Signal(&f.copied_11, value)?;
+            f.context.Signal(&f.copied_11, *copied + 1)?;
             self.context.Flush();
         }
-        Ok(value)
+        *copied += 1;
+        Ok(*copied)
     }
 
     /// Makes wgpu's queue wait (on the GPU) until the copy that signalled `value` is done.
@@ -173,10 +179,15 @@ impl D3D11Interop {
         let Some(queue) = self.raw_queue() else {
             return 0;
         };
-        let value = f.release.fetch_add(1, Ordering::Relaxed) + 1;
+        let Ok(mut release) = f.release.lock() else {
+            return 0;
+        };
         // SAFETY: command queues are free-threaded; the fence was created on this device.
-        match unsafe { queue.Signal(&f.released, value) } {
-            Ok(()) => value,
+        match unsafe { queue.Signal(&f.released, *release + 1) } {
+            Ok(()) => {
+                *release += 1;
+                *release
+            }
             Err(_) => 0,
         }
     }
@@ -338,9 +349,9 @@ impl Fences {
                 context,
                 copied_11,
                 copied_12,
-                copied: AtomicU64::new(0),
+                copied: Mutex::new(0),
                 released,
-                release: AtomicU64::new(0),
+                release: Mutex::new(0),
             })
         }
     }

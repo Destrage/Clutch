@@ -71,8 +71,17 @@ documentation.
   until we implement transfer plane data"). wgpu can neither render into nor copy into an NV12
   texture, so the plane copy happens outside wgpu.
 - The engine keeps rendering NV12 with its own WGSL conversion (same color math as today) into
-  R8 and RG8 plane textures, but those are created on the D3D11 interop device as shared
-  textures and opened in wgpu as render targets (like capture slots, with render usage).
+  R8 and RG8 plane textures. Those are created on wgpu's D3D12 device as committed resources
+  on a shared heap with `ALLOW_SIMULTANEOUS_ACCESS`, opened in D3D11 with
+  `OpenSharedResource1`, and wrapped as wgpu render targets. Simultaneous access matters:
+  wgpu leaves a texture it rendered to in the render-target state, which D3D11 can't see;
+  simultaneous-access resources decay to `COMMON` after each submission, so no state handoff
+  between the APIs is needed.
+- The engine side is platform-neutral: `estream_engine::GpuExport` creates plane slots,
+  queues the release wait and signals the ready fence; `estream-media` implements it for
+  D3D11 (`gpu_frames.rs`), and the app passes it in `EngineConfig::gpu_export`. A ring slot
+  is free once every `GpuFrame` holding its handle is dropped; a consumer that holds frames
+  only causes drops, never a stall.
 - On the encoder's D3D11 context (the same interop device, which FFmpeg's D3D11VA device
   context wraps), after a GPU-side fence wait, a pass-through pixel shader copies the two planes
   into the NV12 texture through per-plane render target views
@@ -84,20 +93,24 @@ documentation.
   wgpu's queue (needs hand-managed command lists and resource states around wgpu's own); and
   the D3D11 video processor converting RGBA → NV12 (fixed-function, but its matrix, range and
   chroma filter would differ from the WGSL path).
-- FFmpeg gets an `AV_HWDEVICE_TYPE_D3D11VA` device context wrapping that D3D11 device, and an
-  `AVHWFramesContext` (`AV_PIX_FMT_D3D11`, sw format NV12) whose pool hands out our textures
-  (`AVD3D11FrameDescriptor { texture, index }`) via `av_buffer_pool_init2`. Each encoded frame
-  references a ring slot; the slot returns to the ring when FFmpeg releases the buffer.
-- Ordering: the engine signals a shared fence after the frame's NV12 copy; the encoder thread
-  waits on it on the D3D11 context before `avcodec_send_frame` (`ID3D11DeviceContext4::Wait`,
-  GPU side). Frames are delivered over the existing bounded channel as a slot index plus a
-  fence value instead of a `Vec`.
+- FFmpeg gets an `AV_HWDEVICE_TYPE_D3D11VA` device context wrapping that D3D11 device, and
+  each encoder an `AVHWFramesContext` (`AV_PIX_FMT_D3D11`, sw format NV12, render-target bind
+  flag, FFmpeg's own pool). The plane copy renders into the pooled texture FFmpeg hands out,
+  under FFmpeg's device lock (the immediate context is shared by every encoder thread).
+- Ordering: wgpu's queue signals a shared `ready` fence after the frame's submit; the encoder
+  waits on it on the D3D11 context before the copy and signals a shared `released` fence
+  after; wgpu's queue waits on `released` before rendering into those planes again. All three
+  are GPU-side waits. Frames travel over the existing bounded channel as a planes handle plus
+  the `ready` value instead of a `Vec`.
 - Encoders: `h264_nvenc`, `hevc_nvenc`, `av1_nvenc` and the AMF encoders accept D3D11 frames
   directly. QuickSync needs QSV frames: a derived QSV frames context
   (`av_hwframe_ctx_create_derived`) is tried, and QSV falls back to the CPU path if that fails.
-- Fallback: if any step fails (device creation, frames context, first `send_frame`), the
-  output logs why and switches to the existing CPU readback for that session. Software
-  encoders always use the readback.
+- Fallback: if the export can't be created, planes can't be made for a canvas, or the GPU
+  encoder fails to open, the output logs why and switches to the CPU readback before writing
+  anything. A GPU encoder that later receives CPU frames ends its session with an error
+  rather than freezing. A failure on the first `send_frame` is not retried on the CPU path:
+  the muxer header is already written by then, and in testing the failures surface at open.
+  Software encoders always use the readback.
 - This also drops NVENC's CUDA context, since NVENC opens its D3D11 interface for D3D11 frames.
 
 ### 4. Shared encoder sessions
@@ -157,7 +170,7 @@ documentation.
 
 ## Migration
 None for users: settings and files are unchanged. A hidden setting
-(`performance.gpu_encode = false`) forces the CPU path for troubleshooting.
+(`"gpu_encode": false` in settings.json) forces the CPU path for troubleshooting.
 
 ## Open Questions
 - Can wgpu 30 render to NV12 plane views on DX12 (removes the plane copy)? Answered by task 3.1.

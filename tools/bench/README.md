@@ -48,4 +48,22 @@ Apex Legends in the Firing Range, 300 s each. Both recorded every frame with non
 Whole-system CPU and GPU include the game, so they move with what happens in it; compare the
 per-process numbers.
 
+### After capture fences and GPU frames (2026-10-25)
+
+`improve-pipeline-performance` sections 2 and 3 (release build), same setup, Clutch only,
+against the obs-studio baseline above. 23004 frames, none dropped; NVENC fed GPU frames.
+
+| Metric (average) | Clutch before | Clutch now | obs-studio |
+|---|---|---|---|
+| CPU, process tree (% of all cores) | 3.23 | 2.94 | 0.73 |
+| Private memory | 1206 MB | 872 MB | 490 MB |
+| GPU 3D engine, process | 10.7% | 1.7% | 8.5% |
+| GPU encode engine, process | 20.3% | 20.3% | 20.8% |
+| Render time, avg / p95 | 0.94 / 1.67 ms | 0.67 / 1.04 ms | 0.36 / 0.37 ms |
+
+Video-thread stages (average CPU ms per frame): submit 0.52, render 0.09, sources 0.02,
+convert 0.01, deliver 0.01, poll 0.01. `queue.submit` is most of the frame: wgpu holds the
+device lock across the UI's present (see `fix-gpu-contention`). The video thread is only
+~0.2% of all cores; the rest of Clutch's CPU is other threads (UI loop, audio, encoder).
+
 Targets for `improve-pipeline-performance`: see that change's proposal.

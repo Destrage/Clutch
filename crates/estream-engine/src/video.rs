@@ -1,9 +1,10 @@
 //! The video pipeline: keeps runtime sources in sync with the render graph,
 //! renders each canvas on its own frame clock, and publishes the results.
 
-use crate::feed::{ReadbackRing, VideoConsumer};
+use crate::feed::{GpuRing, ReadbackRing, VideoConsumer};
 use crate::filters::Filters;
 use crate::frame_clock::{FrameClock, FrameTick, wait_until};
+use crate::gpu_export::GpuExport;
 use crate::graph::{CanvasGraph, FlatItem, RenderGraph};
 use crate::source::{SourceContext, SourceRegistry, SourceStatus, VideoSource};
 use crate::watchdog::{FinishGuard, Stage, VideoProgress};
@@ -130,8 +131,10 @@ struct CanvasSlot {
     inputs: [ConvertInput; OUTPUT_RING],
     sequence: u64,
     background: wgpu::Color,
-    /// NV12 readback for encoders (only while a consumer is attached).
+    /// NV12 readback for CPU encoders (only while one is attached).
     readback: Option<ReadbackRing>,
+    /// NV12 planes kept on the GPU for hardware encoders (only while one is attached).
+    gpu_ring: Option<GpuRing>,
     /// Renders the outgoing scene during transitions (separate uniform buffer).
     from_renderer: Option<CanvasRenderer>,
     /// Outgoing / incoming scratch canvases, allocated on the first transition.
@@ -283,12 +286,14 @@ pub struct VideoCore {
     transitions: TransitionRenderer,
     filters: Filters,
     progress: Arc<VideoProgress>,
+    export: Option<Arc<dyn GpuExport>>,
 }
 
 impl VideoCore {
     pub fn new(gpu: GpuContext, registry: SourceRegistry) -> Self {
         let compositor = Compositor::new(&gpu);
         Self {
+            export: None,
             filters: Filters::new(&gpu, compositor.clone()),
             compositor,
             converter: OutputConverter::new(&gpu),
@@ -302,6 +307,11 @@ impl VideoCore {
             scratch_extra: Vec::new(),
             progress: Arc::new(VideoProgress::new(EngineClock::new())),
         }
+    }
+
+    /// Lets hardware encoders take frames on the GPU (see [`GpuExport`]).
+    pub fn set_gpu_export(&mut self, export: Option<Arc<dyn GpuExport>>) {
+        self.export = export;
     }
 
     /// Where the video loop is, for the stall watchdog.
@@ -481,6 +491,7 @@ impl VideoCore {
             sequence: 0,
             background: background(cg),
             readback: None,
+            gpu_ring: None,
             from_renderer: None,
             transition_targets: None,
             preview: None,
@@ -693,10 +704,15 @@ impl VideoCore {
             gpu,
             converter,
             canvases,
+            export,
             ..
         } = self;
         let canvas = &mut canvases[i];
-        if !consumers.iter().any(|c| c.canvas == canvas.output.id) {
+        let export = export.as_deref();
+        if !consumers
+            .iter()
+            .any(|c| c.canvas == canvas.output.id && !c.takes_gpu(export))
+        {
             canvas.readback = None;
             return None;
         }
@@ -720,6 +736,72 @@ impl VideoCore {
         index
     }
 
+    /// Records NV12 conversion into a GPU ring slot when a GPU consumer is attached to
+    /// canvas `i`. If the planes can't be created, those consumers fall back to CPU frames.
+    fn record_gpu(
+        &mut self,
+        i: usize,
+        slot: usize,
+        consumers: &[VideoConsumer],
+        encoder: &mut wgpu::CommandEncoder,
+        timestamp: Timestamp,
+    ) {
+        let Self {
+            gpu,
+            converter,
+            canvases,
+            export,
+            ..
+        } = self;
+        let canvas = &mut canvases[i];
+        let id = canvas.output.id;
+        let Some(export) = export.as_deref() else {
+            return;
+        };
+        let mut takers = consumers
+            .iter()
+            .filter(|c| c.canvas == id && c.takes_gpu(Some(export)));
+        if takers.next().is_none() {
+            canvas.gpu_ring = None;
+            return;
+        }
+        let (w, h) = (canvas.output.width, canvas.output.height);
+        if canvas
+            .gpu_ring
+            .as_ref()
+            .is_none_or(|r| r.width != w || r.height != h)
+        {
+            canvas.gpu_ring = GpuRing::new(gpu, export, w, h);
+            if canvas.gpu_ring.is_none() {
+                tracing::warn!(
+                    width = w,
+                    height = h,
+                    "GPU frames unavailable for this canvas; encoders use CPU frames"
+                );
+                for c in consumers.iter().filter(|c| c.canvas == id) {
+                    c.gpu.store(false, Ordering::Relaxed);
+                }
+                return;
+            }
+        }
+        if let Some(ring) = &mut canvas.gpu_ring
+            && !ring.record(
+                gpu,
+                export,
+                converter,
+                &canvas.inputs[slot],
+                encoder,
+                timestamp,
+            )
+        {
+            canvas
+                .output
+                .stats
+                .encoder_dropped
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
     /// Renders all canvases whose deadline has passed. Returns how many rendered.
     fn render_due(&mut self, now: Timestamp, consumers: &[VideoConsumer]) -> usize {
         let started = Instant::now();
@@ -739,6 +821,7 @@ impl VideoCore {
                 maps[i] = self
                     .record_readback(i, slot, consumers, &mut encoder)
                     .map(|idx| (idx, tick.timestamp));
+                self.record_gpu(i, slot, consumers, &mut encoder, tick.timestamp);
                 self.progress.enter(Stage::Render);
             }
         }
@@ -752,11 +835,30 @@ impl VideoCore {
         }
         let _ = self.gpu.device.poll(wgpu::PollType::Poll);
         self.progress.enter(Stage::Deliver);
+        let export = self.export.as_deref();
+        // One fence signal after the submit covers every canvas's GPU frame.
+        let ready = export
+            .filter(|_| {
+                self.canvases
+                    .iter()
+                    .any(|c| c.gpu_ring.as_ref().is_some_and(GpuRing::has_pending))
+            })
+            .map(|e| e.signal_ready(&self.gpu));
         for canvas in &mut self.canvases {
             if let Some(ring) = &mut canvas.readback {
                 ring.deliver(
                     consumers,
                     canvas.output.id,
+                    export,
+                    &canvas.output.stats.encoder_dropped,
+                );
+            }
+            if let (Some(ring), Some(export), Some(ready)) = (&mut canvas.gpu_ring, export, ready) {
+                ring.deliver(
+                    consumers,
+                    canvas.output.id,
+                    export,
+                    ready,
                     &canvas.output.stats.encoder_dropped,
                 );
             }

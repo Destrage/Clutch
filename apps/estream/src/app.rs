@@ -2349,6 +2349,22 @@ impl App {
         }
     }
 
+    /// Lets hardware encoders take frames straight from the GPU (Windows; on unless the
+    /// hidden `gpu_encode` setting turns it off).
+    fn gpu_export(&self) -> Option<Arc<dyn estream_engine::GpuExport>> {
+        if !self.settings.gpu_encode {
+            tracing::info!("GPU frames for encoders turned off in settings");
+            return None;
+        }
+        #[cfg(windows)]
+        {
+            estream_media::gpu_frames::export(&self.gpu)
+                .map(|e| e as Arc<dyn estream_engine::GpuExport>)
+        }
+        #[cfg(not(windows))]
+        None
+    }
+
     fn start(&mut self, project: Project) {
         let mut registry = estream_engine::SourceRegistry::with_builtins();
         estream_capture::register_all(&mut registry);
@@ -2371,6 +2387,7 @@ impl App {
             registry,
             gpu: Some(self.gpu.clone()),
             collection_path: Some(self.collection.clone()),
+            gpu_export: self.gpu_export(),
             ..Default::default()
         };
         // The camera follows the collection (it reads from the engine being replaced).
