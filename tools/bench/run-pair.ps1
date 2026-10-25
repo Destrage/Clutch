@@ -9,13 +9,17 @@ and restored after it. See README.md.
 param(
     [Parameter(Mandatory)][string]$ClutchPassword,
     [int]$Seconds = 300,
+    [string]$Label = 'record',
+    # Which Clutch to run: the installed one, or e.g. target\release\clutch.exe.
+    [string]$ClutchExe = 'C:\Program Files\Clutch\clutch.exe',
+    # Run only one app (e.g. -Only clutch to compare a new build with an earlier OBS run).
+    [ValidateSet('both', 'clutch', 'obs')][string]$Only = 'both',
     # Clutch's window id for the game: exe, class and title separated by U+001F.
     [string]$Window = "r5apex_dx12.exe$([char]0x1f)Respawn001$([char]0x1f)Apex Legends"
 )
 
 $ErrorActionPreference = 'Stop'
 $here = $PSScriptRoot
-$clutchExe = 'C:\Program Files\Clutch\clutch.exe'
 $obsDir = 'C:\Program Files\obs-studio\bin\64bit'
 $clutchDir = "$env:APPDATA\Clutch"
 $obsProfile = "$env:APPDATA\obs-studio\basic\profiles\Untitled\basic.ini"
@@ -84,6 +88,8 @@ while (-not (Get-Process $gameExe -ErrorAction SilentlyContinue)) { Log "waiting
 
 # --- Clutch --------------------------------------------------------------------------
 
+if ($Only -ne 'obs') {
+
 $settings = "$clutchDir\settings.json"
 $backup = "$clutchDir\settings.bench-backup.json"
 $bench = "$clutchDir\scenes\Bench.json"
@@ -101,11 +107,11 @@ try {
     if ($r.clips.mode -or $r.recording.rate_control -ne 'cbr' -or $r.recording.bitrate_kbps -ne 12000) { throw 'Clutch settings edit did not apply' }
 
     Log 'starting Clutch'
-    Start-Process $clutchExe -WindowStyle Minimized
+    Start-Process $ClutchExe -WorkingDirectory (Split-Path $ClutchExe) -WindowStyle Minimized
     Wait-Port 4455
     Start-Sleep -Seconds 20   # game capture hook and audio devices
     Log 'benchmarking Clutch'
-    pwsh -NoProfile -File "$here\bench.ps1" -App clutch -Label record -Seconds $Seconds -Password $ClutchPassword -Record
+    pwsh -NoProfile -File "$here\bench.ps1" -App clutch -Label $Label -Seconds $Seconds -Password $ClutchPassword -Record
     Close-App clutch
 } finally {
     if (Get-Process clutch -ErrorAction SilentlyContinue) { Close-App clutch }
@@ -113,10 +119,13 @@ try {
     Remove-Item $backup, $bench -ErrorAction SilentlyContinue
     Log 'Clutch settings restored'
 }
+}
 
-Start-Sleep -Seconds 15
+if ($Only -eq 'both') { Start-Sleep -Seconds 15 }
 
 # --- OBS -----------------------------------------------------------------------------
+
+if ($Only -ne 'clutch') {
 
 $obsBackup = "$obsProfile.bench-backup"
 Copy-Item $obsProfile $obsBackup -Force
@@ -153,7 +162,7 @@ RecFormat2=mkv
     Wait-Port 4455
     Start-Sleep -Seconds 20
     Log 'benchmarking OBS'
-    pwsh -NoProfile -File "$here\bench.ps1" -App obs -Label record -Seconds $Seconds -Password $obsPassword -Record
+    pwsh -NoProfile -File "$here\bench.ps1" -App obs -Label $Label -Seconds $Seconds -Password $obsPassword -Record
     Close-App obs64
 } finally {
     if (Get-Process obs64 -ErrorAction SilentlyContinue) { Close-App obs64 }
@@ -161,5 +170,6 @@ RecFormat2=mkv
     Remove-Item $obsBackup -ErrorAction SilentlyContinue
     Log 'OBS profile restored'
 }
+}
 
-pwsh -NoProfile -File "$here\compare.ps1" -Label record
+pwsh -NoProfile -File "$here\compare.ps1" -Label $Label

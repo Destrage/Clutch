@@ -66,11 +66,24 @@ documentation.
   created on a D3D11 device on the engine's adapter (the existing capture interop device) with
   `D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED`, opened on the engine's
   D3D12 device.
-- The engine renders NV12 as today into R8 + RG8 planes, then copies them into planes 0 and 1
-  of the shared NV12 texture with `CopyTextureRegion` (D3D12 allows plane-slice copies into
-  NV12 from R8/R8G8-compatible footprints). Spike task 3.1 checks whether wgpu 30 can render
-  to NV12 plane views directly, which would remove this copy; the copy is ~3 MB of GPU
-  bandwidth per frame either way.
+- Spike result (task 3.1): wgpu 30 allows `NV12` textures only as `TEXTURE_BINDING`
+  (`wgpu-types` 30.0.1, `texture/format.rs`: "We only support sampling nv12 and p010 textures
+  until we implement transfer plane data"). wgpu can neither render into nor copy into an NV12
+  texture, so the plane copy happens outside wgpu.
+- The engine keeps rendering NV12 with its own WGSL conversion (same color math as today) into
+  R8 and RG8 plane textures, but those are created on the D3D11 interop device as shared
+  textures and opened in wgpu as render targets (like capture slots, with render usage).
+- On the encoder's D3D11 context (the same interop device, which FFmpeg's D3D11VA device
+  context wraps), after a GPU-side fence wait, a pass-through pixel shader copies the two planes
+  into the NV12 texture through per-plane render target views
+  (`ID3D11Device3::CreateRenderTargetView1`, `PlaneSlice` 0 and 1; D3D11.3, Windows 10).
+  D3D11 has no per-plane copy for NV12 (planes aren't separate subresources there), hence
+  the shader. It does no color math, so the WGSL conversion stays the single source of truth;
+  the copy is ~3 MB of GPU bandwidth per 1080p frame.
+- Alternatives considered: a raw D3D12 `CopyTextureRegion` into NV12 plane subresources on
+  wgpu's queue (needs hand-managed command lists and resource states around wgpu's own); and
+  the D3D11 video processor converting RGBA → NV12 (fixed-function, but its matrix, range and
+  chroma filter would differ from the WGSL path).
 - FFmpeg gets an `AV_HWDEVICE_TYPE_D3D11VA` device context wrapping that D3D11 device, and an
   `AVHWFramesContext` (`AV_PIX_FMT_D3D11`, sw format NV12) whose pool hands out our textures
   (`AVD3D11FrameDescriptor { texture, index }`) via `av_buffer_pool_init2`. Each encoded frame

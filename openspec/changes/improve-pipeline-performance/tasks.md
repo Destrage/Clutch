@@ -11,8 +11,8 @@
 - [ ] 2.5 Tests: interop test for fence ordering; unit tests for the rate cap and busy slots; bench shows the capture thread no longer spinning
 
 ## 3. GPU frames to hardware encoders
-- [ ] 3.1 Spike: can wgpu 30 render to NV12 plane views on DX12? Record the answer in design.md
-- [ ] 3.2 Shared NV12 texture ring per canvas on the engine device, filled from the R8/RG8 planes (or directly, per 3.1), with a shared fence
+- [x] 3.1 Spike: can wgpu 30 render to NV12 plane views on DX12? Record the answer in design.md
+- [ ] 3.2 Shared R8/RG8 plane targets (D3D11-created, rendered by wgpu) and an NV12 texture ring per canvas, filled by a D3D11 plane-copy pass after a shared fence
 - [ ] 3.3 FFmpeg D3D11VA device and frames context over the ring (`av_buffer_pool_init2`), slots returned when FFmpeg releases them
 - [ ] 3.4 Video consumers receive GPU frames (slot + fence value) when their encoder takes D3D11 frames; NVENC and AMF first
 - [ ] 3.5 QuickSync through a derived QSV frames context, CPU fallback when that fails
