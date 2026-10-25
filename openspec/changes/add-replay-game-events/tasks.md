@@ -16,7 +16,7 @@
 - [x] 3.1 PUBG: kills, knocks, deaths and wins
 - [x] 3.2 Fortnite: eliminations, knocks, death and wins (recording player from the log or the stats)
 - [x] 3.3 Rocket League: goals and wins via `boxcars` header parsing
-- [ ] 3.4 Rainbow Six Siege: kills, headshots, plants per round
+- [ ] 3.4 Rainbow Six Siege: kills, headshots, plants per round (parked 2026-10-25: no tester, and public sample replays stop at Y9S1; build when a current replay folder is available)
 
 ## 4. UI
 - [x] 4.1 Per-game Connect toggle in clip settings (off by default) with the "Turn on replays" hint when the folder is missing (PUBG)
