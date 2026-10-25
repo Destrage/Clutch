@@ -125,6 +125,10 @@ pub struct App {
     /// (a new image each time, unlike the views).
     card_at: Instant,
     card_picture: estream_engine::UiPreview,
+    /// Canvas pictures copied into the views, and when the preview counts were last logged
+    /// (with the engine's rendered and skipped counts then).
+    pictures_shown: u64,
+    preview_log: (Instant, u64, u64, u64),
     /// What the shader editor is editing.
     shader_target: ShaderTarget,
     /// Canvas shown and edited in the studio (`None` = the first).
@@ -773,6 +777,8 @@ impl App {
             pictures_studio: false,
             card_at: Instant::now(),
             card_picture: Default::default(),
+            pictures_shown: 0,
+            preview_log: (Instant::now(), 0, 0, 0),
             shader_target: ShaderTarget::Transition,
             current_canvas: None,
             last_output: None,
@@ -2595,6 +2601,9 @@ impl App {
                         &mut self.main_picture
                     };
                     let result = show_picture(&self.gpu, shown, &output, &frame);
+                    if result != Shown::Kept {
+                        self.pictures_shown += 1;
+                    }
                     if snap
                         && result != Shown::Kept
                         && let Some(scene) = on_air
@@ -2745,6 +2754,30 @@ impl App {
         }
         self.stats_rendered = rendered;
         self.stats_at = Instant::now();
+        // Every 10 s while the preview misses frames: how many the engine rendered, left
+        // undrawn for the UI (its copy still running) and the views actually got.
+        let skipped = output
+            .stats
+            .preview_skipped
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let (at, was_rendered, was_skipped, was_shown) = self.preview_log;
+        if at.elapsed() >= Duration::from_secs(10) {
+            let (rendered_n, skipped_n, shown_n) = (
+                rendered.saturating_sub(was_rendered),
+                skipped.saturating_sub(was_skipped),
+                self.pictures_shown.saturating_sub(was_shown),
+            );
+            if self.visibility != Visibility::Hidden && shown_n + 10 < rendered_n {
+                tracing::info!(
+                    rendered = rendered_n,
+                    skipped = skipped_n,
+                    shown = shown_n,
+                    visibility = ?self.visibility,
+                    "preview missed frames in the last 10 s"
+                );
+            }
+            self.preview_log = (Instant::now(), rendered, skipped, self.pictures_shown);
+        }
         w.set_target_fps(canvas.fps.as_f64() as f32);
         w.set_render_ms(render_ms(engine, &output) as f32);
         w.set_lagged(
