@@ -15,6 +15,7 @@ pub mod mixer;
 pub mod pipewire;
 pub mod ring;
 pub mod source;
+mod strong;
 pub mod tone;
 pub mod voice;
 

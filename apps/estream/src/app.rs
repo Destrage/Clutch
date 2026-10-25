@@ -6890,18 +6890,36 @@ impl App {
                     .map(|k| k.params)
                     .unwrap_or_default()
                     .iter()
-                    .map(|p| FilterParamRow {
-                        key: p.key.into(),
-                        label: p.label.into(),
-                        value: f
+                    .map(|p| {
+                        let value = f
                             .settings
                             .get(p.key)
                             .and_then(serde_json::Value::as_f64)
-                            .map_or(p.default, |v| v as f32),
-                        minimum: p.min,
-                        maximum: p.max,
-                        step: p.step,
-                        unit: p.unit.into(),
+                            .map_or(p.default, |v| v as f32);
+                        let strong = f.kind == "noise_suppression"
+                            && p.key == "strength"
+                            && value >= estream_engine::audio_engine::filters::NOISE_STRONG;
+                        FilterParamRow {
+                            key: p.key.into(),
+                            label: p.label.into(),
+                            value,
+                            minimum: p.min,
+                            maximum: p.max,
+                            step: p.step,
+                            unit: p.unit.into(),
+                            choices: ModelRc::new(VecModel::from(
+                                p.choices.iter().map(|&c| c.into()).collect::<Vec<_>>(),
+                            )),
+                            note: if strong {
+                                format!(
+                                    "Removes typing and clicks. Delays this sound by {} ms.",
+                                    estream_engine::audio_engine::filters::STRONG_DELAY_MS
+                                )
+                                .into()
+                            } else {
+                                SharedString::new()
+                            },
+                        }
                     })
                     .collect();
                 FilterRow {
@@ -8415,6 +8433,8 @@ impl App {
                         maximum: p.max,
                         step: p.step,
                         unit: p.unit.into(),
+                        choices: ModelRc::default(),
+                        note: SharedString::new(),
                     })
                     .collect();
                 let file = f

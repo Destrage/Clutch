@@ -1,0 +1,14 @@
+[package]
+name = "dfspike"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+deep_filter = { path = "../dl/DeepFilterNet-main/libDF", default-features = false, features = ["tract"] }
+ndarray = "0.15"
+nnnoiseless = { version = "0.5.2", default-features = false }
+hound = "3.5"
+
+[profile.release]
+debug = false

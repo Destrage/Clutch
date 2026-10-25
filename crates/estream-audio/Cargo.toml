@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 estream-core.workspace = true
+estream-denoise.workspace = true
 estream-project.workspace = true
 cpal.workspace = true
 nnnoiseless.workspace = true

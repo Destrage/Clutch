@@ -1,6 +1,7 @@
 //! Audio filters. Each processes one block in place, without allocating.
 
 use crate::block::Block;
+use crate::strong::StrongLink;
 use crate::{BLOCK, db};
 use serde_json::Value;
 
@@ -19,6 +20,8 @@ pub struct FilterParam {
     pub step: f32,
     pub default: f32,
     pub unit: &'static str,
+    /// Named options; when set, the value is the chosen option's index.
+    pub choices: &'static [&'static str],
 }
 
 const fn p(
@@ -38,6 +41,25 @@ const fn p(
         step,
         default,
         unit,
+        choices: &[],
+    }
+}
+
+const fn choice(
+    key: &'static str,
+    label: &'static str,
+    choices: &'static [&'static str],
+    default: f32,
+) -> FilterParam {
+    FilterParam {
+        key,
+        label,
+        min: 0.0,
+        max: (choices.len() - 1) as f32,
+        step: 1.0,
+        default,
+        unit: "",
+        choices,
     }
 }
 
@@ -51,7 +73,10 @@ pub const KINDS: &[FilterKind] = &[
     FilterKind {
         kind: "noise_suppression",
         name: "Noise suppression",
-        params: &[],
+        params: &[
+            choice("strength", "Strength", &["Light", "Strong"], NOISE_LIGHT),
+            p("amount", "Amount", 0.0, 100.0, 1.0, 100.0, "%"),
+        ],
     },
     FilterKind {
         kind: "noise_gate",
@@ -302,12 +327,36 @@ impl AudioFilter for Limiter {
     }
 }
 
-// ---------------------------------------------------------------- RNNoise
+// ---------------------------------------------------------------- noise suppression
+
+/// Strength values of the noise suppression `strength` parameter.
+pub const NOISE_LIGHT: f32 = 0.0;
+pub const NOISE_STRONG: f32 = 1.0;
+
+/// Delay noise suppression adds, in blocks: Light (RNNoise) and Strong (DeepFilterNet3 plus one
+/// block of handoff to its thread).
+const LIGHT_DELAY: usize = 1;
+const STRONG_DELAY: usize = 2;
+
+/// How long Strong delays the voice, for the filter settings.
+pub const STRONG_DELAY_MS: u32 = (STRONG_DELAY * 10) as u32;
 
 struct NoiseSuppression {
     states: [Box<nnnoiseless::DenoiseState<'static>>; 2],
     input: [f32; BLOCK],
     output: [f32; BLOCK],
+    /// Wet share, 0..=1.
+    amount: f32,
+    /// Set in Strong; dropping it stops the worker.
+    strong: Option<StrongLink>,
+    strong_failed: bool,
+    /// Light's mono result one block back, standing in for a Strong block that isn't ready.
+    light_prev: [f32; BLOCK],
+    strong_out: [f32; BLOCK],
+    /// The input `0..=STRONG_DELAY` blocks back, for the Amount blend.
+    dry: [Block; STRONG_DELAY + 1],
+    /// Blocks that used Strong's output (tests).
+    strong_blocks: u64,
 }
 
 impl NoiseSuppression {
@@ -319,33 +368,101 @@ impl NoiseSuppression {
             ],
             input: [0.0; BLOCK],
             output: [0.0; BLOCK],
+            amount: 1.0,
+            strong: None,
+            strong_failed: false,
+            light_prev: [0.0; BLOCK],
+            strong_out: [0.0; BLOCK],
+            dry: [Block::SILENT, Block::SILENT, Block::SILENT],
+            strong_blocks: 0,
         }
+    }
+
+    /// RNNoise on `self.input` (in [-1, 1]) into `self.output`.
+    fn light(&mut self, channel: usize) {
+        for s in &mut self.input {
+            *s *= 32768.0;
+        }
+        self.states[channel].process_frame(&mut self.output, &self.input);
+        for s in &mut self.output {
+            *s /= 32768.0;
+        }
+    }
+
+    fn process_light(&mut self, block: &mut Block) {
+        // A mono mic arrives as two equal channels: denoise once and copy.
+        let mono = block.l == block.r;
+        self.input = block.l;
+        self.light(0);
+        block.l = self.output;
+        if mono {
+            block.r = block.l;
+        } else {
+            self.input = block.r;
+            self.light(1);
+            block.r = self.output;
+        }
+    }
+
+    fn process_strong(&mut self, block: &mut Block) {
+        for (m, (l, r)) in self.input.iter_mut().zip(block.l.iter().zip(&block.r)) {
+            *m = (l + r) * 0.5;
+        }
+        let mono = self.input;
+        // Light keeps running so a missed Strong block has a stand-in, a block later to line up.
+        self.light(0);
+        let used_strong = self
+            .strong
+            .as_mut()
+            .is_some_and(|link| link.exchange(&mono, &mut self.strong_out));
+        let out = if used_strong {
+            self.strong_blocks += 1;
+            &self.strong_out
+        } else {
+            &self.light_prev
+        };
+        block.l = *out;
+        block.r = *out;
+        self.light_prev = self.output;
     }
 }
 
 impl AudioFilter for NoiseSuppression {
-    fn update(&mut self, _: &Value) {}
-
-    fn process(&mut self, block: &mut Block) {
-        // RNNoise works on 480-sample frames at 48 kHz in 16-bit range — exactly one block.
-        // A mono mic arrives as two equal channels: denoise once and copy.
-        let mono = block.l == block.r;
-        let channels = if mono { 1 } else { 2 };
-        for (channel, state) in [&mut block.l, &mut block.r]
-            .into_iter()
-            .zip(self.states.iter_mut())
-            .take(channels)
-        {
-            for (dst, src) in self.input.iter_mut().zip(channel.iter()) {
-                *dst = src * 32768.0;
-            }
-            state.process_frame(&mut self.output, &self.input);
-            for (dst, src) in channel.iter_mut().zip(self.output.iter()) {
-                *dst = src / 32768.0;
+    fn update(&mut self, s: &Value) {
+        self.amount = param(s, "noise_suppression", "amount").clamp(0.0, 100.0) / 100.0;
+        let strong = param(s, "noise_suppression", "strength") >= NOISE_STRONG;
+        if !strong {
+            self.strong = None;
+            self.strong_failed = false;
+        } else if self.strong.is_none() && !self.strong_failed {
+            // Settings changes run off the steady-state path, so starting a thread here is fine.
+            match StrongLink::start() {
+                Ok(link) => self.strong = Some(link),
+                Err(e) => {
+                    tracing::warn!(error = %e, "strong noise suppression thread not started");
+                    self.strong_failed = true;
+                }
             }
         }
-        if mono {
-            block.r = block.l;
+    }
+
+    fn process(&mut self, block: &mut Block) {
+        self.dry.rotate_right(1);
+        self.dry[0] = block.clone();
+        let delay = if self.strong.is_some() {
+            self.process_strong(block);
+            STRONG_DELAY
+        } else {
+            self.process_light(block);
+            LIGHT_DELAY
+        };
+        if self.amount < 1.0 {
+            let (wet, dry) = (self.amount, 1.0 - self.amount);
+            let d = &self.dry[delay];
+            for i in 0..BLOCK {
+                block.l[i] = block.l[i] * wet + d.l[i] * dry;
+                block.r[i] = block.r[i] * wet + d.r[i] * dry;
+            }
         }
     }
 }
@@ -460,5 +577,169 @@ mod tests {
             "noise reduced: {energy_in} -> {energy_out}"
         );
         assert!(create("nope", &Value::Null).is_none());
+    }
+
+    /// Keyboard-like clicks (a sharp burst into a decaying 3 kHz resonance) every 150 ms over
+    /// faint noise, as mono blocks.
+    fn typing(blocks: usize) -> Vec<Block> {
+        let mut rng = 0x9e37_79b9_7f4a_7c15u64;
+        let mut noise = || {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            (rng >> 40) as f32 / (1u64 << 24) as f32 * 2.0 - 1.0
+        };
+        let (r, w) = (
+            (-1.0f32 / 240.0).exp(),
+            std::f32::consts::TAU * 3000.0 / 48_000.0,
+        );
+        let (mut y1, mut y2) = (0.0f32, 0.0f32);
+        (0..blocks)
+            .map(|n| {
+                let mut b = Block::SILENT;
+                for i in 0..BLOCK {
+                    let t = n * BLOCK + i;
+                    let exc = if t % 7200 < 48 { noise() * 0.5 } else { 0.0 };
+                    let y = 2.0 * r * w.cos() * y1 - r * r * y2 + exc;
+                    (y2, y1) = (y1, y);
+                    let s = exc + y * 0.05 + noise() * 0.0005;
+                    b.l[i] = s;
+                    b.r[i] = s;
+                }
+                b
+            })
+            .collect()
+    }
+
+    fn strong() -> NoiseSuppression {
+        let mut f = NoiseSuppression::new();
+        f.update(&json!({ "strength": NOISE_STRONG }));
+        f
+    }
+
+    /// Runs a block at a pace the worker keeps up with, as the 100 Hz audio thread would.
+    fn paced(f: &mut NoiseSuppression, b: &mut Block) {
+        f.process(b);
+        std::thread::sleep(std::time::Duration::from_millis(3));
+    }
+
+    /// Feeds quiet blocks until the Strong model is loaded and answering.
+    fn wait_ready(f: &mut NoiseSuppression) {
+        for _ in 0..1000 {
+            if f.strong_blocks > 0 {
+                return;
+            }
+            paced(f, &mut typing(1)[0]);
+        }
+        panic!("strong noise suppression never became ready");
+    }
+
+    fn energy(blocks: &[Block]) -> f32 {
+        blocks.iter().flat_map(|b| b.l.iter()).map(|s| s * s).sum()
+    }
+
+    #[test]
+    fn strong_removes_more_clicks_than_light() {
+        let input = typing(300);
+        let mut light = NoiseSuppression::new();
+        let mut strong = strong();
+        wait_ready(&mut strong);
+        let before = strong.strong_blocks;
+        let (mut out_light, mut out_strong) = (input.clone(), input.clone());
+        for (a, b) in out_light.iter_mut().zip(&mut out_strong) {
+            light.process(a);
+            paced(&mut strong, b);
+        }
+        let (e_in, e_light, e_strong) = (
+            energy(&input[50..]),
+            energy(&out_light[50..]),
+            energy(&out_strong[50..]),
+        );
+        let used = strong.strong_blocks - before;
+        assert!(used > 250, "strong used for {used} of 300 blocks");
+        assert!(
+            e_strong < e_light * 0.1 && e_strong < e_in * 0.1,
+            "clicks: in {e_in}, light {e_light}, strong {e_strong}"
+        );
+    }
+
+    #[test]
+    fn strong_outputs_mono() {
+        let mut f = strong();
+        for n in 0..20 {
+            let mut b = sine(0.3, n);
+            b.r.iter_mut().for_each(|s| *s *= 0.25);
+            paced(&mut f, &mut b);
+            assert_eq!(b.l, b.r);
+        }
+    }
+
+    #[test]
+    fn amount_zero_returns_the_input_delayed() {
+        let input: Vec<Block> = (0..10).map(|n| sine(0.3, n)).collect();
+        for (strength, delay) in [(NOISE_LIGHT, LIGHT_DELAY), (NOISE_STRONG, STRONG_DELAY)] {
+            let mut f = NoiseSuppression::new();
+            f.update(&json!({ "strength": strength, "amount": 0.0 }));
+            for (n, block) in input.iter().enumerate() {
+                let mut b = block.clone();
+                f.process(&mut b);
+                let expected = n
+                    .checked_sub(delay)
+                    .map_or(Block::SILENT, |k| input[k].clone());
+                assert_eq!(b, expected, "strength {strength}, block {n}");
+            }
+        }
+    }
+
+    #[test]
+    fn strength_is_a_choice_stored_as_its_index() {
+        let strength = kind("noise_suppression")
+            .and_then(|k| k.params.iter().find(|p| p.key == "strength"))
+            .unwrap();
+        assert_eq!(strength.choices, ["Light", "Strong"]);
+        assert_eq!((strength.min, strength.max, strength.step), (0.0, 1.0, 1.0));
+        let saved: Value = serde_json::from_str(r#"{"strength":1.0,"amount":40.0}"#).unwrap();
+        assert_eq!(param(&saved, "noise_suppression", "strength"), NOISE_STRONG);
+        // Saved before strengths existed.
+        let old: Value = serde_json::from_str("{}").unwrap();
+        assert_eq!(param(&old, "noise_suppression", "strength"), NOISE_LIGHT);
+        assert_eq!(param(&old, "noise_suppression", "amount"), 100.0);
+    }
+
+    #[test]
+    fn missing_settings_mean_light_at_full_amount() {
+        let mut f = NoiseSuppression::new();
+        f.update(&Value::Null);
+        assert!(f.strong.is_none());
+        assert_eq!(f.amount, 1.0);
+    }
+
+    #[test]
+    fn switching_to_strong_plays_light_until_the_model_is_ready() {
+        let input = typing(400);
+        let mut light = NoiseSuppression::new();
+        let mut f = NoiseSuppression::new();
+        let mut light_prev = Block::SILENT;
+        let mut waited = 0;
+        for (n, block) in input.iter().enumerate() {
+            if n == 20 {
+                f.update(&json!({ "strength": NOISE_STRONG }));
+            }
+            let (mut a, mut b) = (block.clone(), block.clone());
+            light.process(&mut a);
+            paced(&mut f, &mut b);
+            if n > 20 && f.strong_blocks == 0 {
+                // Strong mode plays Light a block later, matching its own delay.
+                assert_eq!(b, light_prev, "block {n}");
+                waited += 1;
+            }
+            assert!(b.l.iter().all(|s| s.is_finite()));
+            light_prev = a;
+        }
+        assert!(
+            waited > 0 && f.strong_blocks > 0,
+            "waited {waited} blocks, strong {}",
+            f.strong_blocks
+        );
     }
 }

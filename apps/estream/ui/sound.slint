@@ -336,19 +336,37 @@ export component AudioSettings inherits VerticalLayout {
                 IconButton { icon: Icons.chevron-down; tooltip: "Move down"; size: 22px; icon-size: 12px; clicked => { root.filter-move(filter.id, false); } }
                 IconButton { icon: Icons.trash; tooltip: "Remove filter"; size: 22px; icon-size: 12px; clicked => { root.filter-remove(filter.id); } }
             }
-            for param in filter.params: HorizontalLayout {
-                spacing: 8px;
-                Text { text: param.label; color: Theme.text-muted; font-size: Theme.font-xs; vertical-alignment: center; width: 96px; }
-                NumberField {
-                    label: "";
-                    value: param.value;
-                    minimum: param.minimum;
-                    maximum: param.maximum;
-                    step: param.step;
-                    decimals: param.step < 1 ? 1 : 0;
-                    suffix: param.unit;
-                    changed(v) => { root.filter-param(filter.id, param.key, v); }
-                    committed => { root.commit(); }
+            for param in filter.params: VerticalLayout {
+                spacing: 4px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: param.label; color: Theme.text-muted; font-size: Theme.font-xs; vertical-alignment: center; width: 96px; }
+                    if param.choices.length > 0: Select {
+                        label: param.label;
+                        options: param.choices;
+                        current-index: param.value;
+                        selected(i) => {
+                            root.filter-param(filter.id, param.key, i);
+                            root.commit();
+                        }
+                    }
+                    if param.choices.length == 0: NumberField {
+                        label: "";
+                        value: param.value;
+                        minimum: param.minimum;
+                        maximum: param.maximum;
+                        step: param.step;
+                        decimals: param.step < 1 ? 1 : 0;
+                        suffix: param.unit;
+                        changed(v) => { root.filter-param(filter.id, param.key, v); }
+                        committed => { root.commit(); }
+                    }
+                }
+                if param.note != "": Text {
+                    text: param.note;
+                    color: Theme.text-faint;
+                    font-size: Theme.font-xs;
+                    wrap: word-wrap;
                 }
             }
         }

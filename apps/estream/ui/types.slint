@@ -146,6 +146,10 @@ export struct FilterParamRow {
     maximum: float,
     step: float,
     unit: string,
+    /// Named options: shown as a dropdown, `value` is the chosen index.
+    choices: [string],
+    /// A line under the row ("" for none).
+    note: string,
 }
 
 /// Playback state of a selected media source.
