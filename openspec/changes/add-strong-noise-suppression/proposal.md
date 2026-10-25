@@ -18,8 +18,8 @@ GPU time.
   streamers who find full suppression sounds processed. It works in both strengths.
 - Strong mode processes the mic as mono (a mix of both channels) and outputs it on both channels.
   Mics are mono in practice.
-- Strong mode adds a small, fixed delay to that source (measured in the spike, expected ~20–40 ms).
-  The filter row shows it. The model loads off the audio thread; Light runs until it is ready, so
+- Strong mode delays that source by a fixed 20 ms (10 ms model, 10 ms thread handoff). The filter
+  row shows it. The model loads off the audio thread; Light runs until it is ready, so
   switching never causes a gap.
 - Filter settings gain a choice control (a segmented button row) alongside sliders, so a filter
   parameter can be a small set of named options.
@@ -27,11 +27,11 @@ GPU time.
 ## Impact
 - Affected specs: audio-engine (Audio Filters).
 - Affected code: `estream-audio` (filters, new `denoise` module with the DeepFilterNet DSP and
-  model runner), `apps/estream` (choice parameter control in the filter settings, filter latency
-  label), third-party notices.
-- New dependency: an ONNX runtime written in Rust (`tract`), plus the DeepFilterNet3 model
-  embedded in the binary (a few MB). No new DLLs.
-- CPU: Strong costs several times more than Light, on the audio thread only: a few percent of one
-  core per mic, measured on the bench before this ships. Light is unchanged.
+  model runner, on one `estream-denoise` thread per filter), `apps/estream` (choice
+  parameter control in the filter settings, filter delay label), third-party notices.
+- New dependency: an ONNX runtime written in Rust (`tract`), plus the DeepFilterNet3
+  low-latency model embedded in the binary (36 MB). No new DLLs.
+- CPU: Strong measured 12% of one core per mic (24x Light) on its own thread, never the GPU.
+  Re-measured after the `tract` port and on the Windows 10 laptop. Light is unchanged.
 - Settings: filters saved without `strength` load as Light; an older Clutch ignores the new keys
   and runs Light.
