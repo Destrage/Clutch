@@ -9,6 +9,7 @@
 - [x] 2.3 Fallback without D3D11.4 fences: wait for the copy as before, sleeping between polls instead of spinning (see design.md for why not a query handoff)
 - [x] 2.4 Capture rate cap: `MinUpdateInterval` where supported plus early frame release, at half the video thread's measured frame interval
 - [x] 2.5 Tests: interop test for fence ordering; unit tests for the rate cap and busy slots; bench shows the capture thread no longer spinning
+- [x] 2.6 Audio and video threads sleep to their deadline instead of spinning the last 1.5 ms (measured 11.6% → 0.3% of a core at 100 Hz, p99 wake 0.76 ms; frames keep their slot timestamps); noise suppression denoises a mono mic once instead of per channel
 
 ## 3. GPU frames to hardware encoders
 - [x] 3.1 Spike: can wgpu 30 render to NV12 plane views on DX12? Record the answer in design.md
