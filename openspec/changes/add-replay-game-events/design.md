@@ -70,15 +70,30 @@ no marker.
 - Events: kill by the player → `Kill`; knock by the player → `Knock`; kill of the player →
   `Death`; ranking 1 → `MatchWin` at `LengthInMS`. Being knocked is not an event.
 
-**Fortnite.** Unreal Engine `.replay` file (local file streamer). Its info header has a live
-flag and separate checkpoint and event arrays; eliminations are replay events that community
-parsers (FortniteReplayDecompressor) decode, including knock vs. final elimination. Event chunks
-may be encrypted per match with a key held in the file header, as those parsers handle. Whether
-events are flushed during the match is confirmed in task 1.1.
+**Fortnite (implemented).** Checked against real replays from Season 12 (2020) and Chapter 5
+Season 5 (2024), from the MIT-licensed FortniteReplayDecompressor test set:
+- `%LOCALAPPDATA%\FortniteGame\Saved\Demos\*.replay`, an Unreal local replay: file info (magic
+  `0x1CA2E27F`, start time as .NET ticks, live flag, AES key), then chunks `(type u32, size i32)`.
+  Only the header (type 0: engine network version, branch) and events (type 3) are read; the
+  game data is Oodle-compressed and skipped.
+- Finished replays are encrypted (AES-256-ECB, PKCS#7) with a key that is only written once the
+  match is over, so Fortnite is post-match only, like PUBG.
+- `playerElim` events give eliminated and eliminator (account id, named bot or bot), whether it
+  was a knock, and the time. `AthenaMatchStats` holds the recording player's own elimination
+  count; `AthenaMatchTeamStats` their placement (1 → `MatchWin`).
+- Nothing outside the game data names the recording player. They are taken from the account
+  ids in `Saved\Logs\FortniteGame.log` when exactly one of them played the match (or one of
+  several fits the stats); otherwise as the only player whose final eliminations equal the
+  stats (or one fewer: a knock a teammate finished still counts in the stats). With no unique
+  match, only the win is reported. On the samples: 7 kills + win (S12), and 7 kills, 9 knocks
+  and a death for a 2nd-place team whose stats say 8 (C5S5).
 
-**Rocket League.** Replays are saved at the end of a match (automatically when the in-game
-auto-save option is on). `boxcars` parses the header only, which holds goals with frame, player
-and team and stays stable across patches. Post-match only.
+**Rocket League (implemented).** Replays are saved at the end of a match (with the in-game
+"Auto Save Replays" option) to `Documents\My Games\Rocket League\TAGame\Demos` (Steam) or
+`DemosEpic` (Epic). `boxcars` parses the header only: goals with frame, scorer and team, the
+final score, the recording player and its team (`PlayerStats`, or `PrimaryPlayerTeam` when the
+name is missing). Times are `frame / RecordFPS`, the start is the file's write time minus
+`NumFrames / RecordFPS`. Checked against four boxcars test replays from 2016 to 2025.
 
 **Rainbow Six Siege.** One zstd-compressed `.rec` file per round in `MatchReplay\<match>\`, with
 a `dissect` magic and version. Kills, headshots and plants are decoded as in the community

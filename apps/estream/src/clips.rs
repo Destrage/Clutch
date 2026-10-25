@@ -9,7 +9,6 @@ use estream_clips::integrations::GameEvent;
 use estream_clips::integrations::gsi::{self, GsiServer};
 use estream_clips::integrations::league::LeaguePoller;
 use estream_clips::integrations::replay::ReplayWatcher;
-use estream_clips::integrations::replay::pubg::Pubg;
 use estream_clips::library::{ClipMark, ClipMeta, Library, Trigger};
 use estream_clips::{
     ClipEvent, ClipRequest, Detection, Detector, EventKind, GameList, HypeConfig, HypeDetector,
@@ -111,8 +110,9 @@ pub struct Clipper {
     /// What the GSI server was started with (restart when it changes).
     gsi_config: Option<(u16, String, String)>,
     league: Option<LeaguePoller>,
-    /// Reads PUBG's replays while it runs (its events arrive when the player's match ends).
-    pubg: Option<ReplayWatcher>,
+    /// Reads the running game's replays (PUBG, Fortnite, Rocket League): their events arrive
+    /// when a match ends.
+    replays: Option<(Integration, ReplayWatcher)>,
     hotkey: Option<Box<dyn estream_automation::hotkeys::GlobalHotkeys>>,
     hotkey_chord: Option<estream_project::Chord>,
     /// Whether the last hotkey registration's outcome was reported (some systems answer
@@ -176,7 +176,7 @@ impl Clipper {
             gsi: None,
             gsi_config: None,
             league: None,
-            pubg: None,
+            replays: None,
             hotkey: estream_automation::hotkeys::start(),
             hotkey_chord: None,
             hotkey_reported: true,
@@ -286,8 +286,12 @@ impl Clipper {
         if !s.connected.contains(&Integration::LeagueLiveClient) {
             self.league = None;
         }
-        if !s.connected.contains(&Integration::PubgReplay) {
-            self.pubg = None;
+        if self
+            .replays
+            .as_ref()
+            .is_some_and(|(i, _)| !s.connected.contains(i))
+        {
+            self.replays = None;
         }
         if !(s.hype_game || s.hype_mic) {
             self.hype.clear();
@@ -424,9 +428,9 @@ impl Clipper {
                     if game.integration == Some(Integration::LeagueLiveClient) {
                         self.league = None;
                     }
-                    if game.integration == Some(Integration::PubgReplay) {
+                    if game.integration.is_some_and(Integration::is_replay) {
                         // Dropping it reads a replay written just before the game closed.
-                        self.pubg = None;
+                        self.replays = None;
                     }
                     if self.buffer.is_some() {
                         self.stopping = Some(now);
@@ -437,21 +441,22 @@ impl Clipper {
                 Detection::AskIsGame { exe, title } => out.push(Notice::AskIsGame { exe, title }),
             }
         }
-        // PUBG's replay watcher runs while PUBG does, including when it was connected with the
-        // game already open.
-        if self.pubg.is_none()
-            && ctx.settings.connected.contains(&Integration::PubgReplay)
-            && self
-                .detector
-                .current()
-                .is_some_and(|g| g.integration == Some(Integration::PubgReplay))
+        // A replay game's watcher runs while the game does, including when it was connected
+        // with the game already open.
+        if self.replays.is_none()
+            && let Some(game) = self.detector.current()
+            && let Some(integration) = game.integration.filter(|i| i.is_replay())
+            && ctx.settings.connected.contains(&integration)
+            && let Some(format) = estream_clips::integrations::replay::format(integration)
         {
-            match ReplayWatcher::start(Box::new(Pubg), self.events_tx.clone()) {
+            match ReplayWatcher::start(format, self.events_tx.clone()) {
                 Some(Ok(w)) => {
-                    tracing::info!("PUBG replay watcher started");
-                    self.pubg = Some(w);
+                    tracing::info!(game = %game.name, "replay watcher started");
+                    self.replays = Some((integration, w));
                 }
-                Some(Err(e)) => tracing::warn!(error = %e, "PUBG replay watcher didn't start"),
+                Some(Err(e)) => {
+                    tracing::warn!(game = %game.name, error = %e, "replay watcher didn't start");
+                }
                 None => {}
             }
         }
@@ -535,13 +540,13 @@ impl Clipper {
             })
         });
         // A game that reports its events live (and is connected) clips those; its sound doesn't
-        // also make hype clips (the mic still can). PUBG's replay events arrive only after the
-        // match, and some modes (Team Deathmatch) write no replay, so hype stays on there.
+        // also make hype clips (the mic still can). Replay games' events arrive only after the
+        // match (and some modes write no replay), so hype stays on there.
         let game_reports_events = self
             .detector
             .current()
             .and_then(|g| g.integration)
-            .is_some_and(|i| i != Integration::PubgReplay && s.connected.contains(&i));
+            .is_some_and(|i| !i.is_replay() && s.connected.contains(&i));
         let mut fired = None;
         for (id, meter) in &meters.sources {
             let Some(def) = snapshot.source(*id) else {

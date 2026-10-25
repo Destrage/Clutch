@@ -209,7 +209,10 @@ pub fn config_text(integration: Integration, port: u16, token: &str) -> String {
             .as_slice(),
         ),
         Integration::Dota2Gsi => ("dota2", ["provider", "map", "player"].as_slice()),
-        Integration::LeagueLiveClient | Integration::PubgReplay => ("", [].as_slice()),
+        Integration::LeagueLiveClient
+        | Integration::PubgReplay
+        | Integration::FortniteReplay
+        | Integration::RocketLeagueReplay => ("", [].as_slice()),
     };
     let data: String = data
         .iter()
@@ -231,7 +234,10 @@ pub fn config_dir(integration: Integration, install: &Path) -> Option<PathBuf> {
                 .join("cfg")
                 .join("gamestate_integration"),
         ),
-        Integration::LeagueLiveClient | Integration::PubgReplay => None,
+        Integration::LeagueLiveClient
+        | Integration::PubgReplay
+        | Integration::FortniteReplay
+        | Integration::RocketLeagueReplay => None,
     }
 }
 
@@ -239,7 +245,10 @@ fn steam_app(integration: Integration) -> Option<u32> {
     match integration {
         Integration::Cs2Gsi => Some(730),
         Integration::Dota2Gsi => Some(570),
-        Integration::LeagueLiveClient | Integration::PubgReplay => None,
+        Integration::LeagueLiveClient
+        | Integration::PubgReplay
+        | Integration::FortniteReplay
+        | Integration::RocketLeagueReplay => None,
     }
 }
 
@@ -394,7 +403,10 @@ fn serve(
         let (game, kinds) = match integration {
             Integration::Cs2Gsi => ("Counter-Strike 2", cs2.update(&payload)),
             Integration::Dota2Gsi => ("Dota 2", dota.update(&payload, now)),
-            Integration::LeagueLiveClient | Integration::PubgReplay => continue,
+            Integration::LeagueLiveClient
+            | Integration::PubgReplay
+            | Integration::FortniteReplay
+            | Integration::RocketLeagueReplay => continue,
         };
         for kind in kinds {
             let _ = events.send(GameEvent {

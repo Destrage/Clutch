@@ -5,7 +5,9 @@
 //! each new replay with its [`ReplayFormat`] and reports the local player's events, stamped
 //! at the moment they happened (usually in the past: games write replays when a match ends).
 
+pub mod fortnite;
 pub mod pubg;
+pub mod rocket_league;
 
 use super::GameEvent;
 use crate::event::EventKind;
@@ -59,6 +61,27 @@ pub trait ReplayFormat: Send + 'static {
     fn replays(&self, folder: &Path) -> Vec<PathBuf>;
     /// Reads the local player's events from a replay.
     fn parse(&self, replay: &Path) -> Result<ParsedReplay, ReplayError>;
+}
+
+/// The replay format of a replay-file integration.
+pub fn format(integration: crate::Integration) -> Option<Box<dyn ReplayFormat>> {
+    use crate::Integration as I;
+    match integration {
+        I::PubgReplay => Some(Box::new(pubg::Pubg)),
+        I::FortniteReplay => Some(Box::new(fortnite::Fortnite)),
+        I::RocketLeagueReplay => Some(Box::new(rocket_league::RocketLeague)),
+        I::Cs2Gsi | I::Dota2Gsi | I::LeagueLiveClient => None,
+    }
+}
+
+/// Whether the game has saved replays on this PC yet (its replay folder exists).
+pub fn has_replays(integration: crate::Integration) -> bool {
+    match integration {
+        crate::Integration::RocketLeagueReplay => rocket_league::has_replays(),
+        other => format(other)
+            .and_then(|f| f.folder())
+            .is_some_and(|f| f.is_dir()),
+    }
 }
 
 /// Turns a wall-clock moment into an `Instant` (clamped to now for future times).

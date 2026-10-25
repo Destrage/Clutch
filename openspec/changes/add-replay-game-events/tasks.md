@@ -2,7 +2,7 @@
 
 ## 1. Research
 - [x] 1.1 PUBG: check real replays for when they're written (post-match: the folder appears when the player's match ends)
-- [ ] 1.1b Fortnite: capture a replay folder mid-match and after the match (not installed on the dev machine)
+- [x] 1.1b Fortnite: checked on two real replays (S12, C5S5): finished replays only (the event key is written at the end)
 - [x] 1.2 Document PUBG's layout, local-player identification and event fields in `design.md`
 
 ## 2. Framework
@@ -14,13 +14,13 @@
 
 ## 3. Games
 - [x] 3.1 PUBG: kills, knocks, deaths and wins
-- [ ] 3.2 Fortnite: eliminations and knocks
-- [ ] 3.3 Rocket League: goals via `boxcars` header parsing
-- [ ] 3.4 Rainbow Six Siege: kills, headshots, plants per round
+- [x] 3.2 Fortnite: eliminations, knocks, death and wins (recording player from the log or the stats)
+- [x] 3.3 Rocket League: goals and wins via `boxcars` header parsing
+- [ ] 3.4 Rainbow Six Siege: kills, headshots, plants per round (parked 2026-10-25: no tester, and public sample replays stop at Y9S1; build when a current replay folder is available)
 
 ## 4. UI
 - [x] 4.1 Per-game Connect toggle in clip settings (off by default) with the "Turn on replays" hint when the folder is missing (PUBG)
-- [ ] 4.2 Show replay markers in the recordings view and save clips from them
+- [x] 4.2 Show replay markers in the recordings view (late markers update a finished recording's events) and save clips from them (clicking a marker in a recording trims around it)
 
 ## 5. Verification
 - [x] 5.1 Parser unit tests against synthetic fixtures shaped like real replays (PUBG), plus an ignored test that reads the newest local replay
