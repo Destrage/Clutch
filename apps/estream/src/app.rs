@@ -2580,7 +2580,6 @@ impl App {
         if let Some(engine) = &self.engine
             && !hidden
         {
-            let mut redraw = false;
             let snapshot = engine.snapshot();
             if let Some((canvas, on_air)) =
                 self.canvas_of(&snapshot).map(|c| (c.id, c.active_scene))
@@ -2620,12 +2619,11 @@ impl App {
                         && let Some(picture) = shown.as_ref()
                     {
                         changed |=
-                            snap_thumb(&self.gpu, &mut self.scene_thumbs, scene, &picture.texture);
+                            snap_thumb(&self.gpu, &mut self.scene_thumbs, scene, picture.texture());
                     }
                     match result {
                         Shown::New(img) if self.studio => w.set_program_frame(img),
                         Shown::New(img) => w.set_preview_frame(img),
-                        Shown::Updated => redraw = true,
                         Shown::Kept => {}
                     }
                 }
@@ -2652,18 +2650,13 @@ impl App {
                         && let Some(picture) = &self.main_picture
                     {
                         changed |=
-                            snap_thumb(&self.gpu, &mut self.scene_thumbs, scene, &picture.texture);
+                            snap_thumb(&self.gpu, &mut self.scene_thumbs, scene, picture.texture());
                     }
-                    match result {
-                        Shown::New(img) => w.set_preview_frame(img),
-                        Shown::Updated => redraw = true,
-                        Shown::Kept => {}
+                    if let Shown::New(img) = result {
+                        w.set_preview_frame(img);
                     }
                 }
                 w.set_transition_busy(engine.is_transitioning(canvas));
-            }
-            if redraw {
-                w.window().request_redraw();
             }
             w.set_media_inspect(self.media_inspect());
             let (browser, status) = self.browser_inspect();
@@ -10146,25 +10139,34 @@ fn push_layers(
     }
 }
 
-/// A texture a view shows permanently (the view holds its Slint image).
+/// The two textures a view alternates between, each with the Slint image made for it once.
 struct ShownPicture {
-    texture: estream_gpu::wgpu::Texture,
+    pictures: [(estream_gpu::wgpu::Texture, slint::Image); 2],
+    /// The one holding the latest picture.
+    current: usize,
+}
+
+impl ShownPicture {
+    /// The texture holding the latest picture.
+    fn texture(&self) -> &estream_gpu::wgpu::Texture {
+        &self.pictures[self.current].0
+    }
 }
 
 /// What [`show_picture`] did with a canvas frame.
 #[derive(Debug, PartialEq)]
 enum Shown {
-    /// The view's texture was (re)made: hand the view this image.
+    /// The view shows the new picture once it gets this image.
     New(slint::Image),
-    /// The view's texture has the new picture: the view only needs a redraw.
-    Updated,
     /// The engine left this frame's picture alone; the view keeps the last one.
     Kept,
 }
 
-/// Copies a canvas picture into the view's own texture on the UI's GPU device (from the
-/// engine's device when it has its own). Handing Slint a new image for every frame costs about
-/// as much CPU again as the redraw itself, so the image only changes when the texture is made.
+/// Copies a canvas picture into one of the view's two textures on the UI's GPU device (from
+/// the engine's device when it has its own) and returns that texture's image. The view must get
+/// a different image for Slint to repaint it (updating one texture in place and asking for a
+/// redraw left the preview at a few frames a second), but the images are made once per size:
+/// making a new one every frame costs about as much CPU again as the redraw itself.
 fn show_picture(
     gpu: &GpuContext,
     shown: &mut Option<ShownPicture>,
@@ -10172,27 +10174,31 @@ fn show_picture(
     frame: &estream_engine::CanvasFrame<'_>,
 ) -> Shown {
     let size = frame.preview.size();
-    let mut made = None;
-    if shown.as_ref().is_none_or(|s| s.texture.size() != size) {
-        let texture = estream_gpu::create_preview_texture(gpu, size.width, size.height);
-        let Ok(image) = slint::Image::try_from(texture.clone())
-            .map_err(|e| tracing::error!(error = %e, "preview texture rejected"))
-        else {
+    if shown.as_ref().is_none_or(|s| s.texture().size() != size) {
+        let make = || {
+            let texture = estream_gpu::create_preview_texture(gpu, size.width, size.height);
+            slint::Image::try_from(texture.clone())
+                .map(|image| (texture, image))
+                .map_err(|e| tracing::error!(error = %e, "preview texture rejected"))
+                .ok()
+        };
+        let (Some(a), Some(b)) = (make(), make()) else {
             return Shown::Kept;
         };
-        made = Some(image);
-        *shown = Some(ShownPicture { texture });
+        *shown = Some(ShownPicture {
+            pictures: [a, b],
+            current: 0,
+        });
     }
-    let Some(target) = shown.as_ref() else {
+    let Some(view) = shown.as_mut() else {
         return Shown::Kept;
     };
-    let copied = output.copy_preview(gpu, frame, &target.texture);
-    match made {
-        // A new texture is handed over even when this frame was skipped: the next fills it.
-        Some(image) => Shown::New(image),
-        None if copied => Shown::Updated,
-        None => Shown::Kept,
+    let next = view.current ^ 1;
+    if !output.copy_preview(gpu, frame, &view.pictures[next].0) {
+        return Shown::Kept;
     }
+    view.current = next;
+    Shown::New(view.pictures[next].1.clone())
 }
 
 /// How much of the studio window can be seen.

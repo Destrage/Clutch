@@ -102,6 +102,11 @@ impl GpuContext {
         if !cfg!(windows) || ui.info.backend != wgpu::Backend::Dx12 {
             return Ok((ui.clone(), ui));
         }
+        // Troubleshooting: everything on one device, as before the split.
+        if std::env::var_os("CLUTCH_ONE_GPU_DEVICE").is_some() {
+            tracing::info!("CLUTCH_ONE_GPU_DEVICE set: the engine shares the UI's GPU device");
+            return Ok((ui.clone(), ui));
+        }
         let (device, queue) = match pollster::block_on(request_device(&ui.adapter, "engine")) {
             Ok(pair) => pair,
             Err(e) => {
