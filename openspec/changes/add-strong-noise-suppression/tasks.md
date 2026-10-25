@@ -4,11 +4,11 @@
 - [ ] 1.3 Confirm the model weights are covered by MIT/Apache-2.0 (ask upstream if no file says so); add DeepFilterNet to the third-party notices
 
 ## 2. Engine
-- [ ] 2.1 `estream-audio::denoise`: DeepFilterNet DSP and model runner vendored (license headers kept), `tract-*` pinned `=0.21.4`, low-latency model embedded
-- [ ] 2.2 One `estream-denoise` thread per Strong filter: builds the model, SPSC rings of 10 ms blocks, 20 ms fixed delay; Light output until the first block, for missed blocks and if loading fails (logged once); no allocation on the audio thread
+- [x] 2.1 `estream-denoise` crate (own crate so the vendored code keeps upstream style and edition 2021): DeepFilterNet DSP and model runner vendored (license headers kept), `tract-*` pinned `=0.21.4`, low-latency model embedded
+- [x] 2.2 One `estream-denoise` thread per Strong filter: builds the model, SPSC rings of 10 ms blocks, 20 ms fixed delay; Light output until the first block, for missed blocks and if loading fails (logged once); no allocation on the audio thread
 - [ ] 2.3 Port the runner to current `tract`; re-measure CPU with the spike harness and keep the faster one
-- [ ] 2.4 Noise suppression `strength` (Light/Strong) and `amount` (dry signal delayed to match); Strong denoises a mono mix to both channels; filter reports its delay
-- [ ] 2.5 Tests: synthetic keyboard clicks over speech-like signal are reduced more by Strong than Light; mono out; Amount 0% returns the input delayed by the filter's delay; missing keys read as Light / 100%; switching Light → Strong leaves no silent or unprocessed blocks
+- [x] 2.4 Noise suppression `strength` (Light/Strong) and `amount` (dry signal delayed to match); Strong denoises a mono mix to both channels; its delay is `STRONG_DELAY_MS` (20 ms) for the settings
+- [x] 2.5 Tests: synthetic keyboard clicks over faint noise are reduced more by Strong than Light (speech kept: spike, task 1.1); mono out; Amount 0% returns the input delayed by the filter's delay; missing keys read as Light / 100%; switching Light → Strong leaves no silent or unprocessed blocks
 
 ## 3. UI
 - [ ] 3.1 `FilterParam` choices; settings draw them as a segmented button row; the Noise suppression row shows Strength, Amount and, for Strong, its delay

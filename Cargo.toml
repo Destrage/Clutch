@@ -12,6 +12,7 @@ rust-version = "1.90"
 [workspace.dependencies]
 estream-audio = { path = "crates/estream-audio" }
 estream-core = { path = "crates/estream-core" }
+estream-denoise = { path = "crates/estream-denoise" }
 estream-shm = { path = "crates/estream-shm" }
 estream-gpu = { path = "crates/estream-gpu" }
 estream-project = { path = "crates/estream-project" }
@@ -65,4 +66,8 @@ opt-level = 2
 
 # The camera source runs inside Windows' Frame Server; keep it fast in dev builds too.
 [profile.dev.package.estream-vcam]
+opt-level = 2
+
+# DeepFilterNet3 on a debug build cannot keep up with real time.
+[profile.dev.package.estream-denoise]
 opt-level = 2

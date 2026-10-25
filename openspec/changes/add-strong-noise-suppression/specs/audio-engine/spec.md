@@ -16,7 +16,7 @@ run Light at 100%.
 - **THEN** the gate output is silent
 
 #### Scenario: Strong suppression removes clicks
-- **WHEN** a speech-like signal with keyboard-like clicks passes through noise suppression
+- **WHEN** keyboard-like clicks pass through noise suppression
 - **THEN** Strong leaves less click energy than Light
 
 #### Scenario: Existing filters keep their sound
