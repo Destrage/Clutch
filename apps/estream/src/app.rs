@@ -1523,6 +1523,19 @@ impl App {
         }
     }
 
+    /// Opens a sign-in page in the default browser, or copies its link (`copy`) so it can be
+    /// opened in any browser on this PC.
+    fn signin_link(&mut self, url: &str, copy: bool) {
+        if copy {
+            match crate::shell::copy_text(url) {
+                Ok(()) => self.toast("Sign-in link copied: open it in any browser".into(), false),
+                Err(e) => self.toast(format!("Couldn't copy the link: {e}"), true),
+            }
+        } else if let Err(e) = crate::shell::open_url(url) {
+            self.toast(format!("Couldn't open your browser: {e}"), true);
+        }
+    }
+
     pub fn signin_resized(&mut self, width: f32, height: f32) {
         self.signin_size = (width, height);
         if let Some(dialog) = &mut self.signin {
@@ -1533,13 +1546,12 @@ impl App {
     // ---- YouTube account ----
 
     /// Starts connecting YouTube. Google's sign-in opens in the default browser (Google doesn't
-    /// allow signing in inside apps), which hands the result back to Clutch.
-    fn youtube_connect(&mut self) {
+    /// allow signing in inside apps), which hands the result back to Clutch. `copy`: copy the
+    /// link instead, for another browser.
+    fn youtube_connect(&mut self, copy: bool) {
         match crate::youtube::Connecting::start() {
             Ok(connecting) => {
-                if let Err(e) = crate::shell::open_url(connecting.url()) {
-                    self.toast(format!("Couldn't open your browser: {e}"), true);
-                }
+                self.signin_link(connecting.url(), copy);
                 self.youtube_connect = Some(connecting);
             }
             Err(e) => self.toast(e, true),
@@ -1841,13 +1853,11 @@ impl App {
     // ---- Kick account ----
 
     /// Starts connecting Kick. Kick's sign-in opens in the default browser, which hands the
-    /// result back to Clutch.
-    fn kick_connect(&mut self) {
+    /// result back to Clutch. `copy`: copy the link instead, for another browser.
+    fn kick_connect(&mut self, copy: bool) {
         match crate::kick::Connecting::start() {
             Ok(connecting) => {
-                if let Err(e) = crate::shell::open_url(connecting.url()) {
-                    self.toast(format!("Couldn't open your browser: {e}"), true);
-                }
+                self.signin_link(connecting.url(), copy);
                 self.kick_connect = Some(connecting);
             }
             Err(e) => self.toast(e, true),
@@ -1953,38 +1963,47 @@ impl App {
         }
     }
 
-    /// Connect, disconnect, cancel or reopen the page, for the selected destination's platform.
+    /// Connect, disconnect, cancel, reopen the page or copy its link, for the selected
+    /// destination's platform. `copy` before connecting starts the sign-in without a browser.
     fn account_action(&mut self, action: &str) {
+        let copy = action == "copy";
         match (self.selected_service(), action) {
             (Some(Service::Twitch), "connect") => self.twitch_connect(),
             (Some(Service::Twitch), "disconnect") => self.twitch_disconnect(),
             (Some(Service::Twitch), "cancel") => self.twitch_cancel(),
             (Some(Service::Twitch), "open") => self.twitch_open(),
-            (Some(Service::YouTube), "connect") => self.youtube_connect(),
+            (Some(Service::Twitch), "copy") => {
+                if let Some((c, _)) = &self.twitch_connect
+                    && let crate::twitch::Connect::Code { uri, .. } = c.state()
+                {
+                    self.signin_link(&uri, true);
+                }
+            }
+            (Some(Service::YouTube), "connect") => self.youtube_connect(false),
             (Some(Service::YouTube), "disconnect") => self.youtube_disconnect(),
             (Some(Service::YouTube), "cancel") => {
                 self.youtube_connect = None;
                 self.refresh_settings_form();
             }
-            (Some(Service::YouTube), "open") => {
-                if let Some(c) = &self.youtube_connect
-                    && let Err(e) = crate::shell::open_url(c.url())
-                {
-                    self.toast(format!("Couldn't open your browser: {e}"), true);
+            (Some(Service::YouTube), "open" | "copy") => {
+                match self.youtube_connect.as_ref().map(|c| c.url().to_owned()) {
+                    Some(url) => self.signin_link(&url, copy),
+                    None if copy => self.youtube_connect(true),
+                    None => {}
                 }
             }
             (Some(_), "fill") => self.account_fill(),
-            (Some(Service::Kick), "connect") => self.kick_connect(),
+            (Some(Service::Kick), "connect") => self.kick_connect(false),
             (Some(Service::Kick), "disconnect") => self.kick_disconnect(),
             (Some(Service::Kick), "cancel") => {
                 self.kick_connect = None;
                 self.refresh_settings_form();
             }
-            (Some(Service::Kick), "open") => {
-                if let Some(c) = &self.kick_connect
-                    && let Err(e) = crate::shell::open_url(c.url())
-                {
-                    self.toast(format!("Couldn't open your browser: {e}"), true);
+            (Some(Service::Kick), "open" | "copy") => {
+                match self.kick_connect.as_ref().map(|c| c.url().to_owned()) {
+                    Some(url) => self.signin_link(&url, copy),
+                    None if copy => self.kick_connect(true),
+                    None => {}
                 }
             }
             _ => {}
