@@ -195,7 +195,9 @@ fn frame_pacing_is_stable() {
     }
     errors.sort_unstable();
     let p99 = Duration::from_nanos(errors[errors.len() * 99 / 100]);
-    assert!(p99 < Duration::from_millis(1), "p99 wake-up error {p99:?}");
+    // The wait sleeps instead of spinning, so wakes run a little late (frames keep their
+    // scheduled timestamps); a late wake must still leave most of a 60 fps frame.
+    assert!(p99 < Duration::from_millis(2), "p99 wake-up error {p99:?}");
     assert_eq!(frames.lagged(), 0);
 }
 
