@@ -11,8 +11,8 @@
 - [x] 2.5 Tests: synthetic keyboard clicks over faint noise are reduced more by Strong than Light (speech kept: spike, task 1.1); mono out; Amount 0% returns the input delayed by the filter's delay; missing keys read as Light / 100%; switching Light → Strong leaves no silent or unprocessed blocks
 
 ## 3. UI
-- [ ] 3.1 `FilterParam` choices; settings draw them as a segmented button row; the Noise suppression row shows Strength, Amount and, for Strong, its delay
-- [ ] 3.2 Tests: choice index round-trips through settings; a filter saved before this change loads as Light
+- [x] 3.1 `FilterParam` choices; settings draw them as a dropdown; the Noise suppression row shows Strength, Amount and, for Strong, a note with its delay
+- [x] 3.2 Tests: choice index round-trips through settings; a filter saved before this change loads as Light
 
 ## 4. Verify
 - [ ] 4.1 `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`

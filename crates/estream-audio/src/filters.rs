@@ -20,6 +20,8 @@ pub struct FilterParam {
     pub step: f32,
     pub default: f32,
     pub unit: &'static str,
+    /// Named options; when set, the value is the chosen option's index.
+    pub choices: &'static [&'static str],
 }
 
 const fn p(
@@ -39,6 +41,25 @@ const fn p(
         step,
         default,
         unit,
+        choices: &[],
+    }
+}
+
+const fn choice(
+    key: &'static str,
+    label: &'static str,
+    choices: &'static [&'static str],
+    default: f32,
+) -> FilterParam {
+    FilterParam {
+        key,
+        label,
+        min: 0.0,
+        max: (choices.len() - 1) as f32,
+        step: 1.0,
+        default,
+        unit: "",
+        choices,
     }
 }
 
@@ -53,15 +74,7 @@ pub const KINDS: &[FilterKind] = &[
         kind: "noise_suppression",
         name: "Noise suppression",
         params: &[
-            p(
-                "strength",
-                "Strength",
-                NOISE_LIGHT,
-                NOISE_STRONG,
-                1.0,
-                NOISE_LIGHT,
-                "",
-            ),
+            choice("strength", "Strength", &["Light", "Strong"], NOISE_LIGHT),
             p("amount", "Amount", 0.0, 100.0, 1.0, 100.0, "%"),
         ],
     },
@@ -675,6 +688,21 @@ mod tests {
                 assert_eq!(b, expected, "strength {strength}, block {n}");
             }
         }
+    }
+
+    #[test]
+    fn strength_is_a_choice_stored_as_its_index() {
+        let strength = kind("noise_suppression")
+            .and_then(|k| k.params.iter().find(|p| p.key == "strength"))
+            .unwrap();
+        assert_eq!(strength.choices, ["Light", "Strong"]);
+        assert_eq!((strength.min, strength.max, strength.step), (0.0, 1.0, 1.0));
+        let saved: Value = serde_json::from_str(r#"{"strength":1.0,"amount":40.0}"#).unwrap();
+        assert_eq!(param(&saved, "noise_suppression", "strength"), NOISE_STRONG);
+        // Saved before strengths existed.
+        let old: Value = serde_json::from_str("{}").unwrap();
+        assert_eq!(param(&old, "noise_suppression", "strength"), NOISE_LIGHT);
+        assert_eq!(param(&old, "noise_suppression", "amount"), 100.0);
     }
 
     #[test]

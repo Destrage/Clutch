@@ -86,8 +86,8 @@ channels. A stereo mic loses its stereo image, which nobody streams on purpose.
 
 ### Choice parameters
 `FilterParam` gets an optional `choices: &'static [&'static str]`. A parameter with choices is
-stored as its index (as a number, so settings stay a flat map of numbers) and drawn as a
-segmented button row instead of a slider. The Noise suppression filter's `strength` is
+stored as its index (as a number, so settings stay a flat map of numbers) and drawn with the
+existing `Select` dropdown instead of a number field (no new widget for two options). The Noise suppression filter's `strength` is
 `["Light", "Strong"]`, default 0.
 
 ### Settings compatibility

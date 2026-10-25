@@ -21,7 +21,7 @@ GPU time.
 - Strong mode delays that source by a fixed 20 ms (10 ms model, 10 ms thread handoff). The filter
   row shows it. The model loads off the audio thread; Light runs until it is ready, so
   switching never causes a gap.
-- Filter settings gain a choice control (a segmented button row) alongside sliders, so a filter
+- Filter settings gain a choice control (a dropdown) alongside number fields, so a filter
   parameter can be a small set of named options.
 
 ## Impact
