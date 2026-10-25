@@ -4,11 +4,12 @@
 use crate::audio::{self, AudioHost};
 use crate::command::{Change, Command, CommandError};
 use crate::feed::{VideoConsumer, VideoFrame};
+use crate::gpu_export::GpuExport;
 use crate::graph::{ActiveTransition, RenderGraph, ViewState};
 use crate::history::History;
 use crate::source::{SourceRegistry, SourceStatus};
 use crate::video::{self, CanvasOutput, SourceInfo, VideoCore, VideoSink};
-use crate::watchdog;
+use crate::watchdog::{self, FrameTimings, VideoProgress};
 use arc_swap::ArcSwap;
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TrySendError};
 use estream_audio::mixer::MeterSet;
@@ -57,6 +58,8 @@ pub struct EngineConfig {
     pub video: bool,
     /// Run the real-time audio thread.
     pub audio: bool,
+    /// Lets hardware encoders take frames on the GPU instead of CPU readbacks.
+    pub gpu_export: Option<Arc<dyn GpuExport>>,
 }
 
 impl Default for EngineConfig {
@@ -71,6 +74,7 @@ impl Default for EngineConfig {
             coalesce_window: Duration::from_millis(500),
             video: true,
             audio: true,
+            gpu_export: None,
         }
     }
 }
@@ -150,6 +154,8 @@ struct Shared {
     shutdown: AtomicBool,
     can_undo: AtomicBool,
     can_redo: AtomicBool,
+    /// Whether the UI shows canvas previews (the sRGB conversion is skipped otherwise).
+    preview_wanted: AtomicBool,
 }
 
 impl Shared {
@@ -220,6 +226,10 @@ impl VideoSink for Shared {
     fn shutdown_requested(&self) -> &AtomicBool {
         &self.shutdown
     }
+
+    fn preview_wanted(&self) -> bool {
+        self.preview_wanted.load(Ordering::Relaxed)
+    }
 }
 
 type Reply<T> = Sender<Result<T, EngineError>>;
@@ -260,17 +270,38 @@ pub struct VideoTap {
 impl VideoTap {
     /// Delivers NV12 frames of `canvas` to `tx` until [`VideoTap::remove`] is called.
     pub fn add(&self, canvas: CanvasId, tx: crossbeam_channel::Sender<VideoFrame>) -> u64 {
+        self.add_consumer(canvas, tx, false).0
+    }
+
+    /// Like [`VideoTap::add`], but asks for frames on the GPU when the engine has a
+    /// [`GpuExport`]. Clearing the returned flag switches the consumer to CPU frames.
+    pub fn add_gpu(
+        &self,
+        canvas: CanvasId,
+        tx: crossbeam_channel::Sender<VideoFrame>,
+    ) -> (u64, Arc<AtomicBool>) {
+        self.add_consumer(canvas, tx, true)
+    }
+
+    fn add_consumer(
+        &self,
+        canvas: CanvasId,
+        tx: crossbeam_channel::Sender<VideoFrame>,
+        gpu: bool,
+    ) -> (u64, Arc<AtomicBool>) {
         let id = self.shared.next_consumer.fetch_add(1, Ordering::Relaxed);
+        let gpu = Arc::new(AtomicBool::new(gpu));
         self.shared.consumers.rcu(|list| {
             let mut list = (**list).clone();
             list.push(VideoConsumer {
                 id,
                 canvas,
                 tx: tx.clone(),
+                gpu: gpu.clone(),
             });
             list
         });
-        id
+        (id, gpu)
     }
 
     pub fn remove(&self, id: u64) {
@@ -291,6 +322,7 @@ pub struct Engine {
     clock: EngineClock,
     control: Option<JoinHandle<()>>,
     video: Option<JoinHandle<()>>,
+    video_progress: Option<Arc<VideoProgress>>,
     audio: Option<JoinHandle<()>>,
     track_sinks: Option<crossbeam_channel::Sender<Box<dyn TrackSink>>>,
 }
@@ -314,6 +346,7 @@ impl Engine {
             shutdown: AtomicBool::new(false),
             can_undo: AtomicBool::new(false),
             can_redo: AtomicBool::new(false),
+            preview_wanted: AtomicBool::new(true),
         });
 
         let gpu = if config.video {
@@ -325,14 +358,17 @@ impl Engine {
             None
         };
 
+        let mut video_progress = None;
         let video = match &gpu {
             Some(gpu) => {
                 let mut core = VideoCore::new(gpu.clone(), config.registry.clone());
+                core.set_gpu_export(config.gpu_export.clone());
                 // Create canvases and sources up front so outputs exist when `start` returns.
                 core.sync(shared.graph.load_full(), clock.now());
                 shared.publish(core.outputs(), core.statuses());
                 let sink: Arc<dyn VideoSink> = shared.clone();
                 let progress = core.progress();
+                video_progress = Some(progress.clone());
                 let handle = std::thread::Builder::new()
                     .name("estream-video".into())
                     .spawn(move || video::run(core, clock, sink))?;
@@ -398,9 +434,22 @@ impl Engine {
             clock,
             control: Some(control),
             video,
+            video_progress,
             audio,
             track_sinks,
         })
+    }
+
+    /// Whether a UI shows the canvas previews. While nothing does, the engine skips the
+    /// preview conversion (and the studio Preview render); encoded output is unaffected.
+    /// Frames published meanwhile keep their last preview picture.
+    pub fn set_preview_wanted(&self, wanted: bool) {
+        self.shared.preview_wanted.store(wanted, Ordering::Relaxed);
+    }
+
+    /// CPU time per video-thread stage over the last couple of seconds (`None` without video).
+    pub fn video_timings(&self) -> Option<FrameTimings> {
+        self.video_progress.as_ref().map(|p| p.timings())
     }
 
     fn request<T>(&self, make: impl FnOnce(Reply<T>) -> Request) -> Result<T, EngineError> {

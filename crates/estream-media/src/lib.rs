@@ -7,6 +7,8 @@ pub mod audio_file;
 pub mod clip_player;
 pub mod encode;
 pub mod frames;
+#[cfg(windows)]
+pub mod gpu_frames;
 pub mod media_source;
 pub mod multistream;
 pub mod music_source;

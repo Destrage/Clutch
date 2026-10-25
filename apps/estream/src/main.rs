@@ -174,8 +174,10 @@ fn main() -> anyhow::Result<()> {
         (Some(Err(e)), _) => tracing::warn!(error = %e, "couldn't take over the eStream settings"),
         _ => {}
     }
-    let gpu = GpuContext::new_headless(&GpuOptions::default())?;
-    gpu.raise_scheduling_priority();
+    // The UI and the engine get a device each where possible, so UI presents and window
+    // resizes never wait behind the compositor.
+    let (gpu, engine_gpu) = GpuContext::new_pair(&GpuOptions::default())?;
+    engine_gpu.raise_scheduling_priority();
     // Slint keeps the device and queue in a thread-local that is dropped during process
     // exit, after wgpu's own thread-locals are gone (which panics in wgpu's lock tracing).
     // Holding one reference for the life of the process means the GPU objects are never
@@ -207,7 +209,7 @@ fn main() -> anyhow::Result<()> {
     }
     let maximized = settings.window.is_some_and(|s| s.maximized);
 
-    let app = app::App::new(&window, paths, settings, gpu);
+    let app = app::App::new(&window, paths, settings, gpu, engine_gpu);
     let _timers = app::install(&app, &window);
     app.borrow_mut().begin();
 

@@ -27,6 +27,8 @@ pub struct OutputStats {
     /// Milliseconds of audio that never arrived and were filled with silence.
     pub audio_gap_ms: AtomicU64,
     pub encoder: Mutex<String>,
+    /// The encoder takes frames straight from the GPU (no CPU readback).
+    pub gpu_frames: AtomicBool,
     /// Set if the output failed while running.
     pub error: Mutex<Option<String>>,
 }
@@ -128,7 +130,15 @@ impl Session {
         let (control_tx, control_rx) = bounded::<Control>(4);
         let stop = Arc::new(AtomicBool::new(false));
         let sink_closed = Arc::new(AtomicBool::new(false));
-        let consumer = engine.add_video_consumer(canvas.id, video_tx);
+        // Hardware encoders ask for frames on the GPU (the engine sends CPU frames if it can't).
+        let (consumer, gpu_frames) = if encode::takes_gpu_frames(encoder.name) {
+            engine.video_tap().add_gpu(canvas.id, video_tx)
+        } else {
+            (
+                engine.add_video_consumer(canvas.id, video_tx),
+                Arc::new(AtomicBool::new(false)),
+            )
+        };
         engine.add_track_sink(Box::new(ChannelSink {
             tx: audio_tx,
             closed: sink_closed.clone(),
@@ -147,6 +157,7 @@ impl Session {
                         settings,
                         encoder_name,
                         fps,
+                        gpu_frames,
                         video_rx,
                         audio_rx,
                         control_rx,
@@ -233,6 +244,8 @@ struct Run {
     settings: RecordingSettings,
     encoder_name: &'static str,
     fps: Rational,
+    /// Set while this output asks the engine for GPU frames; cleared to fall back.
+    gpu_frames: Arc<AtomicBool>,
     video_rx: Receiver<VideoFrame>,
     audio_rx: Receiver<AudioChunk>,
     control_rx: Receiver<Control>,
@@ -241,24 +254,73 @@ struct Run {
     kind: Kind,
 }
 
-fn run(r: Run) -> Result<(), MediaError> {
-    // Wait for the first frame: it fixes the size and time zero.
-    let first = loop {
+/// The next frame (`gpu`: of that kind only), or `None` once the output is stopped.
+fn next_frame(r: &Run, gpu: Option<bool>) -> Option<VideoFrame> {
+    loop {
         if r.stop.load(Ordering::Acquire) {
-            return Ok(());
+            return None;
         }
-        if let Ok(f) = r.video_rx.recv_timeout(Duration::from_millis(100)) {
-            break f;
+        if let Ok(f) = r.video_rx.recv_timeout(Duration::from_millis(100))
+            && gpu.is_none_or(|g| f.gpu.is_some() == g)
+        {
+            return Some(f);
         }
+    }
+}
+
+/// Opens the video encoder for the first frame. GPU frames the encoder can't take switch
+/// the output to CPU frames (before anything is written) and wait for the first of those.
+fn open_video(
+    r: &Run,
+    first: VideoFrame,
+) -> Result<Option<(VideoFrame, VideoEncoder)>, MediaError> {
+    #[cfg(windows)]
+    if let Some(g) = &first.gpu {
+        match VideoEncoder::open_gpu(
+            r.encoder_name,
+            first.width,
+            first.height,
+            r.fps,
+            &r.settings,
+            g,
+        ) {
+            Ok(enc) => {
+                tracing::info!(encoder = r.encoder_name, "encoder takes frames on the GPU");
+                r.stats.gpu_frames.store(true, Ordering::Relaxed);
+                return Ok(Some((first, enc)));
+            }
+            Err(e) => {
+                tracing::warn!(encoder = r.encoder_name, error = %e, "GPU frames not accepted; using CPU frames");
+                r.gpu_frames.store(false, Ordering::Relaxed);
+            }
+        }
+    }
+    let first = match first.gpu {
+        Some(_) => match next_frame(r, Some(false)) {
+            Some(f) => f,
+            None => return Ok(None),
+        },
+        None => first,
     };
-    let t0 = first.timestamp;
-    let mut video = VideoEncoder::open(
+    let enc = VideoEncoder::open(
         r.encoder_name,
         first.width,
         first.height,
         r.fps,
         &r.settings,
     )?;
+    Ok(Some((first, enc)))
+}
+
+fn run(r: Run) -> Result<(), MediaError> {
+    // Wait for the first frame: it fixes the size and time zero.
+    let Some(first) = next_frame(&r, None) else {
+        return Ok(());
+    };
+    let Some((first, mut video)) = open_video(&r, first)? else {
+        return Ok(());
+    };
+    let t0 = first.timestamp;
     let tracks: Vec<usize> = (0..TRACKS)
         .filter(|t| r.settings.tracks & (1 << t) != 0)
         .collect();

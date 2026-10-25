@@ -52,29 +52,44 @@ Each device has its own D3D12 direct queue and its own wgpu-core locks. A blocki
 `Present` or a `configure_surface` drain no longer involves compositor submissions. The OS
 GPU scheduler interleaves the two queues.
 
-**Preview bridge.** Preview and program textures that the UI shows are created by
-`estream-gpu::SharedTexture` on the engine device with `D3D12_HEAP_FLAG_SHARED`, exported as
-an NT handle and opened on the UI device (`OpenSharedHandle` → `texture_from_raw` →
-`create_texture_from_hal`). The UI-side `wgpu::Texture` is what `slint::Image::try_from`
-receives.
+**One D3D12 device, two queues.** wgpu-hal opens every wgpu device of an adapter on the
+adapter's single `ID3D12Device` (D3D12 devices are per-adapter singletons) and gives each its
+own direct queue. So no NT handles are needed: a resource or fence made once is valid on both
+queues. `estream-gpu::PreviewBridge` (only on the engine's `GpuContext`) holds the device, both
+raw queues and two fences.
 
-**Ordering.** A D3D12 fence created shared on the engine device and opened on the UI device:
-- The engine stages `add_signal_fence(fence, n)` on its hal queue before the submit that
-  writes preview slot *k*. It publishes `(k, n)` with the frame.
-- The UI stages `add_wait_fence(fence, n)` on its hal queue before Slint's next frame, so its
-  GPU reads wait for the engine's writes without blocking either CPU thread.
-- Slots are already rotated by the engine (`pslot`). The engine doesn't rewrite a slot until
-  the UI has presented a newer one. The UI signals a second shared fence after its frame, and
-  the engine checks it without waiting, skipping a preview slot update rather than stalling.
+**Preview bridge.** Each preview slot of a canvas output (and of the studio Preview) is a
+committed resource with `D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS`, wrapped with
+`texture_from_raw` → `create_texture_from_hal` on both devices (engine: render target, UI:
+copy source). Simultaneous access lets each queue use it from the common state, so the two
+wgpu state trackers never have to agree; each side only ever uses it one way, so wgpu issues
+at most one barrier from the initial state and relies on implicit promotion afterwards.
+Textures from hal count as initialized, so wgpu never clears them.
+
+**Ordering.** Raw `Signal` / `Wait` calls next to our own submits (wgpu-hal's
+`add_signal_fence` / `add_wait_fence` attach to whichever submit comes next, possibly another
+thread's):
+- After the video thread's submit, the engine signals `frame = n` on its queue and publishes
+  `n` per slot with the frame (`ready`; 0 when the slot's preview wasn't drawn).
+- On the UI tick, `UiPreview::show` queues a GPU `Wait(frame, n)` on the UI queue, copies the
+  slot into one of two UI-owned textures (alternating, so the image Slint gets changes), then
+  signals `copied = m` and stores `m` in the slot (`released`).
+- Before drawing a slot's preview, the engine checks `copied` without waiting. If the UI's
+  last copy of that slot hasn't finished, it leaves the preview alone for that frame (the
+  canvas and encoder output are unaffected) and publishes `ready = 0`; the UI keeps its last
+  picture. Neither CPU thread ever waits for the other's GPU work.
+
+The UI copies instead of sampling the shared texture directly so the engine's slot is free
+again as soon as the copy is done, rather than whenever Slint stops drawing it.
 
 **Other imports.**
-- Scene thumbnails (`snap_thumb`) become bridge textures; the copy is recorded on the engine
-  device.
+- Scene thumbnails (`snap_thumb`) copy from the UI's picture, so they stay on the UI device.
 - Clip and montage engines (`clips.rs`, `montage.rs`) aren't live outputs. They keep using
-  the UI device for now and are revisited if they show contention.
+  the UI device (no bridge, so their previews are shown directly) and are revisited if they
+  show contention.
 
-**Fallback.** If shared-resource creation or fence sharing fails, log it and run on one shared
-device as today. Linux and macOS use the shared device until their own interop exists
+**Fallback.** If the second device, the fences or a shared preview can't be created, log it
+and run on one shared device as before (previews are shown directly). Linux and macOS use the shared device until their own interop exists
 (Vulkan external memory, IOSurface).
 
 ## GPU scheduling priority

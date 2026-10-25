@@ -1,10 +1,10 @@
 //! Enumeration of monitors and capturable top-level windows.
 
-use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, RECT};
+use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT};
 use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
 use windows::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO,
-    MONITORINFOEXW, MonitorFromWindow,
+    MONITORINFOEXW, MonitorFromPoint, MonitorFromWindow,
 };
 use windows::Win32::System::Threading::{
     GetCurrentProcessId, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -205,6 +205,29 @@ pub fn foreground_fullscreen() -> Option<WindowInfo> {
     ];
     (info.is_fullscreen() && !ignored.iter().any(|e| info.exe.eq_ignore_ascii_case(e)))
         .then_some(info)
+}
+
+/// Whether the foreground window belongs to this process.
+pub fn foreground_is_ours() -> bool {
+    // SAFETY: simple Win32 queries.
+    unsafe {
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(GetForegroundWindow(), Some(&mut pid));
+        pid == GetCurrentProcessId()
+    }
+}
+
+/// Whether a fullscreen app (a game) in the foreground covers the monitor that contains the
+/// screen point `(x, y)`, so a window of ours there can't be seen.
+pub fn fullscreen_covers(x: i32, y: i32) -> bool {
+    let Some(app) = foreground_fullscreen() else {
+        return false;
+    };
+    // SAFETY: simple Win32 queries.
+    unsafe {
+        MonitorFromWindow(app.hwnd, MONITOR_DEFAULTTONEAREST)
+            == MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST)
+    }
 }
 
 /// Returns true if the window handle is valid and belongs to the expected process.

@@ -1,7 +1,6 @@
 //! Drift-free fixed-rate frame scheduling.
 
 use crate::{EngineClock, Rational, Timestamp};
-use std::time::Duration;
 
 /// One scheduled frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,23 +73,16 @@ impl FrameClock {
     }
 }
 
-/// Waits until `deadline` with sub-millisecond precision: a coarse sleep
-/// (high-resolution waitable timer on Windows) followed by a short spin.
+/// Sleeps until `deadline` (high-resolution waitable timer on Windows), typically waking
+/// 0.2–0.8 ms late. Frames carry their scheduled timestamp, so a late wake does not move
+/// them; spinning for exactness cost ~12% of a core per 100 Hz thread.
 pub fn wait_until(clock: &EngineClock, deadline: Timestamp) {
-    const SPIN: Duration = Duration::from_micros(1500);
     loop {
         let now = clock.now();
         if now >= deadline {
             return;
         }
-        let remaining = deadline.saturating_sub(now);
-        if remaining > SPIN {
-            std::thread::sleep(remaining - SPIN);
-        } else if remaining > Duration::from_micros(200) {
-            std::thread::yield_now();
-        } else {
-            std::hint::spin_loop();
-        }
+        std::thread::sleep(deadline.saturating_sub(now));
     }
 }
 

@@ -10,15 +10,15 @@
 - [x] 2.2 Set `SetGPUThreadPriority` on the D3D11 capture interop device
 
 ## 3. Separate Engine Device (Windows)
-- [ ] 3.1 Create the UI and engine `GpuContext`s on the same adapter (LUID match); hand the UI one to Slint and the engine one to the main engine
-- [ ] 3.2 Add shared preview textures on the engine device, opened on the UI device
-- [ ] 3.3 Add the shared fence pair: engine signals after preview writes; UI waits before sampling and signals after presenting
-- [ ] 3.4 Switch the canvas preview and program images to bridge textures
-- [ ] 3.5 Switch scene thumbnails to bridge textures with the copy recorded on the engine device
-- [ ] 3.6 Fall back to one shared device when sharing fails, and on Linux/macOS
-- [ ] 3.7 Audit every other use of the app's `GpuContext` for the right device
+- [x] 3.1 Create the UI and engine `GpuContext`s on the same adapter (`GpuContext::new_pair`); hand the UI one to Slint and the engine one to the main engine
+- [x] 3.2 Add shared preview textures (`PreviewBridge::create_preview`: simultaneous-access resources wrapped on both devices)
+- [x] 3.3 Add the fence pair: engine signals after the submit that draws previews; UI waits before copying and signals after; the engine skips a preview the UI is still copying
+- [x] 3.4 Show the canvas preview and program through `UiPreview` (a copy on the UI device)
+- [x] 3.5 Scene thumbnails copy from the UI-side picture (they stay on the UI device)
+- [x] 3.6 Fall back to one shared device when the second device, fences or shared textures fail, and on Linux/macOS
+- [x] 3.7 Audit every other use of the app's `GpuContext` (clips, montages and thumbnails stay on the UI device; the engine gets its own)
 
 ## 4. Verification
-- [ ] 4.1 Run `cargo test --workspace` and `cargo clippy --workspace --all-targets`
+- [x] 4.1 Run `cargo test --workspace` and `cargo clippy --workspace --all-targets` (plus the two-device tests in `estream-gpu/tests/bridge.rs` and `engine.rs`)
 - [ ] 4.2 Resize, maximize and restore the window while streaming: no `GpuWaitTimeout` in the log and the UI is drawn at the right size
 - [ ] 4.3 Run a fullscreen game with Game capture for 10+ minutes on the Windows 10 test machine: output fps holds, no watchdog stall, clean "engine stopped" on exit

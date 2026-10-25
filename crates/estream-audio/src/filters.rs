@@ -328,9 +328,13 @@ impl AudioFilter for NoiseSuppression {
 
     fn process(&mut self, block: &mut Block) {
         // RNNoise works on 480-sample frames at 48 kHz in 16-bit range — exactly one block.
+        // A mono mic arrives as two equal channels: denoise once and copy.
+        let mono = block.l == block.r;
+        let channels = if mono { 1 } else { 2 };
         for (channel, state) in [&mut block.l, &mut block.r]
             .into_iter()
             .zip(self.states.iter_mut())
+            .take(channels)
         {
             for (dst, src) in self.input.iter_mut().zip(channel.iter()) {
                 *dst = src * 32768.0;
@@ -339,6 +343,9 @@ impl AudioFilter for NoiseSuppression {
             for (dst, src) in channel.iter_mut().zip(self.output.iter()) {
                 *dst = src / 32768.0;
             }
+        }
+        if mono {
+            block.r = block.l;
         }
     }
 }
@@ -442,6 +449,7 @@ mod tests {
                 energy_in += b.rms()[0];
             }
             ns.process(&mut b);
+            assert_eq!(b.l, b.r, "a mono input stays mono");
             if n >= 25 {
                 energy_out += b.rms()[0];
             }

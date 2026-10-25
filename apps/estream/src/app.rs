@@ -44,7 +44,10 @@ pub struct App {
     window: slint::Weak<AppWindow>,
     paths: Paths,
     pub settings: Settings,
+    /// The UI's GPU device (Slint draws with it; clips and montages render on it).
     gpu: GpuContext,
+    /// The studio engine's device: its own on Windows, else the UI's.
+    engine_gpu: GpuContext,
     engine: Option<Engine>,
     subscription: Option<Subscription>,
     collection: PathBuf,
@@ -106,6 +109,22 @@ pub struct App {
     /// The last picture of each scene (a GPU copy, refreshed twice a second).
     scene_thumbs: HashMap<SceneId, (estream_gpu::wgpu::Texture, slint::Image)>,
     thumb_at: Instant,
+    /// How much of the window can be seen, re-checked a few times a second; sets how often
+    /// it redraws (each new picture or meter value redraws the whole window).
+    visibility: Visibility,
+    visibility_at: Instant,
+    /// When a canvas picture was last handed to the window.
+    picture_at: Instant,
+    /// The textures the main view and the studio Program view show; each new canvas
+    /// picture is copied into them (see `show_picture`).
+    main_picture: Option<ShownPicture>,
+    program_picture: Option<ShownPicture>,
+    /// Studio mode when the pictures were handed to the views.
+    pictures_studio: bool,
+    /// When the live scene card last got a new picture, and its pictures on the UI's device
+    /// (a new image each time, unlike the views).
+    card_at: Instant,
+    card_picture: estream_engine::UiPreview,
     /// What the shader editor is editing.
     shader_target: ShaderTarget,
     /// Canvas shown and edited in the studio (`None` = the first).
@@ -678,7 +697,13 @@ fn key_from_text(text: &str) -> Option<Key> {
 }
 
 impl App {
-    pub fn new(window: &AppWindow, paths: Paths, settings: Settings, gpu: GpuContext) -> Shared {
+    pub fn new(
+        window: &AppWindow,
+        paths: Paths,
+        settings: Settings,
+        gpu: GpuContext,
+        engine_gpu: GpuContext,
+    ) -> Shared {
         let clipper = crate::clips::Clipper::new(&settings.clips, &settings.recording);
         let recordings = estream_clips::Library::open_flat(&settings.recording.folder);
         let twitch = crate::twitch::Session::new(settings.twitch.clone());
@@ -697,6 +722,7 @@ impl App {
             paths,
             settings,
             gpu,
+            engine_gpu,
             engine: None,
             subscription: None,
             scenes_model: Rc::new(VecModel::default()),
@@ -739,6 +765,14 @@ impl App {
             last_preview_sequence: 0,
             scene_thumbs: HashMap::new(),
             thumb_at: Instant::now(),
+            visibility: Visibility::Focused,
+            visibility_at: Instant::now(),
+            picture_at: Instant::now(),
+            main_picture: None,
+            program_picture: None,
+            pictures_studio: false,
+            card_at: Instant::now(),
+            card_picture: Default::default(),
             shader_target: ShaderTarget::Transition,
             current_canvas: None,
             last_output: None,
@@ -2349,6 +2383,23 @@ impl App {
         }
     }
 
+    /// Lets hardware encoders take frames straight from the GPU (Windows; on unless the
+    /// hidden `gpu_encode` setting turns it off).
+    fn gpu_export(&self) -> Option<Arc<dyn estream_engine::GpuExport>> {
+        if !self.settings.gpu_encode {
+            tracing::info!("GPU frames for encoders turned off in settings");
+            return None;
+        }
+        #[cfg(windows)]
+        {
+            // The planes are rendered by the engine, so they live on its device.
+            estream_media::gpu_frames::export(&self.engine_gpu)
+                .map(|e| e as Arc<dyn estream_engine::GpuExport>)
+        }
+        #[cfg(not(windows))]
+        None
+    }
+
     fn start(&mut self, project: Project) {
         let mut registry = estream_engine::SourceRegistry::with_builtins();
         estream_capture::register_all(&mut registry);
@@ -2369,8 +2420,9 @@ impl App {
         }
         let config = EngineConfig {
             registry,
-            gpu: Some(self.gpu.clone()),
+            gpu: Some(self.engine_gpu.clone()),
             collection_path: Some(self.collection.clone()),
+            gpu_export: self.gpu_export(),
             ..Default::default()
         };
         // The camera follows the collection (it reads from the engine being replaced).
@@ -2481,12 +2533,35 @@ impl App {
         self.tick_stream_fill();
         self.tick_youtube_start();
         self.tick_details();
-        if let Some(engine) = &self.engine {
-            let image = |frame: estream_engine::CanvasFrame<'_>| {
-                slint::Image::try_from(frame.preview.clone())
-                    .map_err(|e| tracing::error!(error = %e, "preview texture rejected"))
-                    .ok()
-            };
+        if self.visibility_at.elapsed() >= Duration::from_millis(250) {
+            self.visibility_at = Instant::now();
+            let now = window_visibility(w.window());
+            if now != self.visibility {
+                tracing::debug!(from = ?self.visibility, to = ?now, "window visibility");
+                self.visibility = now;
+            }
+            if let Some(engine) = &self.engine {
+                engine.set_preview_wanted(now != Visibility::Hidden);
+            }
+        }
+        // Hidden: nothing to update on screen. In the background (e.g. a second monitor
+        // while playing) pictures and meters update less often, halving the redraws.
+        let hidden = self.visibility == Visibility::Hidden;
+        let (picture_every, meters_every) = match self.visibility {
+            Visibility::Focused => (Duration::ZERO, Duration::from_millis(33)),
+            _ => (Duration::from_millis(33), Duration::from_millis(66)),
+        };
+        let picture_due = self.picture_at.elapsed() >= picture_every;
+        if self.pictures_studio != self.studio {
+            // The views swap images when studio mode toggles: hand them over afresh.
+            self.pictures_studio = self.studio;
+            self.main_picture = None;
+            self.program_picture = None;
+        }
+        if let Some(engine) = &self.engine
+            && !hidden
+        {
+            let mut redraw = false;
             let snapshot = engine.snapshot();
             if let Some((canvas, on_air)) =
                 self.canvas_of(&snapshot).map(|c| (c.id, c.active_scene))
@@ -2497,39 +2572,79 @@ impl App {
                     self.thumb_at = Instant::now();
                 }
                 // Program: the main view normally, the Program view in studio mode.
-                if let Some(output) = engine.canvas_output(canvas)
+                if picture_due
+                    && let Some(output) = engine.canvas_output(canvas)
                     && let Some(frame) = output.latest()
                     && frame.sequence != self.last_sequence
                 {
                     self.last_sequence = frame.sequence;
-                    if snap && let Some(scene) = on_air {
-                        changed |=
-                            snap_thumb(&self.gpu, &mut self.scene_thumbs, scene, frame.preview);
-                    }
-                    if let Some(img) = image(frame) {
-                        if self.studio {
-                            w.set_program_frame(img);
-                        } else {
-                            w.set_preview_frame(img);
+                    self.picture_at = Instant::now();
+                    // The live scene card refreshes 4 times a second with its own image.
+                    if !self.studio
+                        && self.card_at.elapsed() >= Duration::from_millis(250)
+                        && let Some(card) = self.card_picture.show(&self.gpu, &output, &frame)
+                    {
+                        self.card_at = Instant::now();
+                        if let Ok(img) = slint::Image::try_from(card) {
+                            w.set_card_frame(img);
                         }
+                    }
+                    let shown = if self.studio {
+                        &mut self.program_picture
+                    } else {
+                        &mut self.main_picture
+                    };
+                    let result = show_picture(&self.gpu, shown, &output, &frame);
+                    if snap
+                        && result != Shown::Kept
+                        && let Some(scene) = on_air
+                        && let Some(picture) = shown.as_ref()
+                    {
+                        changed |=
+                            snap_thumb(&self.gpu, &mut self.scene_thumbs, scene, &picture.texture);
+                    }
+                    match result {
+                        Shown::New(img) if self.studio => w.set_program_frame(img),
+                        Shown::New(img) => w.set_preview_frame(img),
+                        Shown::Updated => redraw = true,
+                        Shown::Kept => {}
                     }
                 }
                 // Studio Preview: the editable main view.
                 if self.studio
+                    && picture_due
                     && let Some(output) = engine.preview_output(canvas)
                     && let Some(frame) = output.latest()
                     && frame.sequence != self.last_preview_sequence
                 {
                     self.last_preview_sequence = frame.sequence;
-                    if snap && let Some(scene) = self.preview_scene {
-                        changed |=
-                            snap_thumb(&self.gpu, &mut self.scene_thumbs, scene, frame.preview);
+                    if self.card_at.elapsed() >= Duration::from_millis(250)
+                        && let Some(card) = self.card_picture.show(&self.gpu, &output, &frame)
+                    {
+                        self.card_at = Instant::now();
+                        if let Ok(img) = slint::Image::try_from(card) {
+                            w.set_card_frame(img);
+                        }
                     }
-                    if let Some(img) = image(frame) {
-                        w.set_preview_frame(img);
+                    let result = show_picture(&self.gpu, &mut self.main_picture, &output, &frame);
+                    if snap
+                        && result != Shown::Kept
+                        && let Some(scene) = self.preview_scene
+                        && let Some(picture) = &self.main_picture
+                    {
+                        changed |=
+                            snap_thumb(&self.gpu, &mut self.scene_thumbs, scene, &picture.texture);
+                    }
+                    match result {
+                        Shown::New(img) => w.set_preview_frame(img),
+                        Shown::Updated => redraw = true,
+                        Shown::Kept => {}
                     }
                 }
                 w.set_transition_busy(engine.is_transitioning(canvas));
+            }
+            if redraw {
+                w.window().request_redraw();
             }
             w.set_media_inspect(self.media_inspect());
             let (browser, status) = self.browser_inspect();
@@ -2575,7 +2690,7 @@ impl App {
         if changed {
             self.refresh();
         }
-        if !changed && self.mixer_at.elapsed() >= Duration::from_millis(33) {
+        if !changed && !hidden && self.mixer_at.elapsed() >= meters_every {
             self.mixer_at = Instant::now();
             self.update_mixer();
         }
@@ -2631,13 +2746,7 @@ impl App {
         self.stats_rendered = rendered;
         self.stats_at = Instant::now();
         w.set_target_fps(canvas.fps.as_f64() as f32);
-        w.set_render_ms(
-            output
-                .stats
-                .last_render_ns
-                .load(std::sync::atomic::Ordering::Relaxed) as f32
-                / 1e6,
-        );
+        w.set_render_ms(render_ms(engine, &output) as f32);
         w.set_lagged(
             output
                 .stats
@@ -7086,7 +7195,7 @@ impl App {
                     rendered: out.stats.rendered.load(Relaxed),
                     lagged: out.stats.lagged.load(Relaxed),
                     encoder_dropped: out.stats.encoder_dropped.load(Relaxed),
-                    render_ms: out.stats.last_render_ns.load(Relaxed) as f64 / 1e6,
+                    render_ms: render_ms(engine, &out),
                 })
             })
             .collect();
@@ -7387,11 +7496,40 @@ impl App {
                 advice: a.advice.into(),
             })
             .collect();
+        // CPU time per video-thread stage; share of the whole frame in c3.
+        let stages: Vec<StatRow> = self
+            .engine
+            .as_ref()
+            .and_then(|e| e.video_timings())
+            .filter(|t| t.frames > 0)
+            .map(|t| {
+                let total = t.total.avg.as_secs_f64().max(1e-9);
+                let row = |name: &str, s: &estream_engine::StageTiming, share: bool| StatRow {
+                    name: name.into(),
+                    detail: SharedString::new(),
+                    c1: format!("{:.2} ms", s.avg.as_secs_f64() * 1e3).into(),
+                    c2: format!("{:.2} ms", s.p95.as_secs_f64() * 1e3).into(),
+                    c3: if share {
+                        format!("{:.0}%", s.avg.as_secs_f64() / total * 100.0).into()
+                    } else {
+                        SharedString::new()
+                    },
+                    c4: SharedString::new(),
+                    level: 0,
+                };
+                t.stages
+                    .iter()
+                    .map(|(stage, s)| row(stage.label(), s, true))
+                    .chain(std::iter::once(row("Whole frame", &t.total, false)))
+                    .collect()
+            })
+            .unwrap_or_default();
         w.set_stats_form(StatsForm {
             tiles: ModelRc::new(VecModel::from(tiles)),
             encoders: ModelRc::new(VecModel::from(encoders)),
             destinations: ModelRc::new(VecModel::from(destinations)),
             alerts: ModelRc::new(VecModel::from(alerts)),
+            stages: ModelRc::new(VecModel::from(stages)),
         });
     }
 
@@ -9969,10 +10107,107 @@ fn push_layers(
     }
 }
 
-/// Meter position (0..1) for a linear level on a -60..0 dB scale.
-/// Copies a scene's current picture into its thumbnail texture (made on first use, and again
-/// when the canvas size changes). Returns whether a new thumbnail was made, so the scene cards
-/// need rebuilding; later copies update the texture the card already shows.
+/// A texture a view shows permanently (the view holds its Slint image).
+struct ShownPicture {
+    texture: estream_gpu::wgpu::Texture,
+}
+
+/// What [`show_picture`] did with a canvas frame.
+#[derive(Debug, PartialEq)]
+enum Shown {
+    /// The view's texture was (re)made: hand the view this image.
+    New(slint::Image),
+    /// The view's texture has the new picture: the view only needs a redraw.
+    Updated,
+    /// The engine left this frame's picture alone; the view keeps the last one.
+    Kept,
+}
+
+/// Copies a canvas picture into the view's own texture on the UI's GPU device (from the
+/// engine's device when it has its own). Handing Slint a new image for every frame costs about
+/// as much CPU again as the redraw itself, so the image only changes when the texture is made.
+fn show_picture(
+    gpu: &GpuContext,
+    shown: &mut Option<ShownPicture>,
+    output: &estream_engine::CanvasOutput,
+    frame: &estream_engine::CanvasFrame<'_>,
+) -> Shown {
+    let size = frame.preview.size();
+    let mut made = None;
+    if shown.as_ref().is_none_or(|s| s.texture.size() != size) {
+        let texture = estream_gpu::create_preview_texture(gpu, size.width, size.height);
+        let Ok(image) = slint::Image::try_from(texture.clone())
+            .map_err(|e| tracing::error!(error = %e, "preview texture rejected"))
+        else {
+            return Shown::Kept;
+        };
+        made = Some(image);
+        *shown = Some(ShownPicture { texture });
+    }
+    let Some(target) = shown.as_ref() else {
+        return Shown::Kept;
+    };
+    let copied = output.copy_preview(gpu, frame, &target.texture);
+    match made {
+        // A new texture is handed over even when this frame was skipped: the next fills it.
+        Some(image) => Shown::New(image),
+        None if copied => Shown::Updated,
+        None => Shown::Kept,
+    }
+}
+
+/// How much of the studio window can be seen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Visibility {
+    /// In front, with focus.
+    Focused,
+    /// On screen without focus (e.g. a second monitor while a game is played).
+    Background,
+    /// Minimized, hidden, or covered by a fullscreen game on its monitor.
+    Hidden,
+}
+
+fn window_visibility(window: &slint::Window) -> Visibility {
+    if window.is_minimized() || !window.is_visible() {
+        return Visibility::Hidden;
+    }
+    #[cfg(windows)]
+    {
+        use estream_capture::windows::enumerate;
+        if enumerate::foreground_is_ours() {
+            return Visibility::Focused;
+        }
+        let (pos, size) = (window.position(), window.size());
+        let (x, y) = (
+            pos.x + size.width as i32 / 2,
+            pos.y + size.height as i32 / 2,
+        );
+        if enumerate::fullscreen_covers(x, y) {
+            return Visibility::Hidden;
+        }
+        Visibility::Background
+    }
+    #[cfg(not(windows))]
+    Visibility::Focused
+}
+
+/// Average video-thread time per frame over the last couple of seconds, in milliseconds
+/// (the last frame's time until there is history).
+fn render_ms(engine: &estream_engine::Engine, output: &estream_engine::CanvasOutput) -> f64 {
+    engine.video_timings().filter(|t| t.frames > 0).map_or(
+        output
+            .stats
+            .last_render_ns
+            .load(std::sync::atomic::Ordering::Relaxed) as f64
+            / 1e6,
+        |t| t.total.avg.as_secs_f64() * 1e3,
+    )
+}
+
+/// Copies a scene's current picture (on the UI's device) into its thumbnail texture (made on
+/// first use, and again when the canvas size changes). Returns whether a new thumbnail was
+/// made, so the scene cards need rebuilding; later copies update the texture the card already
+/// shows.
 fn snap_thumb(
     gpu: &GpuContext,
     thumbs: &mut HashMap<SceneId, (estream_gpu::wgpu::Texture, slint::Image)>,
@@ -10045,6 +10280,7 @@ fn check_setup_name(name: &str, taken: &[String]) -> Result<String, String> {
     Ok(name.to_owned())
 }
 
+/// Meter position (0..1) for a linear level on a -60..0 dB scale.
 fn meter_position(level: f32) -> f32 {
     let db = estream_engine::audio_engine::db::from_gain(level);
     ((db + 60.0) / 60.0).clamp(0.0, 1.0)

@@ -203,7 +203,10 @@ mod tests {
         assert!(clip.player().buffered_audio() <= lead + BLOCK * 4);
         let started = std::time::Instant::now();
         drop(clip);
-        assert!(started.elapsed() < Duration::from_secs(1), "closing doesn't hang");
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "closing doesn't hang"
+        );
     }
 
     #[test]

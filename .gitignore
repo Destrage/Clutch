@@ -4,3 +4,4 @@
 /tests/output/
 /third_party/
 /.secrets/
+/tools/bench/results/

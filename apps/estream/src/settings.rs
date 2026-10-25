@@ -200,6 +200,9 @@ pub struct Settings {
     pub game_audio: GameAudio,
     /// Mouse wheel scrolling over the preview pans the canvas (default: off).
     pub scroll_pan: bool,
+    /// Hardware encoders take frames on the GPU (default: on). Not in the UI: set it to
+    /// `false` in settings.json to force CPU frames when troubleshooting.
+    pub gpu_encode: bool,
     /// Single-stream settings from before multistream; read once, migrated, never written.
     #[serde(rename = "stream", skip_serializing)]
     legacy_stream: Option<estream_media::StreamSettings>,
@@ -540,6 +543,7 @@ impl Default for Settings {
             ask_details: true,
             game_audio: GameAudio::Ask,
             scroll_pan: false,
+            gpu_encode: true,
             legacy_stream: None,
             legacy_key: None,
         }

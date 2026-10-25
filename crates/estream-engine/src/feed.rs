@@ -1,22 +1,29 @@
-//! Delivers canvas frames to encoders as NV12 in CPU memory, without ever
-//! stalling the video thread: conversion and copies are recorded with the
-//! frame, buffers are mapped asynchronously, and frames that can't be taken
-//! (no free buffer, consumer queue full) are dropped and counted.
+//! Delivers canvas frames to encoders without ever stalling the video thread.
+//!
+//! CPU consumers get NV12 in CPU memory: conversion and copies are recorded with the
+//! frame, buffers are mapped asynchronously, and frames that can't be taken (no free
+//! buffer, consumer queue full) are dropped and counted. GPU consumers (hardware
+//! encoders, when a [`crate::GpuExport`] is configured) get the NV12 planes on the GPU
+//! instead; see [`GpuRing`].
 
+use crate::gpu_export::{ExportPlanes, GpuExport, GpuFrame};
 use crossbeam_channel::{Receiver, Sender, TrySendError};
 use estream_core::{CanvasId, Timestamp};
 use estream_gpu::{ConvertInput, GpuContext, Nv12Target, OutputConverter, wgpu};
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
-/// One NV12 frame: `height` rows of Y (`width` bytes each), then
-/// `height / 2` rows of interleaved CbCr (`width` bytes each).
+/// One NV12 frame. CPU frames hold `height` rows of Y (`width` bytes each), then
+/// `height / 2` rows of interleaved CbCr (`width` bytes each); GPU frames hold no
+/// bytes and carry [`VideoFrame::gpu`] instead.
 pub struct VideoFrame {
     pub timestamp: Timestamp,
     pub width: u32,
     pub height: u32,
     pub data: Vec<u8>,
+    /// Set for frames left on the GPU.
+    pub gpu: Option<GpuFrame>,
     recycle: Option<Sender<Vec<u8>>>,
 }
 
@@ -29,6 +36,19 @@ impl VideoFrame {
             width,
             height,
             data,
+            gpu: None,
+            recycle: None,
+        }
+    }
+
+    /// A frame whose NV12 planes stay on the GPU.
+    pub fn from_gpu(timestamp: Timestamp, width: u32, height: u32, gpu: GpuFrame) -> Self {
+        Self {
+            timestamp,
+            width,
+            height,
+            data: Vec::new(),
+            gpu: Some(gpu),
             recycle: None,
         }
     }
@@ -67,6 +87,15 @@ pub struct VideoConsumer {
     pub id: u64,
     pub canvas: CanvasId,
     pub tx: Sender<VideoFrame>,
+    /// Wants GPU frames. The consumer clears it to fall back to CPU frames.
+    pub gpu: Arc<AtomicBool>,
+}
+
+impl VideoConsumer {
+    /// Whether this consumer gets GPU frames from `export`.
+    pub(crate) fn takes_gpu(&self, export: Option<&dyn GpuExport>) -> bool {
+        export.is_some() && self.gpu.load(Ordering::Relaxed)
+    }
 }
 
 const IDLE: u8 = 0;
@@ -185,8 +214,15 @@ impl ReadbackRing {
         self.pending.push_back((index, timestamp));
     }
 
-    /// Hands every mapped frame (in order) to the canvas's consumers.
-    pub fn deliver(&mut self, consumers: &[VideoConsumer], canvas: CanvasId, dropped: &AtomicU64) {
+    /// Hands every mapped frame (in order) to the canvas's CPU consumers.
+    pub fn deliver(
+        &mut self,
+        consumers: &[VideoConsumer],
+        canvas: CanvasId,
+        export: Option<&dyn GpuExport>,
+        dropped: &AtomicU64,
+    ) {
+        let mine = |c: &&VideoConsumer| c.canvas == canvas && !c.takes_gpu(export);
         while let Some(&(index, timestamp)) = self.pending.front() {
             let slot = &self.slots[index];
             match slot.state.load(Ordering::Acquire) {
@@ -218,8 +254,8 @@ impl ReadbackRing {
             slot.buffer.unmap();
             slot.state.store(IDLE, Ordering::Release);
 
-            let count = consumers.iter().filter(|c| c.canvas == canvas).count();
-            for (i, consumer) in consumers.iter().filter(|c| c.canvas == canvas).enumerate() {
+            let count = consumers.iter().filter(mine).count();
+            for (i, consumer) in consumers.iter().filter(mine).enumerate() {
                 let frame_data = if i + 1 == count {
                     std::mem::take(&mut data)
                 } else {
@@ -230,6 +266,7 @@ impl ReadbackRing {
                     width: self.width,
                     height: self.height,
                     data: frame_data,
+                    gpu: None,
                     recycle: Some(self.pool_tx.clone()),
                 };
                 match consumer.tx.try_send(frame) {
@@ -241,6 +278,102 @@ impl ReadbackRing {
                 }
             }
         }
+    }
+}
+
+/// Per-canvas ring of NV12 planes that stay on the GPU, for consumers that take
+/// [`GpuFrame`]s. A slot is reused only once every frame holding its handle was dropped;
+/// before rendering into it again the queue waits (GPU side) for the consumer's last read.
+pub(crate) struct GpuRing {
+    pub width: u32,
+    pub height: u32,
+    slots: Vec<ExportPlanes>,
+    /// Slots rendered this frame, waiting for the post-submit fence value.
+    pending: Option<(usize, Timestamp)>,
+}
+
+impl GpuRing {
+    pub const SLOTS: usize = 4;
+
+    /// `None` for odd sizes or when the export can't create planes.
+    pub fn new(gpu: &GpuContext, export: &dyn GpuExport, width: u32, height: u32) -> Option<Self> {
+        if !width.is_multiple_of(2) || !height.is_multiple_of(2) {
+            return None;
+        }
+        let slots = (0..Self::SLOTS)
+            .map(|_| export.create_planes(gpu, width, height))
+            .collect::<Option<Vec<_>>>()?;
+        Some(Self {
+            width,
+            height,
+            slots,
+            pending: None,
+        })
+    }
+
+    /// Records NV12 conversion of `input` into a free slot. Returns `false` (frame dropped)
+    /// if every slot is still held by consumers.
+    pub fn record(
+        &mut self,
+        gpu: &GpuContext,
+        export: &dyn GpuExport,
+        converter: &OutputConverter,
+        input: &ConvertInput,
+        encoder: &mut wgpu::CommandEncoder,
+        timestamp: Timestamp,
+    ) -> bool {
+        let Some(index) = self
+            .slots
+            .iter()
+            .position(|s| Arc::strong_count(&s.handle) == 1)
+        else {
+            return false;
+        };
+        let slot = &self.slots[index];
+        export.wait_released(gpu, &slot.handle);
+        converter.to_nv12(encoder, input, &slot.target);
+        self.pending = Some((index, timestamp));
+        true
+    }
+
+    /// After submit: hands the frame recorded this tick to the canvas's GPU consumers.
+    pub fn deliver(
+        &mut self,
+        consumers: &[VideoConsumer],
+        canvas: CanvasId,
+        export: &dyn GpuExport,
+        ready: u64,
+        dropped: &AtomicU64,
+    ) {
+        let Some((index, timestamp)) = self.pending.take() else {
+            return;
+        };
+        let handle = &self.slots[index].handle;
+        for consumer in consumers
+            .iter()
+            .filter(|c| c.canvas == canvas && c.takes_gpu(Some(export)))
+        {
+            let frame = VideoFrame::from_gpu(
+                timestamp,
+                self.width,
+                self.height,
+                GpuFrame {
+                    planes: handle.clone(),
+                    ready,
+                },
+            );
+            match consumer.tx.try_send(frame) {
+                Ok(()) => {}
+                Err(TrySendError::Full(_)) => {
+                    dropped.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(TrySendError::Disconnected(_)) => {}
+            }
+        }
+    }
+
+    pub fn has_pending(&self) -> bool {
+        self.pending.is_some()
     }
 }
 

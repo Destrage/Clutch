@@ -1,3 +1,4 @@
+use crate::PreviewBridge;
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -17,7 +18,7 @@ pub struct GpuOptions {
     pub force_software: bool,
 }
 
-/// Shared GPU device. Cheap to clone; the engine and UI share one instance.
+/// A GPU device and its queue. Cheap to clone.
 #[derive(Clone, Debug)]
 pub struct GpuContext {
     pub instance: wgpu::Instance,
@@ -25,6 +26,8 @@ pub struct GpuContext {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub info: Arc<wgpu::AdapterInfo>,
+    /// On the engine's device when the UI has its own: shares previews with the UI.
+    pub bridge: Option<Arc<PreviewBridge>>,
 }
 
 impl GpuContext {
@@ -79,29 +82,46 @@ impl GpuContext {
             driver = %info.driver_info,
             "GPU adapter selected"
         );
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: Some("estream"),
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
-                memory_hints: wgpu::MemoryHints::Performance,
-                ..Default::default()
-            })
-            .await?;
-        // A live show must not abort on a GPU validation error: log it instead.
-        let dev = device.clone();
-        device.on_uncaptured_error(Arc::new(move |e: wgpu::Error| {
-            tracing::error!(error = %e, "GPU validation error");
-            #[cfg(windows)]
-            log_device_removed_reason(&dev);
-        }));
+        let (device, queue) = request_device(&adapter, "estream").await?;
         Ok(Self {
             instance,
             adapter,
             device,
             queue,
             info: Arc::new(info),
+            bridge: None,
         })
+    }
+
+    /// A device for the UI and one for the engine, so UI presents and window resizes never
+    /// wait behind compositor submits. Both are on one adapter and share previews through a
+    /// [`PreviewBridge`] (Windows, DX12). Elsewhere, or if that fails, both get one device.
+    /// Returns `(ui, engine)`.
+    pub fn new_pair(options: &GpuOptions) -> Result<(Self, Self), GpuError> {
+        let ui = Self::new_headless(options)?;
+        if !cfg!(windows) || ui.info.backend != wgpu::Backend::Dx12 {
+            return Ok((ui.clone(), ui));
+        }
+        let (device, queue) = match pollster::block_on(request_device(&ui.adapter, "engine")) {
+            Ok(pair) => pair,
+            Err(e) => {
+                tracing::warn!(error = %e, "no separate engine GPU device; the UI shares its own");
+                return Ok((ui.clone(), ui));
+            }
+        };
+        let mut engine = Self {
+            device,
+            queue,
+            ..ui.clone()
+        };
+        match PreviewBridge::new(&engine, &ui) {
+            Some(bridge) => {
+                engine.bridge = Some(Arc::new(bridge));
+                tracing::info!("the engine renders on its own GPU device");
+                Ok((ui, engine))
+            }
+            None => Ok((ui.clone(), ui)),
+        }
     }
 
     /// Creates a 2D texture usable as a render target and shader input.
@@ -138,6 +158,31 @@ impl GpuContext {
         #[cfg(windows)]
         raise_scheduling_priority(self);
     }
+}
+
+async fn request_device(
+    adapter: &wgpu::Adapter,
+    label: &str,
+) -> Result<(wgpu::Device, wgpu::Queue), GpuError> {
+    let (device, queue) = adapter
+        .request_device(&wgpu::DeviceDescriptor {
+            label: Some(label),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
+            memory_hints: wgpu::MemoryHints::Performance,
+            ..Default::default()
+        })
+        .await?;
+    // A live show must not abort on a GPU validation error: log it instead.
+    let dev = device.clone();
+    device.on_uncaptured_error(Arc::new(move |e: wgpu::Error| {
+        tracing::error!(error = %e, "GPU validation error");
+        #[cfg(windows)]
+        log_device_removed_reason(&dev);
+        #[cfg(not(windows))]
+        let _ = &dev;
+    }));
+    Ok((device, queue))
 }
 
 #[cfg(windows)]
