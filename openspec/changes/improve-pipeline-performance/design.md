@@ -37,21 +37,29 @@ documentation.
   D3D12 queue wait on the highest fence value among the slots it reads
   (`ID3D12CommandQueue::Wait`, through `wgpu::Queue::as_hal`). The wait is on the GPU; the CPU
   continues.
-- Slot reuse: a slot is only rewritten after the engine has signalled, on its own fence, that
-  the frame reading it finished. The ring grows from 3 to 4 slots so the writer always has one.
-- Fallback when `ID3D11Device5`/`ID3D11DeviceContext4` is unavailable (pre-1703 drivers): a
-  reusable event query per slot, polled without blocking by the video thread
-  (`GetData(..., D3D11_ASYNC_GETDATA_DONOTFLUSH)`). A slot becomes the newest frame only once
-  its query reports done. No CPU spin in either path.
+- Slot reuse: when the video thread moves to a newer slot it signals a second (D3D12-only)
+  fence on its queue; everything submitted before that signal is the last work that can read
+  the old slot. The capture side checks that fence's completed value (non-blocking) and only
+  writes slots that are free; if none is, the frame is dropped rather than waited for. The ring
+  grows from 3 to 4 slots, and the WGC frame pool from 2 to 3 buffers, since frames are now
+  released as soon as their copy is queued.
+- Fallback when `ID3D11Device5`/`ID3D11DeviceContext4` is unavailable (drivers older than
+  WDDM 2.2, below the Windows 10 2004 minimum in practice): the capture thread waits for its
+  copy as before, but sleeps between polls instead of spinning. A non-blocking query handoff
+  was considered and left out; it adds a second ordering path for hardware Clutch doesn't
+  target.
 - Alternative considered: keep the spin but cap the capture rate. Rejected as the only fix:
   even at 60 copies per second, each spin holds a thread while the GPU is busy with the game.
 
 ### 2. Capture rate cap
 - `GraphicsCaptureSession::MinUpdateInterval` (Windows 11 24H2 and later) is set to the
   shortest frame interval of the canvases that show the source.
-- Where it isn't available, the callback releases a frame without copying when less than
-  ~80% of that interval has passed since the last copied frame, so a 240 fps game costs about
-  60 copies at 60 fps, not 240.
+- The interval comes from the source itself: the reader measures the time between its ticks
+  (the video thread's frame interval, i.e. the fastest canvas) and smooths it.
+- The callback releases a frame without copying when less than half that interval has passed
+  since the last copied frame, and `MinUpdateInterval` is set to the same half interval. Half
+  rather than the whole interval keeps a fresh frame for every render instead of beating
+  against the game's rate: a 240 fps game costs about 120 copies per second at 60 fps, not 240.
 
 ### 3. GPU frames to hardware encoders
 - Per canvas with a hardware-encoder consumer, the engine keeps a ring of 4 NV12 textures

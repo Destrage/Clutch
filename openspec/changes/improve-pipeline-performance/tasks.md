@@ -4,11 +4,11 @@
 - [ ] 1.3 Take a memory breakdown of the bench scene (VMMap + D3D12 allocations) and note the largest items in this change's design
 
 ## 2. Capture without CPU waits
-- [ ] 2.1 Shared D3D11/D3D12 fence on the capture interop device; capture copies signal it instead of `flush_and_wait`
-- [ ] 2.2 Engine queue waits on the newest fence value of the slots a frame samples; slot reuse waits for the engine's reading frame to finish; ring of 4
-- [ ] 2.3 Event-query fallback, polled without blocking, when D3D11.4 fences are unavailable; reusable queries (no per-frame `CreateQuery`)
-- [ ] 2.4 Capture rate cap: `MinUpdateInterval` where supported, early frame release otherwise, from the fastest canvas showing the source
-- [ ] 2.5 Tests: interop test for fence ordering; unit test for the rate cap; bench shows the capture thread no longer spinning
+- [x] 2.1 Shared D3D11/D3D12 fence on the capture interop device; capture copies signal it instead of `flush_and_wait`
+- [x] 2.2 Engine queue waits on the newest fence value of the slots a frame samples; slot reuse waits for the engine's reading frame to finish (non-blocking check, frame dropped if no slot is free); ring of 4, WGC pool of 3
+- [x] 2.3 Fallback without D3D11.4 fences: wait for the copy as before, sleeping between polls instead of spinning (see design.md for why not a query handoff)
+- [x] 2.4 Capture rate cap: `MinUpdateInterval` where supported plus early frame release, at half the video thread's measured frame interval
+- [ ] 2.5 Tests: interop test for fence ordering; unit tests for the rate cap and busy slots; bench shows the capture thread no longer spinning
 
 ## 3. GPU frames to hardware encoders
 - [ ] 3.1 Spike: can wgpu 30 render to NV12 plane views on DX12? Record the answer in design.md

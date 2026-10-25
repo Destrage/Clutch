@@ -15,7 +15,59 @@ fn d3d11_texture_is_visible_to_wgpu() {
     let shared = interop.create_shared(64, 32).unwrap();
     shared.clear(&interop, [1.0, 0.5, 0.0, 1.0]).unwrap();
     interop.flush_and_wait().unwrap();
+    let p = center_pixel(&gpu, &shared);
+    // D3D11 wrote UNORM (1.0, 0.5, 0.0); sampled as sRGB and re-encoded → same bytes.
+    assert!(
+        (p[0] as i32 - 255).abs() <= 1 && (p[1] as i32 - 128).abs() <= 1 && p[2] <= 1,
+        "{p:?}"
+    );
+}
 
+/// D3D11 writes are ordered before wgpu's reads by the shared fence alone (no CPU wait),
+/// and the release fence reports when wgpu's reads are done.
+#[test]
+fn fences_order_d3d11_writes_before_wgpu_reads() {
+    let gpu = GpuContext::new_headless(&GpuOptions::default()).unwrap();
+    let Ok(interop) = D3D11Interop::new(&gpu) else {
+        eprintln!("skipping: wgpu is not on D3D12");
+        return;
+    };
+    if !interop.has_fences() {
+        eprintln!("skipping: this driver has no D3D11.4 fences");
+        return;
+    }
+    let shared = interop.create_shared(64, 32).unwrap();
+    for (i, red) in [0.0f32, 1.0, 0.25, 0.75, 0.5].into_iter().enumerate() {
+        shared.clear(&interop, [red, 0.0, 1.0, 1.0]).unwrap();
+        let copied = interop.finish_copies().unwrap();
+        interop.wait_for_copy(copied);
+        let p = center_pixel(&gpu, &shared);
+        let want = (red * 255.0).round() as i32;
+        assert!(
+            (p[0] as i32 - want).abs() <= 1,
+            "frame {i}: {p:?}, want red {want}"
+        );
+
+        let released = interop.release_reads();
+        let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+        // The signal follows work that already finished, so it lands right away.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !interop.released(released) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "release fence never signalled"
+            );
+            std::thread::yield_now();
+        }
+    }
+}
+
+/// Renders `shared` into a canvas and returns the sRGB bytes of its centre pixel.
+fn center_pixel(
+    gpu: &GpuContext,
+    shared: &estream_capture::windows::d3d::SharedTexture,
+) -> [u8; 4] {
+    let gpu = gpu.clone();
     // Copy through a regular wgpu texture (shared ones are sample-only).
     let compositor = estream_gpu::Compositor::new(&gpu);
     let binding =
@@ -48,12 +100,7 @@ fn d3d11_texture_is_visible_to_wgpu() {
     );
     gpu.queue.submit([enc.finish()]);
     let pixels = readback::read_texture(&gpu, &preview).unwrap();
-    // D3D11 wrote UNORM (1.0, 0.5, 0.0); sampled as sRGB and re-encoded → same bytes.
-    let p = &pixels[(16 * 64 + 32) * 4..][..4];
-    assert!(
-        (p[0] as i32 - 255).abs() <= 1 && (p[1] as i32 - 128).abs() <= 1 && p[2] <= 1,
-        "{p:?}"
-    );
+    pixels[(16 * 64 + 32) * 4..][..4].try_into().unwrap()
 }
 
 fn glam_vec(x: f32, y: f32) -> estream_gpu::glam::Vec2 {

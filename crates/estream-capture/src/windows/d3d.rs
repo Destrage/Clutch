@@ -3,15 +3,24 @@
 //! Capture APIs on Windows hand out `ID3D11Texture2D`s. We create a D3D11 device
 //! on the same adapter as wgpu, copy captured frames into textures shared via NT
 //! handles, and open those textures in wgpu's D3D12 device — no CPU readback.
+//!
+//! Ordering is done on the GPU with two fences, so neither side waits on the CPU:
+//! capture copies signal a shared fence that wgpu's queue waits on before sampling,
+//! and wgpu's queue signals a second fence when it no longer reads a slot, which the
+//! capture side checks (without blocking) before writing that slot again.
 
 use crate::CaptureError;
 use estream_gpu::{GpuContext, wgpu};
-use windows::Win32::Foundation::{CloseHandle, HMODULE};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use windows::Win32::Foundation::{CloseHandle, GENERIC_ALL, HMODULE};
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE_UNKNOWN, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_11_1,
 };
 use windows::Win32::Graphics::Direct3D11::*;
-use windows::Win32::Graphics::Direct3D12::{ID3D12Device, ID3D12Resource};
+use windows::Win32::Graphics::Direct3D12::{
+    D3D12_FENCE_FLAG_NONE, ID3D12CommandQueue, ID3D12Device, ID3D12Fence, ID3D12Resource,
+};
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
 use windows::core::Interface;
@@ -30,11 +39,26 @@ pub struct D3D11Interop {
     pub context: ID3D11DeviceContext,
     d3d12: ID3D12Device,
     gpu: GpuContext,
+    /// `None` without D3D11.4 fences (old drivers): copies are then waited for on the CPU.
+    fences: Option<Arc<Fences>>,
+}
+
+/// The two fences that order capture copies and wgpu reads on the GPU.
+struct Fences {
+    context: ID3D11DeviceContext4,
+    /// Signalled by D3D11 after a capture copy; opened on D3D12 as `copied_12`.
+    copied_11: ID3D11Fence,
+    copied_12: ID3D12Fence,
+    copied: AtomicU64,
+    /// Signalled by wgpu's queue once earlier submissions no longer read a slot.
+    released: ID3D12Fence,
+    release: AtomicU64,
 }
 
 // SAFETY: the D3D11 device is created with multithread protection enabled
 // (`ID3D11Multithread::SetMultithreadProtected`), which makes the immediate
-// context safe to use from several threads; D3D12 devices are free-threaded.
+// context (and its `ID3D11DeviceContext4` view) safe to use from several threads;
+// D3D12 devices and fences are free-threaded.
 unsafe impl Send for D3D11Interop {}
 unsafe impl Sync for D3D11Interop {}
 
@@ -84,17 +108,91 @@ impl D3D11Interop {
                     tracing::debug!(error = %e, "capture GPU thread priority not raised");
                 }
             }
+            let fences = match Fences::new(&device, &context, &d3d12) {
+                Ok(f) => Some(Arc::new(f)),
+                Err(e) => {
+                    tracing::info!(error = %e, "capture fences unavailable; copies are waited for on the CPU");
+                    None
+                }
+            };
             Ok(Self {
                 device,
                 context,
                 d3d12,
                 gpu: gpu.clone(),
+                fences,
             })
         }
     }
 
     pub fn gpu(&self) -> &GpuContext {
         &self.gpu
+    }
+
+    /// Whether copies are ordered by GPU fences (else waited for on the CPU).
+    pub fn has_fences(&self) -> bool {
+        self.fences.is_some()
+    }
+
+    /// Makes the copies issued so far visible to wgpu. With fences this signals and flushes
+    /// without waiting and returns the value wgpu must wait for; without, it blocks until the
+    /// copies finished and returns 0.
+    pub fn finish_copies(&self) -> Result<u64, CaptureError> {
+        let Some(f) = &self.fences else {
+            self.flush_and_wait()?;
+            return Ok(0);
+        };
+        let value = f.copied.fetch_add(1, Ordering::Relaxed) + 1;
+        // SAFETY: the fence and context belong to this device; the context is multithread-protected.
+        unsafe {
+            f.context.Signal(&f.copied_11, value)?;
+            self.context.Flush();
+        }
+        Ok(value)
+    }
+
+    /// Makes wgpu's queue wait (on the GPU) until the copy that signalled `value` is done.
+    /// Call before submitting work that samples the copied texture.
+    pub fn wait_for_copy(&self, value: u64) {
+        let Some(f) = &self.fences else { return };
+        if value == 0 {
+            return;
+        }
+        if let Some(queue) = self.raw_queue() {
+            // SAFETY: command queues are free-threaded; the fence is open on this device.
+            if let Err(e) = unsafe { queue.Wait(&f.copied_12, value) } {
+                tracing::debug!(error = %e, "capture fence wait not queued");
+            }
+        }
+    }
+
+    /// Marks everything wgpu submitted so far as done with the slots it read. Returns the
+    /// value to pass to [`D3D11Interop::released`] (0 without fences: nothing to wait for).
+    pub fn release_reads(&self) -> u64 {
+        let Some(f) = &self.fences else { return 0 };
+        let Some(queue) = self.raw_queue() else {
+            return 0;
+        };
+        let value = f.release.fetch_add(1, Ordering::Relaxed) + 1;
+        // SAFETY: command queues are free-threaded; the fence was created on this device.
+        match unsafe { queue.Signal(&f.released, value) } {
+            Ok(()) => value,
+            Err(_) => 0,
+        }
+    }
+
+    /// Whether wgpu's work up to a [`D3D11Interop::release_reads`] value finished. Never blocks.
+    pub fn released(&self, value: u64) -> bool {
+        match &self.fences {
+            // SAFETY: reading a fence's completed value is free-threaded.
+            Some(f) => (unsafe { f.released.GetCompletedValue() }) >= value,
+            None => true,
+        }
+    }
+
+    fn raw_queue(&self) -> Option<ID3D12CommandQueue> {
+        // SAFETY: we only clone the raw COM queue reference; wgpu keeps using it as before.
+        unsafe { self.gpu.queue.as_hal::<wgpu::hal::api::Dx12>() }.map(|q| q.as_raw().clone())
     }
 
     /// Creates a BGRA texture shared between D3D11 (write) and wgpu (sample).
@@ -206,8 +304,44 @@ impl D3D11Interop {
                 if start.elapsed() > std::time::Duration::from_millis(250) {
                     return Err(CaptureError::Interop("D3D11 GPU work timed out".into()));
                 }
-                std::thread::yield_now();
+                // Sleep rather than spin: only drivers without fences come here, and
+                // they shouldn't cost a busy core.
+                std::thread::sleep(std::time::Duration::from_micros(250));
             }
+        }
+    }
+}
+
+impl Fences {
+    fn new(
+        device: &ID3D11Device,
+        context: &ID3D11DeviceContext,
+        d3d12: &ID3D12Device,
+    ) -> Result<Self, CaptureError> {
+        // SAFETY: COM calls with valid arguments; the NT handle is closed after D3D12 opened it.
+        unsafe {
+            let device5: ID3D11Device5 = device.cast()?;
+            let context: ID3D11DeviceContext4 = context.cast()?;
+            let mut copied_11: Option<ID3D11Fence> = None;
+            device5.CreateFence(0, D3D11_FENCE_FLAG_SHARED, &mut copied_11)?;
+            let copied_11 = copied_11
+                .ok_or_else(|| CaptureError::Interop("CreateFence returned nothing".into()))?;
+            let handle = copied_11.CreateSharedHandle(None, GENERIC_ALL.0, None)?;
+            let mut copied_12: Option<ID3D12Fence> = None;
+            let opened = d3d12.OpenSharedHandle(handle, &mut copied_12);
+            let _ = CloseHandle(handle);
+            opened?;
+            let copied_12 = copied_12
+                .ok_or_else(|| CaptureError::Interop("shared fence did not open".into()))?;
+            let released: ID3D12Fence = d3d12.CreateFence(0, D3D12_FENCE_FLAG_NONE)?;
+            Ok(Self {
+                context,
+                copied_11,
+                copied_12,
+                copied: AtomicU64::new(0),
+                released,
+                release: AtomicU64::new(0),
+            })
         }
     }
 }

@@ -235,8 +235,11 @@ impl VideoSource for CaptureSource {
                 self.start_async(ctx.gpu);
             }
         }
-        if let Some(capture) = &self.capture {
-            self.reader.tick(&capture.ring, ctx);
+        if let Some(capture) = &mut self.capture {
+            self.reader.tick(&capture.ring, ctx, &capture.interop);
+            if let Some(interval) = self.reader.frame_interval() {
+                capture.set_min_update_interval(interval.mul_f64(0.5));
+            }
             if let Some(e) = capture.ring.error() {
                 self.status = SourceStatus::Error(e);
             }

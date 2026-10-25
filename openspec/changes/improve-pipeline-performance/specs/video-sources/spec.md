@@ -11,12 +11,16 @@ after the capture copies on the GPU.
 
 #### Scenario: Older drivers
 - **WHEN** shared fences are unavailable
-- **THEN** capture falls back to non-blocking completion queries and still does not spin
+- **THEN** the capture thread waits for each copy while sleeping between checks, not spinning
+
+#### Scenario: Slot still in use
+- **WHEN** every free capture slot may still be read by submitted GPU work
+- **THEN** the new frame is dropped instead of overwriting a slot or waiting
 
 ### Requirement: Capture rate limited to need
-A capture source SHALL copy at most about as many frames per second as the fastest canvas
-showing it needs, releasing extra frames without copying them.
+A capture source SHALL copy at most about twice as many frames per second as the video thread
+renders, releasing extra frames without copying them.
 
 #### Scenario: 240 fps game on a 60 fps canvas
-- **WHEN** a game presents at 240 fps and is shown only on a 60 fps canvas
-- **THEN** the source copies about 60 frames per second
+- **WHEN** a game presents at 240 fps and the fastest canvas runs at 60 fps
+- **THEN** the source copies about 120 frames per second and every rendered frame has a new picture
