@@ -10,4 +10,4 @@
 
 ## 3. Verify
 - [x] 3.1 `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test -p estream`
-- [ ] 3.2 In the app: copy the YouTube and Kick links, sign in from a non-default browser, both connect
+- [x] 3.2 In the app: copy the YouTube and Kick links, sign in from a non-default browser, both connect
