@@ -10057,7 +10057,7 @@ enum Visibility {
     Focused,
     /// On screen without focus (e.g. a second monitor while a game is played).
     Background,
-    /// Minimized, in the tray, or covered by a fullscreen game on its monitor.
+    /// Minimized, hidden, or covered by a fullscreen game on its monitor.
     Hidden,
 }
 
