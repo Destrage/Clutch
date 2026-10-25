@@ -162,6 +162,13 @@ fn package_msi() -> Result<()> {
             &notices.join(format!("{font}-OFL.txt")),
         )?;
     }
+    // Strong noise suppression's vendored DeepFilterNet code and model.
+    for license in ["MIT", "APACHE"] {
+        copy(
+            &root.join(format!("crates/estream-denoise/LICENSE-{license}")),
+            &notices.join(format!("DeepFilterNet-{license}.txt")),
+        )?;
+    }
     copy(
         &release.join("CREDITS.html"),
         &notices.join("Chromium-CEF-credits.html"),
