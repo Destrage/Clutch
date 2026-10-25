@@ -126,6 +126,76 @@ pub fn trash(path: &Path) -> io::Result<()> {
     }
 }
 
+/// Puts `text` on the clipboard.
+pub fn copy_text(text: &str) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::Win32::System::Ole::CF_UNICODETEXT;
+        // UTF-16 with its terminating NUL.
+        let bytes: Vec<u8> = std::ffi::OsStr::new(text)
+            .encode_wide()
+            .chain([0])
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        set_clipboard(CF_UNICODETEXT.0 as u32, &bytes)
+    }
+    #[cfg(not(windows))]
+    {
+        use std::io::Write;
+        let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
+        let (tool, args, package): (&str, &[&str], &str) = if wayland {
+            ("wl-copy", &[], "wl-clipboard")
+        } else {
+            ("xclip", &["-selection", "clipboard"], "xclip")
+        };
+        let mut child = Command::new(tool)
+            .args(args)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|_| format!("copying needs {package} installed"))?;
+        child
+            .stdin
+            .take()
+            .ok_or("the clipboard tool didn't start")?
+            .write_all(text.as_bytes())
+            .map_err(|e| e.to_string())?;
+        // Both tools stay in the background to serve the clipboard; don't wait for them.
+        Ok(())
+    }
+}
+
+/// Replaces the clipboard's contents with `data` in `format`.
+#[cfg(windows)]
+fn set_clipboard(format: u32, data: &[u8]) -> Result<(), String> {
+    use windows::Win32::Foundation::{HANDLE, HGLOBAL};
+    use windows::Win32::System::DataExchange::{
+        CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+    };
+    use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
+
+    // SAFETY: the clipboard is opened and closed here. The global block is sized for `data`
+    // and written while locked; the clipboard owns it once SetClipboardData succeeds.
+    unsafe {
+        OpenClipboard(None).map_err(|e| e.to_string())?;
+        let result = (|| -> Result<(), String> {
+            EmptyClipboard().map_err(|e| e.to_string())?;
+            let mem: HGLOBAL = GlobalAlloc(GMEM_MOVEABLE, data.len()).map_err(|e| e.to_string())?;
+            let ptr = GlobalLock(mem).cast::<u8>();
+            if ptr.is_null() {
+                return Err("couldn't lock clipboard memory".into());
+            }
+            std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
+            let _ = GlobalUnlock(mem);
+            SetClipboardData(format, Some(HANDLE(mem.0)))
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        })();
+        let _ = CloseClipboard();
+        result
+    }
+}
+
 /// Puts `path` on the clipboard as a file, so it pastes into the file manager and chats.
 pub fn copy_file(path: &Path) -> Result<(), String> {
     #[cfg(windows)]
@@ -166,49 +236,23 @@ pub fn copy_file(path: &Path) -> Result<(), String> {
 #[cfg(windows)]
 fn copy_file_windows(path: &Path) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt;
-    use windows::Win32::Foundation::{HANDLE, HGLOBAL};
-    use windows::Win32::System::DataExchange::{
-        CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
-    };
-    use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
     use windows::Win32::System::Ole::CF_HDROP;
     use windows::Win32::UI::Shell::DROPFILES;
 
     // DROPFILES, then the path as UTF-16, then two NULs (the end of a one-file list).
-    let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0, 0]).collect();
     let header = size_of::<DROPFILES>();
-    let bytes = header + wide.len() * 2;
-    // SAFETY: the clipboard is opened and closed here. The global block is sized for the
-    // header plus the path and written while locked; the clipboard owns it once
-    // SetClipboardData succeeds.
-    unsafe {
-        OpenClipboard(None).map_err(|e| e.to_string())?;
-        let result = (|| -> Result<(), String> {
-            EmptyClipboard().map_err(|e| e.to_string())?;
-            let mem: HGLOBAL = GlobalAlloc(GMEM_MOVEABLE, bytes).map_err(|e| e.to_string())?;
-            let ptr = GlobalLock(mem).cast::<u8>();
-            if ptr.is_null() {
-                return Err("couldn't lock clipboard memory".into());
-            }
-            let drop = DROPFILES {
-                pFiles: header as u32,
-                fWide: true.into(),
-                ..Default::default()
-            };
-            std::ptr::copy_nonoverlapping((&raw const drop).cast::<u8>(), ptr, header);
-            std::ptr::copy_nonoverlapping(
-                wide.as_ptr().cast::<u8>(),
-                ptr.add(header),
-                wide.len() * 2,
-            );
-            let _ = GlobalUnlock(mem);
-            SetClipboardData(CF_HDROP.0 as u32, Some(HANDLE(mem.0)))
-                .map(|_| ())
-                .map_err(|e| e.to_string())
-        })();
-        let _ = CloseClipboard();
-        result
+    let drop = DROPFILES {
+        pFiles: header as u32,
+        fWide: true.into(),
+        ..Default::default()
+    };
+    // SAFETY: DROPFILES is a plain C struct; its bytes are read for its size only.
+    let mut data =
+        unsafe { std::slice::from_raw_parts((&raw const drop).cast::<u8>(), header) }.to_vec();
+    for unit in path.as_os_str().encode_wide().chain([0, 0]) {
+        data.extend_from_slice(&unit.to_le_bytes());
     }
+    set_clipboard(CF_HDROP.0 as u32, &data)
 }
 
 #[cfg(not(windows))]

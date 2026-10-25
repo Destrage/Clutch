@@ -712,6 +712,12 @@ component DestinationEditor inherits VerticalLayout {
                 kind: "ghost";
                 clicked => { root.set("account-open", 0); }
             }
+            if root.form.account-name == "" && (root.form.account-code != "" || (account-row.browser && root.form.account-connecting)): Button {
+                text: "Copy link";
+                kind: "ghost";
+                tooltip: "Copy the sign-in page's link, to open it in another browser";
+                clicked => { root.set("account-copy", 0); }
+            }
             if root.form.account-name == "" && root.form.account-connecting: Button {
                 text: "Cancel";
                 kind: "ghost";
@@ -720,6 +726,12 @@ component DestinationEditor inherits VerticalLayout {
             if root.form.account-name == "" && !root.form.account-connecting: Button {
                 text: "Connect " + account-row.platform;
                 clicked => { root.set("account-connect", 0); }
+            }
+            if root.form.account-name == "" && !root.form.account-connecting && account-row.browser: Button {
+                text: "Copy link";
+                kind: "ghost";
+                tooltip: "Copy the sign-in link instead of opening your default browser, to sign in from another browser";
+                clicked => { root.set("account-copy", 0); }
             }
             if root.form.account-name == "" && !root.form.account-connecting: Rectangle { horizontal-stretch: 1; }
         }
