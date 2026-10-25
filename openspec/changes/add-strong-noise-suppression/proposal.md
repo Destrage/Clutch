@@ -31,7 +31,7 @@ GPU time.
   parameter control in the filter settings, filter delay label), third-party notices.
 - New dependency: an ONNX runtime written in Rust (`tract`), plus the DeepFilterNet3
   low-latency model embedded in the binary (36 MB). No new DLLs.
-- CPU: Strong measured 12% of one core per mic (24x Light) on its own thread, never the GPU.
-  Re-measured after the `tract` port and on the Windows 10 laptop. Light is unchanged.
+- CPU: Strong measured 10.6% of one core per mic on its own thread, never the GPU; to be
+  measured on the Windows 10 laptop. Light is unchanged.
 - Settings: filters saved without `strength` load as Light; an older Clutch ignores the new keys
   and runs Light.

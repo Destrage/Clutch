@@ -53,11 +53,21 @@ Strong uses `DeepFilterNet3_ll`: it removes about twice as much typing (in dB) a
 model, keeps the voice level, and adds 10 ms instead of 30 ms. Its cost is about 12% of one core,
 on one thread. On a 6-core or larger CPU that is under 2% of the whole processor, roughly what the
 spin removed from the audio thread in improve-pipeline-performance gave back. Shipping cost is
-36 MB more in the installer. Revisit after the `tract` 0.23 port (task 2.1) re-measures CPU.
+36 MB more in the installer. After the `tract` 0.23 port it measures 10.6% of one core.
 
-### Vendored, `tract` pinned, then ported
-Vendor the inference code first with `tract-*` pinned to `=0.21.4` (known to build and measured),
-then port it to current `tract` within this change and keep whichever is faster.
+### Vendored, then ported to current `tract`
+The inference code was vendored against `tract` `=0.21.4` first, then ported to `=0.23.9`
+(renamed tensor views, `ndarray` 0.17, feature buffers as plain tensors wrapped per run). Same
+noisy file, three alternating runs each, release build:
+
+| | `tract` 0.21.4 | `tract` 0.23.9 |
+|---|---|---|
+| CPU per hop, mean / p99 | 1193 / 2202 µs | 1059 / 1958 µs |
+| Share of one core | 11.9% | 10.6% |
+| Model build | 474 ms | 238 ms |
+
+The two outputs differ by at most 3e-6 per sample (105 dB below the signal), so 0.23.9 ships.
+`tract-*` stays pinned exactly: 0.21.x broke the runner between patch releases.
 
 ### Where it runs: its own thread
 A `tract` run allocates ~1800 times per hop, so it can't run on the audio thread. Each Strong

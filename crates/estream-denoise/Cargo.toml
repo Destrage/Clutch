@@ -11,14 +11,14 @@ description = "Clutch strong noise suppression: DeepFilterNet3 (low latency) on 
 anyhow.workspace = true
 tracing.workspace = true
 flate2 = "1.0.24"
-ndarray = "0.15"
+ndarray = "0.17"
 num-complex = "0.4"
 realfft = "3.1"
 rust-ini = "0.21"
 tar = "0.4.38"
-# Pinned exactly: tract breaks its API within a minor version, and the vendored runner is
-# written against 0.21.4 (see openspec/changes/add-strong-noise-suppression/design.md).
-tract-core = "=0.21.4"
-tract-hir = "=0.21.4"
-tract-onnx = "=0.21.4"
-tract-pulse = "=0.21.4"
+# Pinned exactly: tract changes its API between patch-level releases (see
+# openspec/changes/add-strong-noise-suppression/design.md).
+tract-core = "=0.23.9"
+tract-hir = "=0.23.9"
+tract-onnx = "=0.23.9"
+tract-pulse = "=0.23.9"
