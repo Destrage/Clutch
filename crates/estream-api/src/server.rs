@@ -341,6 +341,9 @@ async fn session(
                 incoming = source.next() => {
                     let Some(Ok(msg)) = incoming else { break };
                     if matches!(msg, Message::Close(_)) {
+                        // tungstenite queued the close reply on read; flush it so the
+                        // client sees a completed handshake rather than a dropped socket.
+                        let _ = sink.close().await;
                         break;
                     }
                     let Some(decoded) = protocol::decode(&msg, encoding) else { continue };
