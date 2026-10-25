@@ -28,16 +28,19 @@
 - [ ] 4.6 Tests: recording + clip buffer share one session; a stalled subscriber doesn't block others; a stream reconnect's keyframe reaches every subscriber
 
 ## 5. Skip unseen work
-- [ ] 5.1 UI publishes preview demand and display refresh rate per canvas; the video thread renders the preview only when wanted, at most at that rate
+- [x] 5.1 UI publishes preview demand (one engine-wide flag); the video thread skips the sRGB preview conversion and the studio Preview render while no view shows them
 - [ ] 5.2 Single-source pass-through when the program scene is one opaque, unfiltered, full-canvas item with no transition
 - [ ] 5.3 Fused NV12 + sRGB preview conversion in one pass over the canvas
 - [ ] 5.4 Golden-image tests: pass-through vs composite, fused vs separate conversion
 - [ ] 5.5 Measure an 8-bit sRGB canvas against the 16-bit float canvas; record the result and decision in design.md
 
 ## 6. UI loop
-- [ ] 6.1 Replace the 4 ms timer with frame-arrival wakes (limited to the display rate), event wakes and slow timers for chat, details and health
-- [ ] 6.2 Minimized or hidden: only event wakes and slow timers run
-- [ ] 6.3 Check every panel still updates (chat, meters, stats, outputs, scene thumbnails)
+Measured first (per-thread CPU and a tick profile, your setup, 2026-10-25): the UI thread was ~31% of a core while visible and ~42% focused, but the 4 ms tick itself was under 1%. The cost was Slint redrawing the whole window for every preview picture, and handing it a new image per frame cost as much again as the redraw.
+- [x] 6.1 Window visibility (focused / background / hidden) checked 4× a second: hidden = minimized, in the tray, or covered by a fullscreen game on its monitor
+- [x] 6.2 Hidden: no picture or meter updates and no engine preview work (UI thread ~31% → ~3%); background: pictures at most 30 fps, meters 15 Hz
+- [x] 6.3 The main and Program views show a fixed texture that each new picture is copied into on the GPU, so Slint only redraws (focused ~42% → ~21%, background ~26% → ~13%); the live scene card gets its own image 4× a second (an image redrawn in place doesn't refresh there)
+- [ ] 6.4 Check every panel still updates (chat, meters, stats, outputs, scene thumbnails, the Live deck while streaming, studio mode)
+- [ ] 6.5 Look into the cost of one full redraw (~4 ms of CPU for a maximized window with the femtovg renderer): renderer options, or the preview in its own swap chain
 
 ## 7. Memory
 - [ ] 7.1 Encoder probing in a child process (`--probe-encoders`), cached in settings per GPU driver version

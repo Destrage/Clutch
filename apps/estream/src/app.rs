@@ -106,6 +106,20 @@ pub struct App {
     /// The last picture of each scene (a GPU copy, refreshed twice a second).
     scene_thumbs: HashMap<SceneId, (estream_gpu::wgpu::Texture, slint::Image)>,
     thumb_at: Instant,
+    /// How much of the window can be seen, re-checked a few times a second; sets how often
+    /// it redraws (each new picture or meter value redraws the whole window).
+    visibility: Visibility,
+    visibility_at: Instant,
+    /// When a canvas picture was last handed to the window.
+    picture_at: Instant,
+    /// The textures the main view and the studio Program view show; each new canvas
+    /// picture is copied into them (see `show_picture`).
+    main_picture: Option<ShownPicture>,
+    program_picture: Option<ShownPicture>,
+    /// Studio mode when the pictures were handed to the views.
+    pictures_studio: bool,
+    /// When the live scene card last got a new picture.
+    card_at: Instant,
     /// What the shader editor is editing.
     shader_target: ShaderTarget,
     /// Canvas shown and edited in the studio (`None` = the first).
@@ -739,6 +753,13 @@ impl App {
             last_preview_sequence: 0,
             scene_thumbs: HashMap::new(),
             thumb_at: Instant::now(),
+            visibility: Visibility::Focused,
+            visibility_at: Instant::now(),
+            picture_at: Instant::now(),
+            main_picture: None,
+            program_picture: None,
+            pictures_studio: false,
+            card_at: Instant::now(),
             shader_target: ShaderTarget::Transition,
             current_canvas: None,
             last_output: None,
@@ -2498,12 +2519,35 @@ impl App {
         self.tick_stream_fill();
         self.tick_youtube_start();
         self.tick_details();
-        if let Some(engine) = &self.engine {
-            let image = |frame: estream_engine::CanvasFrame<'_>| {
-                slint::Image::try_from(frame.preview.clone())
-                    .map_err(|e| tracing::error!(error = %e, "preview texture rejected"))
-                    .ok()
-            };
+        if self.visibility_at.elapsed() >= Duration::from_millis(250) {
+            self.visibility_at = Instant::now();
+            let now = window_visibility(w.window());
+            if now != self.visibility {
+                tracing::debug!(from = ?self.visibility, to = ?now, "window visibility");
+                self.visibility = now;
+            }
+            if let Some(engine) = &self.engine {
+                engine.set_preview_wanted(now != Visibility::Hidden);
+            }
+        }
+        // Hidden: nothing to update on screen. In the background (e.g. a second monitor
+        // while playing) pictures and meters update less often, halving the redraws.
+        let hidden = self.visibility == Visibility::Hidden;
+        let (picture_every, meters_every) = match self.visibility {
+            Visibility::Focused => (Duration::ZERO, Duration::from_millis(33)),
+            _ => (Duration::from_millis(33), Duration::from_millis(66)),
+        };
+        let picture_due = self.picture_at.elapsed() >= picture_every;
+        if self.pictures_studio != self.studio {
+            // The views swap images when studio mode toggles: hand them over afresh.
+            self.pictures_studio = self.studio;
+            self.main_picture = None;
+            self.program_picture = None;
+        }
+        if let Some(engine) = &self.engine
+            && !hidden
+        {
+            let mut redraw = false;
             let snapshot = engine.snapshot();
             if let Some((canvas, on_air)) =
                 self.canvas_of(&snapshot).map(|c| (c.id, c.active_scene))
@@ -2514,25 +2558,38 @@ impl App {
                     self.thumb_at = Instant::now();
                 }
                 // Program: the main view normally, the Program view in studio mode.
-                if let Some(output) = engine.canvas_output(canvas)
+                if picture_due
+                    && let Some(output) = engine.canvas_output(canvas)
                     && let Some(frame) = output.latest()
                     && frame.sequence != self.last_sequence
                 {
                     self.last_sequence = frame.sequence;
+                    self.picture_at = Instant::now();
                     if snap && let Some(scene) = on_air {
                         changed |=
                             snap_thumb(&self.gpu, &mut self.scene_thumbs, scene, frame.preview);
                     }
-                    if let Some(img) = image(frame) {
-                        if self.studio {
-                            w.set_program_frame(img);
-                        } else {
-                            w.set_preview_frame(img);
+                    // The live scene card refreshes 4 times a second with its own image.
+                    if !self.studio && self.card_at.elapsed() >= Duration::from_millis(250) {
+                        self.card_at = Instant::now();
+                        if let Ok(img) = slint::Image::try_from(frame.preview.clone()) {
+                            w.set_card_frame(img);
                         }
+                    }
+                    let shown = if self.studio {
+                        &mut self.program_picture
+                    } else {
+                        &mut self.main_picture
+                    };
+                    match show_picture(&self.gpu, shown, frame.preview) {
+                        Some(img) if self.studio => w.set_program_frame(img),
+                        Some(img) => w.set_preview_frame(img),
+                        None => redraw = true,
                     }
                 }
                 // Studio Preview: the editable main view.
                 if self.studio
+                    && picture_due
                     && let Some(output) = engine.preview_output(canvas)
                     && let Some(frame) = output.latest()
                     && frame.sequence != self.last_preview_sequence
@@ -2542,11 +2599,21 @@ impl App {
                         changed |=
                             snap_thumb(&self.gpu, &mut self.scene_thumbs, scene, frame.preview);
                     }
-                    if let Some(img) = image(frame) {
-                        w.set_preview_frame(img);
+                    if self.card_at.elapsed() >= Duration::from_millis(250) {
+                        self.card_at = Instant::now();
+                        if let Ok(img) = slint::Image::try_from(frame.preview.clone()) {
+                            w.set_card_frame(img);
+                        }
+                    }
+                    match show_picture(&self.gpu, &mut self.main_picture, frame.preview) {
+                        Some(img) => w.set_preview_frame(img),
+                        None => redraw = true,
                     }
                 }
                 w.set_transition_busy(engine.is_transitioning(canvas));
+            }
+            if redraw {
+                w.window().request_redraw();
             }
             w.set_media_inspect(self.media_inspect());
             let (browser, status) = self.browser_inspect();
@@ -2592,7 +2659,7 @@ impl App {
         if changed {
             self.refresh();
         }
-        if !changed && self.mixer_at.elapsed() >= Duration::from_millis(33) {
+        if !changed && !hidden && self.mixer_at.elapsed() >= meters_every {
             self.mixer_at = Instant::now();
             self.update_mixer();
         }
@@ -9952,7 +10019,72 @@ fn push_layers(
     }
 }
 
-/// Meter position (0..1) for a linear level on a -60..0 dB scale.
+/// A texture a view shows permanently (the view holds its Slint image).
+struct ShownPicture {
+    texture: estream_gpu::wgpu::Texture,
+}
+
+/// Copies a canvas picture (an engine preview texture) into the view's own texture on the
+/// GPU. Returns the image to hand to the view when that texture was (re)made; otherwise the
+/// view keeps the same image and only needs a redraw. Handing Slint a new image for every
+/// frame costs about as much CPU again as the redraw itself.
+fn show_picture(
+    gpu: &GpuContext,
+    shown: &mut Option<ShownPicture>,
+    source: &estream_gpu::wgpu::Texture,
+) -> Option<slint::Image> {
+    let size = source.size();
+    let mut made = None;
+    if shown.as_ref().is_none_or(|s| s.texture.size() != size) {
+        let texture = estream_gpu::create_preview_texture(gpu, size.width, size.height);
+        let image = slint::Image::try_from(texture.clone())
+            .map_err(|e| tracing::error!(error = %e, "preview texture rejected"))
+            .ok()?;
+        made = Some(image);
+        *shown = Some(ShownPicture { texture });
+    }
+    let target = shown.as_ref()?;
+    let mut encoder = gpu.device.create_command_encoder(&Default::default());
+    encoder.copy_texture_to_texture(source.as_image_copy(), target.texture.as_image_copy(), size);
+    gpu.queue.submit([encoder.finish()]);
+    made
+}
+
+/// How much of the studio window can be seen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Visibility {
+    /// In front, with focus.
+    Focused,
+    /// On screen without focus (e.g. a second monitor while a game is played).
+    Background,
+    /// Minimized, in the tray, or covered by a fullscreen game on its monitor.
+    Hidden,
+}
+
+fn window_visibility(window: &slint::Window) -> Visibility {
+    if window.is_minimized() || !window.is_visible() {
+        return Visibility::Hidden;
+    }
+    #[cfg(windows)]
+    {
+        use estream_capture::windows::enumerate;
+        if enumerate::foreground_is_ours() {
+            return Visibility::Focused;
+        }
+        let (pos, size) = (window.position(), window.size());
+        let (x, y) = (
+            pos.x + size.width as i32 / 2,
+            pos.y + size.height as i32 / 2,
+        );
+        if enumerate::fullscreen_covers(x, y) {
+            return Visibility::Hidden;
+        }
+        Visibility::Background
+    }
+    #[cfg(not(windows))]
+    Visibility::Focused
+}
+
 /// Average video-thread time per frame over the last couple of seconds, in milliseconds
 /// (the last frame's time until there is history).
 fn render_ms(engine: &estream_engine::Engine, output: &estream_engine::CanvasOutput) -> f64 {
@@ -10041,6 +10173,7 @@ fn check_setup_name(name: &str, taken: &[String]) -> Result<String, String> {
     Ok(name.to_owned())
 }
 
+/// Meter position (0..1) for a linear level on a -60..0 dB scale.
 fn meter_position(level: f32) -> f32 {
     let db = estream_engine::audio_engine::db::from_gain(level);
     ((db + 60.0) / 60.0).clamp(0.0, 1.0)

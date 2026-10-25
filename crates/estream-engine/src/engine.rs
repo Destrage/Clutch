@@ -154,6 +154,8 @@ struct Shared {
     shutdown: AtomicBool,
     can_undo: AtomicBool,
     can_redo: AtomicBool,
+    /// Whether the UI shows canvas previews (the sRGB conversion is skipped otherwise).
+    preview_wanted: AtomicBool,
 }
 
 impl Shared {
@@ -223,6 +225,10 @@ impl VideoSink for Shared {
 
     fn shutdown_requested(&self) -> &AtomicBool {
         &self.shutdown
+    }
+
+    fn preview_wanted(&self) -> bool {
+        self.preview_wanted.load(Ordering::Relaxed)
     }
 }
 
@@ -340,6 +346,7 @@ impl Engine {
             shutdown: AtomicBool::new(false),
             can_undo: AtomicBool::new(false),
             can_redo: AtomicBool::new(false),
+            preview_wanted: AtomicBool::new(true),
         });
 
         let gpu = if config.video {
@@ -431,6 +438,13 @@ impl Engine {
             audio,
             track_sinks,
         })
+    }
+
+    /// Whether a UI shows the canvas previews. While nothing does, the engine skips the
+    /// preview conversion (and the studio Preview render); encoded output is unaffected.
+    /// Frames published meanwhile keep their last preview picture.
+    pub fn set_preview_wanted(&self, wanted: bool) {
+        self.shared.preview_wanted.store(wanted, Ordering::Relaxed);
     }
 
     /// CPU time per video-thread stage over the last couple of seconds (`None` without video).

@@ -39,6 +39,9 @@ export component AppWindow inherits Window {
 
     // Preview
     in property <image> preview-frame;
+    // The live scene card's picture: a new image a few times a second (the main view's
+    // image stays the same object and is redrawn in place, which the card wouldn't show).
+    in property <image> card-frame;
     in property <bool> scroll-pan;
     // Studio mode and transitions
     in property <bool> studio-mode;
@@ -603,7 +606,7 @@ export component AppWindow inherits Window {
                 }
                 SceneStrip {
                     scenes: root.scenes;
-                    frame: root.preview-frame;
+                    frame: root.card-frame;
                     studio-mode: root.studio-mode;
                     strips: root.mixer-strips;
                     renaming <=> root.renaming-scene;

@@ -287,6 +287,8 @@ pub struct VideoCore {
     filters: Filters,
     progress: Arc<VideoProgress>,
     export: Option<Arc<dyn GpuExport>>,
+    /// Render UI previews (sRGB conversion, studio Preview). Off while no UI shows them.
+    preview_wanted: bool,
 }
 
 impl VideoCore {
@@ -294,6 +296,7 @@ impl VideoCore {
         let compositor = Compositor::new(&gpu);
         Self {
             export: None,
+            preview_wanted: true,
             filters: Filters::new(&gpu, compositor.clone()),
             compositor,
             converter: OutputConverter::new(&gpu),
@@ -554,8 +557,10 @@ impl VideoCore {
             scratch_extra,
             transitions,
             filters,
+            preview_wanted,
             ..
         } = self;
+        let preview_wanted = *preview_wanted;
         let canvas = &mut canvases[index];
         let Some(cg) = graph.canvases.iter().find(|c| c.id == canvas.output.id) else {
             return 0;
@@ -644,11 +649,13 @@ impl VideoCore {
                 &items,
             ),
         }
-        converter.to_srgb(encoder, &canvas.inputs[slot], &canvas.preview_views[slot]);
+        if preview_wanted {
+            converter.to_srgb(encoder, &canvas.inputs[slot], &canvas.preview_views[slot]);
+        }
         recycle(items, scratch);
 
         // Studio Preview (UI only).
-        if let (Some(preview), Some(flats)) = (&mut canvas.preview, &cg.preview) {
+        if preview_wanted && let (Some(preview), Some(flats)) = (&mut canvas.preview, &cg.preview) {
             let pslot = ((preview.sequence + 1) % OUTPUT_RING as u64) as usize;
             let mut items = reuse(scratch_extra);
             push_items(sources, filters, flats, &mut items);
@@ -907,6 +914,7 @@ pub(crate) trait VideoSink: Send + Sync + 'static {
     fn publish_previews(&self, previews: Vec<Arc<CanvasOutput>>);
     fn shutdown_requested(&self) -> &AtomicBool;
     fn consumers(&self) -> Arc<Vec<VideoConsumer>>;
+    fn preview_wanted(&self) -> bool;
 }
 
 /// Main loop of the video thread.
@@ -943,6 +951,7 @@ pub(crate) fn run(mut core: VideoCore, clock: EngineClock, sink: Arc<dyn VideoSi
         };
         progress.enter(Stage::Wait);
         wait_until(&clock, deadline);
+        core.preview_wanted = sink.preview_wanted();
         core.render_due(clock.now(), &sink.consumers());
     }
     // Let in-flight GPU work finish before resources drop.
