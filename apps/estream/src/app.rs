@@ -125,12 +125,6 @@ pub struct App {
     /// (a new image each time, unlike the views).
     card_at: Instant,
     card_picture: estream_engine::UiPreview,
-    /// Canvas pictures copied into the views, and when the preview counts were last logged
-    /// (with the engine's rendered and skipped counts then).
-    pictures_shown: u64,
-    preview_log: (Instant, u64, u64, u64),
-    /// UI tick pacing since the last preview log line.
-    pub tick_stats: TickStats,
     /// What the shader editor is editing.
     shader_target: ShaderTarget,
     /// Canvas shown and edited in the studio (`None` = the first).
@@ -779,9 +773,6 @@ impl App {
             pictures_studio: false,
             card_at: Instant::now(),
             card_picture: Default::default(),
-            pictures_shown: 0,
-            preview_log: (Instant::now(), 0, 0, 0),
-            tick_stats: TickStats::default(),
             shader_target: ShaderTarget::Transition,
             current_canvas: None,
             last_output: None,
@@ -2603,9 +2594,6 @@ impl App {
                         &mut self.main_picture
                     };
                     let result = show_picture(&self.gpu, shown, &output, &frame);
-                    if result != Shown::Kept {
-                        self.pictures_shown += 1;
-                    }
                     if snap
                         && result != Shown::Kept
                         && let Some(scene) = on_air
@@ -2750,42 +2738,6 @@ impl App {
         }
         self.stats_rendered = rendered;
         self.stats_at = Instant::now();
-        // Every 10 s while the preview misses frames: how many the engine rendered, left
-        // undrawn for the UI (its copy still running) and the views actually got.
-        let skipped = output
-            .stats
-            .preview_skipped
-            .load(std::sync::atomic::Ordering::Relaxed);
-        let (at, was_rendered, was_skipped, was_shown) = self.preview_log;
-        if at.elapsed() >= Duration::from_secs(10) {
-            let (rendered_n, skipped_n, shown_n) = (
-                rendered.saturating_sub(was_rendered),
-                skipped.saturating_sub(was_skipped),
-                self.pictures_shown.saturating_sub(was_shown),
-            );
-            if self.visibility != Visibility::Hidden && shown_n + 10 < rendered_n {
-                let t = &self.tick_stats;
-                let ms = |d: Duration| (d.as_secs_f64() * 1e4).round() / 10.0;
-                tracing::info!(
-                    rendered = rendered_n,
-                    skipped = skipped_n,
-                    shown = shown_n,
-                    visibility = ?self.visibility,
-                    ticks = t.ticks,
-                    gap_avg_ms = ms(t.gap_sum / t.ticks.max(1)),
-                    gap_max_ms = ms(t.gap_max),
-                    gaps_over_20ms = t.long_gaps,
-                    busy_avg_ms = ms(t.busy_sum / t.ticks.max(1)),
-                    busy_max_ms = ms(t.busy_max),
-                    "preview missed frames in the last 10 s"
-                );
-            }
-            self.preview_log = (Instant::now(), rendered, skipped, self.pictures_shown);
-            self.tick_stats = TickStats {
-                last: self.tick_stats.last,
-                ..Default::default()
-            };
-        }
         w.set_target_fps(canvas.fps.as_f64() as f32);
         w.set_render_ms(render_ms(engine, &output) as f32);
         w.set_lagged(
@@ -10168,36 +10120,6 @@ fn push_layers(
     }
 }
 
-/// How regularly the UI tick runs: time between tick starts, and time spent inside a tick.
-#[derive(Default)]
-pub struct TickStats {
-    last: Option<Instant>,
-    ticks: u32,
-    gap_sum: Duration,
-    gap_max: Duration,
-    /// Gaps longer than a 60 fps frame and a bit: a new canvas picture may be missed.
-    long_gaps: u32,
-    busy_sum: Duration,
-    busy_max: Duration,
-}
-
-impl TickStats {
-    /// Records a tick that started at `start` and took `busy`.
-    pub fn record(&mut self, start: Instant, busy: Duration) {
-        if let Some(last) = self.last.replace(start) {
-            let gap = start - last;
-            self.ticks += 1;
-            self.gap_sum += gap;
-            self.gap_max = self.gap_max.max(gap);
-            if gap > Duration::from_millis(20) {
-                self.long_gaps += 1;
-            }
-            self.busy_sum += busy;
-            self.busy_max = self.busy_max.max(busy);
-        }
-    }
-}
-
 /// The two textures a view alternates between, each with the Slint image made for it once.
 struct ShownPicture {
     pictures: [(estream_gpu::wgpu::Texture, slint::Image); 2],
@@ -10717,9 +10639,7 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
             Duration::from_millis(4),
             move || {
                 if let Ok(mut a) = app.try_borrow_mut() {
-                    let start = Instant::now();
                     a.tick();
-                    a.tick_stats.record(start, start.elapsed());
                 }
             },
         );

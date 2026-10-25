@@ -48,8 +48,6 @@ pub struct CanvasStats {
     pub last_render_ns: AtomicU64,
     /// Frames not delivered to an encoder (readback or encoder queue busy).
     pub encoder_dropped: AtomicU64,
-    /// Previews left alone while a UI showed them, because the UI was still copying the slot.
-    pub preview_skipped: AtomicU64,
 }
 
 /// The published output of one canvas. Shared with the UI and outputs.
@@ -777,12 +775,6 @@ impl VideoCore {
         canvas.drawn = preview_wanted && canvas.output.preview_free(slot);
         if canvas.drawn {
             converter.to_srgb(encoder, &canvas.inputs[slot], &canvas.preview_views[slot]);
-        } else if preview_wanted {
-            canvas
-                .output
-                .stats
-                .preview_skipped
-                .fetch_add(1, Ordering::Relaxed);
         }
         recycle(items, scratch);
 
@@ -807,12 +799,6 @@ impl VideoCore {
                     &preview.inputs[pslot],
                     &preview.preview_views[pslot],
                 );
-            } else {
-                preview
-                    .output
-                    .stats
-                    .preview_skipped
-                    .fetch_add(1, Ordering::Relaxed);
             }
             preview.pending = Some((pslot, drawn));
         }
