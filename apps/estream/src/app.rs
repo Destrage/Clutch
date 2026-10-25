@@ -44,7 +44,10 @@ pub struct App {
     window: slint::Weak<AppWindow>,
     paths: Paths,
     pub settings: Settings,
+    /// The UI's GPU device (Slint draws with it; clips and montages render on it).
     gpu: GpuContext,
+    /// The studio engine's device: its own on Windows, else the UI's.
+    engine_gpu: GpuContext,
     engine: Option<Engine>,
     subscription: Option<Subscription>,
     collection: PathBuf,
@@ -118,8 +121,10 @@ pub struct App {
     program_picture: Option<ShownPicture>,
     /// Studio mode when the pictures were handed to the views.
     pictures_studio: bool,
-    /// When the live scene card last got a new picture.
+    /// When the live scene card last got a new picture, and its pictures on the UI's device
+    /// (a new image each time, unlike the views).
     card_at: Instant,
+    card_picture: estream_engine::UiPreview,
     /// What the shader editor is editing.
     shader_target: ShaderTarget,
     /// Canvas shown and edited in the studio (`None` = the first).
@@ -692,7 +697,13 @@ fn key_from_text(text: &str) -> Option<Key> {
 }
 
 impl App {
-    pub fn new(window: &AppWindow, paths: Paths, settings: Settings, gpu: GpuContext) -> Shared {
+    pub fn new(
+        window: &AppWindow,
+        paths: Paths,
+        settings: Settings,
+        gpu: GpuContext,
+        engine_gpu: GpuContext,
+    ) -> Shared {
         let clipper = crate::clips::Clipper::new(&settings.clips, &settings.recording);
         let recordings = estream_clips::Library::open_flat(&settings.recording.folder);
         let twitch = crate::twitch::Session::new(settings.twitch.clone());
@@ -711,6 +722,7 @@ impl App {
             paths,
             settings,
             gpu,
+            engine_gpu,
             engine: None,
             subscription: None,
             scenes_model: Rc::new(VecModel::default()),
@@ -760,6 +772,7 @@ impl App {
             program_picture: None,
             pictures_studio: false,
             card_at: Instant::now(),
+            card_picture: Default::default(),
             shader_target: ShaderTarget::Transition,
             current_canvas: None,
             last_output: None,
@@ -2379,7 +2392,8 @@ impl App {
         }
         #[cfg(windows)]
         {
-            estream_media::gpu_frames::export(&self.gpu)
+            // The planes are rendered by the engine, so they live on its device.
+            estream_media::gpu_frames::export(&self.engine_gpu)
                 .map(|e| e as Arc<dyn estream_engine::GpuExport>)
         }
         #[cfg(not(windows))]
@@ -2406,7 +2420,7 @@ impl App {
         }
         let config = EngineConfig {
             registry,
-            gpu: Some(self.gpu.clone()),
+            gpu: Some(self.engine_gpu.clone()),
             collection_path: Some(self.collection.clone()),
             gpu_export: self.gpu_export(),
             ..Default::default()
@@ -2565,14 +2579,13 @@ impl App {
                 {
                     self.last_sequence = frame.sequence;
                     self.picture_at = Instant::now();
-                    if snap && let Some(scene) = on_air {
-                        changed |=
-                            snap_thumb(&self.gpu, &mut self.scene_thumbs, scene, frame.preview);
-                    }
                     // The live scene card refreshes 4 times a second with its own image.
-                    if !self.studio && self.card_at.elapsed() >= Duration::from_millis(250) {
+                    if !self.studio
+                        && self.card_at.elapsed() >= Duration::from_millis(250)
+                        && let Some(card) = self.card_picture.show(&self.gpu, &output, &frame)
+                    {
                         self.card_at = Instant::now();
-                        if let Ok(img) = slint::Image::try_from(frame.preview.clone()) {
+                        if let Ok(img) = slint::Image::try_from(card) {
                             w.set_card_frame(img);
                         }
                     }
@@ -2581,10 +2594,20 @@ impl App {
                     } else {
                         &mut self.main_picture
                     };
-                    match show_picture(&self.gpu, shown, frame.preview) {
-                        Some(img) if self.studio => w.set_program_frame(img),
-                        Some(img) => w.set_preview_frame(img),
-                        None => redraw = true,
+                    let result = show_picture(&self.gpu, shown, &output, &frame);
+                    if snap
+                        && result != Shown::Kept
+                        && let Some(scene) = on_air
+                        && let Some(picture) = shown.as_ref()
+                    {
+                        changed |=
+                            snap_thumb(&self.gpu, &mut self.scene_thumbs, scene, &picture.texture);
+                    }
+                    match result {
+                        Shown::New(img) if self.studio => w.set_program_frame(img),
+                        Shown::New(img) => w.set_preview_frame(img),
+                        Shown::Updated => redraw = true,
+                        Shown::Kept => {}
                     }
                 }
                 // Studio Preview: the editable main view.
@@ -2595,19 +2618,27 @@ impl App {
                     && frame.sequence != self.last_preview_sequence
                 {
                     self.last_preview_sequence = frame.sequence;
-                    if snap && let Some(scene) = self.preview_scene {
-                        changed |=
-                            snap_thumb(&self.gpu, &mut self.scene_thumbs, scene, frame.preview);
-                    }
-                    if self.card_at.elapsed() >= Duration::from_millis(250) {
+                    if self.card_at.elapsed() >= Duration::from_millis(250)
+                        && let Some(card) = self.card_picture.show(&self.gpu, &output, &frame)
+                    {
                         self.card_at = Instant::now();
-                        if let Ok(img) = slint::Image::try_from(frame.preview.clone()) {
+                        if let Ok(img) = slint::Image::try_from(card) {
                             w.set_card_frame(img);
                         }
                     }
-                    match show_picture(&self.gpu, &mut self.main_picture, frame.preview) {
-                        Some(img) => w.set_preview_frame(img),
-                        None => redraw = true,
+                    let result = show_picture(&self.gpu, &mut self.main_picture, &output, &frame);
+                    if snap
+                        && result != Shown::Kept
+                        && let Some(scene) = self.preview_scene
+                        && let Some(picture) = &self.main_picture
+                    {
+                        changed |=
+                            snap_thumb(&self.gpu, &mut self.scene_thumbs, scene, &picture.texture);
+                    }
+                    match result {
+                        Shown::New(img) => w.set_preview_frame(img),
+                        Shown::Updated => redraw = true,
+                        Shown::Kept => {}
                     }
                 }
                 w.set_transition_busy(engine.is_transitioning(canvas));
@@ -10024,30 +10055,48 @@ struct ShownPicture {
     texture: estream_gpu::wgpu::Texture,
 }
 
-/// Copies a canvas picture (an engine preview texture) into the view's own texture on the
-/// GPU. Returns the image to hand to the view when that texture was (re)made; otherwise the
-/// view keeps the same image and only needs a redraw. Handing Slint a new image for every
-/// frame costs about as much CPU again as the redraw itself.
+/// What [`show_picture`] did with a canvas frame.
+#[derive(Debug, PartialEq)]
+enum Shown {
+    /// The view's texture was (re)made: hand the view this image.
+    New(slint::Image),
+    /// The view's texture has the new picture: the view only needs a redraw.
+    Updated,
+    /// The engine left this frame's picture alone; the view keeps the last one.
+    Kept,
+}
+
+/// Copies a canvas picture into the view's own texture on the UI's GPU device (from the
+/// engine's device when it has its own). Handing Slint a new image for every frame costs about
+/// as much CPU again as the redraw itself, so the image only changes when the texture is made.
 fn show_picture(
     gpu: &GpuContext,
     shown: &mut Option<ShownPicture>,
-    source: &estream_gpu::wgpu::Texture,
-) -> Option<slint::Image> {
-    let size = source.size();
+    output: &estream_engine::CanvasOutput,
+    frame: &estream_engine::CanvasFrame<'_>,
+) -> Shown {
+    let size = frame.preview.size();
     let mut made = None;
     if shown.as_ref().is_none_or(|s| s.texture.size() != size) {
         let texture = estream_gpu::create_preview_texture(gpu, size.width, size.height);
-        let image = slint::Image::try_from(texture.clone())
+        let Ok(image) = slint::Image::try_from(texture.clone())
             .map_err(|e| tracing::error!(error = %e, "preview texture rejected"))
-            .ok()?;
+        else {
+            return Shown::Kept;
+        };
         made = Some(image);
         *shown = Some(ShownPicture { texture });
     }
-    let target = shown.as_ref()?;
-    let mut encoder = gpu.device.create_command_encoder(&Default::default());
-    encoder.copy_texture_to_texture(source.as_image_copy(), target.texture.as_image_copy(), size);
-    gpu.queue.submit([encoder.finish()]);
-    made
+    let Some(target) = shown.as_ref() else {
+        return Shown::Kept;
+    };
+    let copied = output.copy_preview(gpu, frame, &target.texture);
+    match made {
+        // A new texture is handed over even when this frame was skipped: the next fills it.
+        Some(image) => Shown::New(image),
+        None if copied => Shown::Updated,
+        None => Shown::Kept,
+    }
 }
 
 /// How much of the studio window can be seen.
@@ -10098,9 +10147,10 @@ fn render_ms(engine: &estream_engine::Engine, output: &estream_engine::CanvasOut
     )
 }
 
-/// Copies a scene's current picture into its thumbnail texture (made on first use, and again
-/// when the canvas size changes). Returns whether a new thumbnail was made, so the scene cards
-/// need rebuilding; later copies update the texture the card already shows.
+/// Copies a scene's current picture (on the UI's device) into its thumbnail texture (made on
+/// first use, and again when the canvas size changes). Returns whether a new thumbnail was
+/// made, so the scene cards need rebuilding; later copies update the texture the card already
+/// shows.
 fn snap_thumb(
     gpu: &GpuContext,
     thumbs: &mut HashMap<SceneId, (estream_gpu::wgpu::Texture, slint::Image)>,

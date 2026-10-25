@@ -671,3 +671,31 @@ fn encoder_feed_delivers_nv12_frames_in_order() {
     // Top-left of the test pattern is a 75% white bar: Y = 16 + 219 * 0.75 ≈ 180.
     assert!((y as i32 - 180).abs() <= 3, "Y = {y}");
 }
+
+#[test]
+fn ui_on_its_own_device_shows_the_engine_frames() {
+    let (ui, engine_gpu) = GpuContext::new_pair(&GpuOptions::default()).expect("GPU adapter");
+    let mut project = Project::new_default(64, 36, Rational::fps(60));
+    let color = SourceDef::new(
+        "Red",
+        "color",
+        serde_json::json!({ "color": Rgba8::new(255, 0, 0, 255) }),
+    );
+    let mut item = SceneItem::source(color.id);
+    item.transform = fill(64.0, 36.0);
+    project.scenes[0].items = vec![item];
+    project.sources = vec![color];
+    let mut core = VideoCore::new(engine_gpu, SourceRegistry::with_builtins());
+    core.sync(Arc::new(RenderGraph::build(&project, 1)), Timestamp::ZERO);
+    let mut shown = estream_engine::UiPreview::default();
+    // Several frames, so preview slots are reused after the UI's copies.
+    for n in 0..6 {
+        let outputs = core.render_now(Timestamp(n * 16_666_667));
+        let frame = outputs[0].latest().unwrap();
+        let picture = shown
+            .show(&ui, &outputs[0], &frame)
+            .expect("a preview each frame when the UI keeps up");
+        let pixels = readback::read_texture(&ui, &picture).unwrap();
+        assert_eq!(&pixels[..4], &[255, 0, 0, 255], "frame {n}");
+    }
+}

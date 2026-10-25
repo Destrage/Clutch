@@ -67,7 +67,7 @@ enum Buffer {
     /// On a small engine of its own that captures the game and audio directly, so clips work
     /// without any scene set up. Never saved.
     Own {
-        engine: Engine,
+        engine: Box<Engine>,
         replay: ReplayBuffer,
     },
 }
@@ -518,7 +518,7 @@ impl Clipper {
             return;
         }
         let engine = match &self.buffer {
-            Some(Buffer::Own { engine, .. }) => Some(engine),
+            Some(Buffer::Own { engine, .. }) => Some(&**engine),
             Some(Buffer::Studio(_)) => ctx.studio,
             None if ctx.studio_replay.is_some() => ctx.studio,
             None => None,
@@ -623,7 +623,10 @@ impl Clipper {
         }
         let engine = clip_engine(ctx.gpu)?;
         let replay = ReplayBuffer::start(&engine, &settings).map_err(|e| e.to_string())?;
-        self.buffer = Some(Buffer::Own { engine, replay });
+        self.buffer = Some(Buffer::Own {
+            engine: Box::new(engine),
+            replay,
+        });
         tracing::info!("clip mode buffering its own game capture");
         Ok(())
     }

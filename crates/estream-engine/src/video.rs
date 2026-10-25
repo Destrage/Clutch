@@ -12,8 +12,8 @@ use estream_core::color::srgb_to_linear;
 use estream_core::{CanvasId, EngineClock, Rgba8, SourceId, Timestamp};
 use estream_gpu::{
     BuiltinKind, CANVAS_FORMAT, CanvasRenderer, Compositor, ConvertInput, DrawItem, FilterOutput,
-    GpuContext, OutputConverter, TransitionParams, TransitionRenderer, TransitionShader,
-    TransitionTargets, wgpu,
+    GpuContext, OutputConverter, PreviewBridge, TransitionParams, TransitionRenderer,
+    TransitionShader, TransitionTargets, wgpu,
 };
 use estream_project::TransitionKind;
 use glam::Vec2;
@@ -31,6 +31,12 @@ const NO_FRAME: u64 = u64::MAX;
 struct OutputSlot {
     canvas: wgpu::Texture,
     preview: wgpu::Texture,
+    /// The preview as the UI's device sees it, when the UI has its own device.
+    ui_preview: Option<wgpu::Texture>,
+    /// The bridge's frame value that drew this slot's preview; 0 when it was left alone.
+    ready: AtomicU64,
+    /// The UI's last copy from this slot; it is redrawn only once that copy has finished.
+    released: AtomicU64,
 }
 
 /// Performance counters for a canvas.
@@ -55,6 +61,8 @@ pub struct CanvasOutput {
     latest: AtomicU64,
     timestamp: AtomicU64,
     pub stats: CanvasStats,
+    /// Shares the previews with a UI on its own device.
+    bridge: Option<Arc<PreviewBridge>>,
 }
 
 /// A finished canvas frame.
@@ -66,13 +74,30 @@ pub struct CanvasFrame<'a> {
     pub preview: &'a wgpu::Texture,
     pub sequence: u64,
     pub timestamp: Timestamp,
+    slot: usize,
 }
 
 impl CanvasOutput {
     fn new(gpu: &GpuContext, id: CanvasId, width: u32, height: u32) -> Self {
-        let slots = std::array::from_fn(|_| OutputSlot {
-            canvas: gpu.create_render_texture("canvas", width, height, CANVAS_FORMAT),
-            preview: estream_gpu::create_preview_texture(gpu, width, height),
+        let slots = std::array::from_fn(|_| {
+            let shared = gpu
+                .bridge
+                .as_ref()
+                .and_then(|b| b.create_preview(width, height));
+            let (preview, ui_preview) = match shared {
+                Some((preview, ui)) => (preview, Some(ui)),
+                None => (
+                    estream_gpu::create_preview_texture(gpu, width, height),
+                    None,
+                ),
+            };
+            OutputSlot {
+                canvas: gpu.create_render_texture("canvas", width, height, CANVAS_FORMAT),
+                preview,
+                ui_preview,
+                ready: AtomicU64::new(0),
+                released: AtomicU64::new(0),
+            }
         });
         Self {
             id,
@@ -82,6 +107,18 @@ impl CanvasOutput {
             latest: AtomicU64::new(NO_FRAME),
             timestamp: AtomicU64::new(0),
             stats: CanvasStats::default(),
+            bridge: gpu.bridge.clone(),
+        }
+    }
+
+    /// Whether `slot`'s preview can be redrawn: the UI has finished copying it (always, when
+    /// the UI shares the engine's device).
+    fn preview_free(&self, slot: usize) -> bool {
+        match (&self.bridge, &self.slots[slot].ui_preview) {
+            (Some(bridge), Some(_)) => {
+                bridge.copied(self.slots[slot].released.load(Ordering::Acquire))
+            }
+            _ => true,
         }
     }
 
@@ -91,19 +128,98 @@ impl CanvasOutput {
         if packed == NO_FRAME {
             return None;
         }
-        let slot = &self.slots[(packed & 0xff) as usize];
+        let index = (packed & 0xff) as usize;
+        let slot = &self.slots[index];
         Some(CanvasFrame {
             canvas: &slot.canvas,
             preview: &slot.preview,
             sequence: packed >> 8,
             timestamp: Timestamp(self.timestamp.load(Ordering::Acquire)),
+            slot: index,
         })
     }
 
-    fn publish(&self, sequence: u64, slot: usize, timestamp: Timestamp) {
+    /// Copies `frame`'s preview into `target`, a texture on `ui`'s device of the same size,
+    /// ordered after the engine's work on the GPU. `false` (nothing copied) when the engine left
+    /// this frame's preview alone; keep the last picture.
+    pub fn copy_preview(
+        &self,
+        ui: &GpuContext,
+        frame: &CanvasFrame<'_>,
+        target: &wgpu::Texture,
+    ) -> bool {
+        let slot = &self.slots[frame.slot];
+        let ready = slot.ready.load(Ordering::Acquire);
+        if ready == 0 {
+            return false;
+        }
+        match (&self.bridge, &slot.ui_preview) {
+            (Some(bridge), Some(shared)) => {
+                let copy = bridge.copy_to_ui(ui, shared, target, ready);
+                slot.released.store(copy, Ordering::Release);
+            }
+            _ => {
+                let mut encoder = ui.device.create_command_encoder(&Default::default());
+                encoder.copy_texture_to_texture(
+                    frame.preview.as_image_copy(),
+                    target.as_image_copy(),
+                    frame.preview.size(),
+                );
+                ui.queue.submit([encoder.finish()]);
+            }
+        }
+        true
+    }
+
+    /// `ready`: the bridge's frame value when the slot's preview was drawn, 0 when not.
+    fn publish(&self, sequence: u64, slot: usize, timestamp: Timestamp, ready: u64) {
+        self.slots[slot].ready.store(ready, Ordering::Release);
         self.timestamp.store(timestamp.0, Ordering::Release);
         self.latest
             .store((sequence << 8) | slot as u64, Ordering::Release);
+    }
+}
+
+/// A canvas output's preview as the UI shows it. When the UI has its own GPU device, each new
+/// frame's preview is copied into one of two textures on the UI's device (alternating, so the
+/// picture handed to the UI changes); otherwise the engine's preview is shown as it is.
+#[derive(Debug, Default)]
+pub struct UiPreview {
+    textures: [Option<wgpu::Texture>; 2],
+    next: usize,
+}
+
+impl UiPreview {
+    /// The picture to show for `frame` of `output`, on `ui`'s device. `None` when the engine
+    /// left this frame's preview alone (the UI was still copying it); keep the last one.
+    pub fn show(
+        &mut self,
+        ui: &GpuContext,
+        output: &CanvasOutput,
+        frame: &CanvasFrame<'_>,
+    ) -> Option<wgpu::Texture> {
+        let slot = &output.slots[frame.slot];
+        let (Some(bridge), Some(shared)) = (&output.bridge, &slot.ui_preview) else {
+            return Some(frame.preview.clone());
+        };
+        let ready = slot.ready.load(Ordering::Acquire);
+        if ready == 0 {
+            return None;
+        }
+        let size = shared.size();
+        let i = self.next;
+        self.next ^= 1;
+        let target = match &self.textures[i] {
+            Some(t) if t.size() == size => t.clone(),
+            _ => {
+                let t = estream_gpu::create_preview_texture(ui, size.width, size.height);
+                self.textures[i] = Some(t.clone());
+                t
+            }
+        };
+        let copy = bridge.copy_to_ui(ui, shared, &target, ready);
+        slot.released.store(copy, Ordering::Release);
+        Some(target)
     }
 }
 
@@ -141,6 +257,8 @@ struct CanvasSlot {
     transition_targets: Option<TransitionTargets>,
     /// Studio-mode Preview render (only while studio mode is on).
     preview: Option<StudioPreview>,
+    /// Whether this frame drew the preview (it is left alone while the UI copies it).
+    drawn: bool,
 }
 
 /// A second render of the canvas showing the studio Preview scene. UI only; never encoded.
@@ -151,15 +269,18 @@ struct StudioPreview {
     preview_views: [wgpu::TextureView; OUTPUT_RING],
     inputs: [ConvertInput; OUTPUT_RING],
     sequence: u64,
-    /// Slot rendered this frame, published with the program frame.
-    pending: Option<usize>,
+    /// Slot rendered this frame, published with the program frame, and whether its preview
+    /// was drawn.
+    pending: Option<(usize, bool)>,
 }
 
 impl StudioPreview {
-    fn publish(&mut self, timestamp: Timestamp) {
-        if let Some(slot) = self.pending.take() {
+    /// `frame`: the bridge's frame value of the submit that drew it.
+    fn publish(&mut self, timestamp: Timestamp, frame: u64) {
+        if let Some((slot, drawn)) = self.pending.take() {
             self.sequence += 1;
-            self.output.publish(self.sequence, slot, timestamp);
+            let ready = if drawn { frame } else { 0 };
+            self.output.publish(self.sequence, slot, timestamp, ready);
             self.output.stats.rendered.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -498,6 +619,7 @@ impl VideoCore {
             from_renderer: None,
             transition_targets: None,
             preview: None,
+            drawn: false,
         }
     }
 
@@ -649,7 +771,9 @@ impl VideoCore {
                 &items,
             ),
         }
-        if preview_wanted {
+        // Left alone while no UI shows it, or while the UI is still copying this slot.
+        canvas.drawn = preview_wanted && canvas.output.preview_free(slot);
+        if canvas.drawn {
             converter.to_srgb(encoder, &canvas.inputs[slot], &canvas.preview_views[slot]);
         }
         recycle(items, scratch);
@@ -668,12 +792,15 @@ impl VideoCore {
                 &items,
             );
             recycle(items, scratch_extra);
-            converter.to_srgb(
-                encoder,
-                &preview.inputs[pslot],
-                &preview.preview_views[pslot],
-            );
-            preview.pending = Some(pslot);
+            let drawn = preview.output.preview_free(pslot);
+            if drawn {
+                converter.to_srgb(
+                    encoder,
+                    &preview.inputs[pslot],
+                    &preview.preview_views[pslot],
+                );
+            }
+            preview.pending = Some((pslot, drawn));
         }
         slot
     }
@@ -687,16 +814,27 @@ impl VideoCore {
             .map(|i| self.render_canvas(i, &mut encoder, now))
             .collect();
         self.gpu.queue.submit([encoder.finish()]);
+        let frame = self.frame_submitted();
         let _ = self.gpu.device.poll(wgpu::PollType::wait_indefinitely());
         for (canvas, slot) in self.canvases.iter_mut().zip(slots) {
             canvas.sequence += 1;
-            canvas.output.publish(canvas.sequence, slot, now);
+            let ready = if canvas.drawn { frame } else { 0 };
+            canvas.output.publish(canvas.sequence, slot, now, ready);
             canvas.output.stats.rendered.fetch_add(1, Ordering::Relaxed);
             if let Some(preview) = &mut canvas.preview {
-                preview.publish(now);
+                preview.publish(now, frame);
             }
         }
         self.outputs()
+    }
+
+    /// After the submit that drew previews: the value the UI waits for before copying them
+    /// (any non-zero value when the UI shares the engine's device).
+    fn frame_submitted(&self) -> u64 {
+        self.gpu
+            .bridge
+            .as_ref()
+            .map_or(1, |bridge| bridge.frame_submitted())
     }
 
     /// Records NV12 conversion + readback when an encoder is attached to canvas `i`.
@@ -834,6 +972,7 @@ impl VideoCore {
         }
         self.progress.enter(Stage::Submit);
         self.gpu.queue.submit([encoder.finish()]);
+        let frame = self.frame_submitted();
         self.progress.enter(Stage::Poll);
         for (canvas, map) in self.canvases.iter_mut().zip(maps) {
             if let (Some(ring), Some((idx, ts))) = (&mut canvas.readback, map) {
@@ -877,9 +1016,12 @@ impl VideoCore {
             if let Some((tick, slot)) = due {
                 rendered += 1;
                 canvas.sequence += 1;
-                canvas.output.publish(canvas.sequence, slot, tick.timestamp);
+                let ready = if canvas.drawn { frame } else { 0 };
+                canvas
+                    .output
+                    .publish(canvas.sequence, slot, tick.timestamp, ready);
                 if let Some(preview) = &mut canvas.preview {
-                    preview.publish(tick.timestamp);
+                    preview.publish(tick.timestamp, frame);
                 }
                 let stats = &canvas.output.stats;
                 stats.rendered.fetch_add(1, Ordering::Relaxed);

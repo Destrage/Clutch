@@ -2,6 +2,7 @@
 //! and output format conversion. Everything here stays on the GPU; the only
 //! CPU readback is the explicit [`readback`] helper used by tests and tools.
 
+mod bridge;
 pub mod compositor;
 pub mod context;
 pub mod convert;
@@ -12,6 +13,7 @@ pub mod transition;
 mod user_shader;
 pub mod yuv;
 
+pub use bridge::PreviewBridge;
 pub use compositor::{CANVAS_FORMAT, CanvasRenderer, Compositor, DrawItem};
 pub use context::{GpuContext, GpuError, GpuOptions};
 pub use convert::{
