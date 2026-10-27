@@ -24,5 +24,5 @@
 - [x] 4.1 Build, clippy, fold-name round-trip test; in-app check on a test setup (text with
       video filters, chat overlay, test tone with audio filters): tabs, slider drag and one-step
       undo, click to type, folding, folds kept after a restart
-- [ ] 4.2 In-app check by the user with real devices: camera, microphone, browser source, a
+- [x] 4.2 In-app check by the user with real devices: camera, microphone, browser source, a
       group, and the Live deck's sound panel
