@@ -647,6 +647,22 @@ fn fresh_ids(item: &SceneItem) -> SceneItem {
     copy
 }
 
+/// A copy of `scene` with fresh ids on canvas `canvas`, its items moved from a canvas of size
+/// `from` to one of size `to` (see `interact::rescale`).
+fn rescaled_scene(scene: &Scene, name: String, canvas: CanvasId, from: Vec2, to: Vec2) -> Scene {
+    let mut copy = Scene::new(name, canvas);
+    copy.items = scene
+        .items
+        .iter()
+        .map(|item| {
+            let mut item = fresh_ids(item);
+            item.transform = crate::interact::rescale(item.transform, from, to);
+            item
+        })
+        .collect();
+    copy
+}
+
 fn kind_label(kind: &str) -> &str {
     match kind {
         "color" => "Color source",
@@ -3770,8 +3786,41 @@ impl App {
 
     // ------------------------------------------------------------ canvases
 
+    /// The canvas an output setting resolves to: the stored one, else the first.
+    fn resolve_canvas(snapshot: &Project, wanted: Option<CanvasId>) -> Option<CanvasId> {
+        wanted
+            .filter(|c| snapshot.canvas(*c).is_some())
+            .or_else(|| snapshot.canvases.first().map(|c| c.id))
+    }
+
+    /// What `canvas` feeds ("Stream · Record"), and whether it is being streamed now.
+    fn canvas_outputs(&self, snapshot: &Project, canvas: CanvasId) -> (String, bool) {
+        let on = |wanted| Self::resolve_canvas(snapshot, wanted) == Some(canvas);
+        let dests = &self.settings.destinations;
+        let rec = &self.settings.recording;
+        let mut tags = Vec::new();
+        if dests.iter().any(|d| d.enabled && on(d.stream.canvas)) {
+            tags.push("Stream");
+        }
+        if rec.all_canvases || on(rec.canvas) {
+            tags.push("Record");
+        }
+        if self.replay.is_some() && on(rec.canvas) {
+            tags.push("Replay");
+        }
+        if self.vcam.is_some() && on(self.settings.vcam_canvas) {
+            tags.push("Camera");
+        }
+        let live = self
+            .stream_dests
+            .iter()
+            .any(|d| dests.get(d.config).is_some_and(|c| on(c.stream.canvas)));
+        (tags.join(" · "), live)
+    }
+
     fn refresh_canvases(&self, w: &AppWindow, snapshot: &Project) {
         let current = self.canvas_of(snapshot).map(|c| c.id);
+        let several = snapshot.canvases.len() > 1;
         let tabs: Vec<CanvasTab> = snapshot
             .canvases
             .iter()
@@ -3782,18 +3831,200 @@ impl App {
                 } else {
                     format!("{fps:.2}")
                 };
+                let (outputs, live) = if several {
+                    self.canvas_outputs(snapshot, c.id)
+                } else {
+                    (String::new(), false)
+                };
                 CanvasTab {
                     id: id_str(c.id),
                     name: c.name.clone().into(),
                     info: format!("{} × {} · {fps} fps", c.width, c.height).into(),
                     active: Some(c.id) == current,
+                    outputs: outputs.into(),
+                    live,
+                    feeds_all: self.feeds_all(snapshot, c.id),
                 }
             })
             .collect();
-        w.set_canvas_tabs(ModelRc::new(VecModel::from(tabs)));
-        let mut presets = vec![SharedString::from("+ Add canvas…")];
-        presets.extend(PRESETS.iter().map(|p| SharedString::from(p.label)));
-        w.set_canvas_presets(ModelRc::new(VecModel::from(presets)));
+        // Replacing the tabs closes an open tab menu, so only when they change.
+        if !w.get_canvas_tabs().iter().eq(tabs.iter().cloned()) {
+            w.set_canvas_tabs(ModelRc::new(VecModel::from(tabs)));
+        }
+        if w.get_canvas_sizes().row_count() == 0 {
+            let mut presets = vec![SharedString::from("+ Add canvas…")];
+            presets.extend(PRESETS.iter().map(|p| SharedString::from(p.label)));
+            w.set_canvas_presets(ModelRc::new(VecModel::from(presets)));
+            let sizes: Vec<SharedString> = PRESETS.iter().map(|p| p.label.into()).collect();
+            w.set_canvas_sizes(ModelRc::new(VecModel::from(sizes)));
+        }
+    }
+
+    /// Every destination and the recording already use `canvas`.
+    fn feeds_all(&self, snapshot: &Project, canvas: CanvasId) -> bool {
+        let on = |wanted| Self::resolve_canvas(snapshot, wanted) == Some(canvas);
+        let rec = &self.settings.recording;
+        !rec.all_canvases
+            && on(rec.canvas)
+            && self
+                .settings
+                .destinations
+                .iter()
+                .all(|d| on(d.stream.canvas))
+    }
+
+    /// A canvas tab's menu: "outputs", "duplicate" (`preset` < 0 keeps the size), "rename"
+    /// or "remove".
+    pub fn canvas_menu(&mut self, id: &str, action: &str, preset: i32) {
+        match action {
+            "outputs" => self.canvas_use_for_outputs(id),
+            "duplicate" => self.canvas_duplicate(id, usize::try_from(preset).ok()),
+            "rename" => {
+                if let Some(w) = self.window() {
+                    w.set_renaming_canvas(id.into());
+                }
+            }
+            "remove" => self.canvas_remove(id),
+            _ => {}
+        }
+    }
+
+    /// Points every destination, the recording and the replay buffer at a canvas.
+    fn canvas_use_for_outputs(&mut self, id: &str) {
+        let Some(engine) = &self.engine else { return };
+        let snapshot = engine.snapshot();
+        let Some(canvas) = parse_id(id).map(CanvasId).and_then(|c| snapshot.canvas(c)) else {
+            return;
+        };
+        let (cid, name) = (canvas.id, canvas.name.clone());
+        for d in &mut self.settings.destinations {
+            d.stream.canvas = Some(cid);
+        }
+        self.settings.recording.canvas = Some(cid);
+        self.settings.recording.all_canvases = false;
+        self.settings.save(&self.paths.settings());
+        let running = self.stream.is_some() || self.recording.is_some() || self.replay.is_some();
+        self.toast(
+            if running {
+                format!("Streams and recordings use “{name}” from the next time they start")
+            } else {
+                format!("Streams and recordings use “{name}”")
+            },
+            false,
+        );
+        self.refresh_settings_form();
+        self.refresh();
+    }
+
+    /// Copies a canvas with all its scenes, at its own size (`preset` None) or a preset's,
+    /// and selects the copy. One undo step.
+    fn canvas_duplicate(&mut self, id: &str, preset: Option<usize>) {
+        let Some(engine) = &self.engine else { return };
+        let snapshot = engine.snapshot();
+        let Some(from) = parse_id(id).map(CanvasId).and_then(|c| snapshot.canvas(c)) else {
+            return;
+        };
+        let (width, height, fps) = match preset.and_then(|i| PRESETS.get(i)) {
+            Some(p) => (p.width, p.height, p.fps),
+            None => (from.width, from.height, from.fps),
+        };
+        let base = if (width, height) == (from.width, from.height) {
+            format!("{} copy", from.name)
+        } else {
+            format!("{} {width} × {height}", from.name)
+        };
+        let name = unique_name(&base, snapshot.canvases.iter().map(|c| c.name.as_str()));
+        let mut canvas = estream_project::Canvas::new(name.clone(), width, height, fps);
+        canvas.background = from.background;
+        let cid = canvas.id;
+        let index = snapshot
+            .canvases
+            .iter()
+            .position(|c| c.id == from.id)
+            .map_or(usize::MAX, |i| i + 1);
+        let size = |w: u32, h: u32| Vec2::new(w as f32, h as f32);
+        let (old, new) = (size(from.width, from.height), size(width, height));
+        let mut commands = vec![Command::AddCanvas { canvas, index }];
+        let mut active = None;
+        for scene in snapshot.scenes_of(from.id) {
+            let copy = rescaled_scene(scene, scene.name.clone(), cid, old, new);
+            if active.is_none() || from.active_scene == Some(scene.id) {
+                active = Some(copy.id);
+            }
+            commands.push(Command::AddScene {
+                scene: copy,
+                index: usize::MAX,
+            });
+        }
+        commands.push(Command::SetActiveScene {
+            canvas: cid,
+            scene: active,
+        });
+        if self.exec(Command::Batch { commands }) {
+            self.toast(format!("Added {name} — Ctrl+Z to undo"), false);
+            self.canvas_select(&id_str(cid));
+        }
+    }
+
+    /// Copies a scene to another canvas, scaled to its size.
+    pub fn scene_copy_to(&mut self, scene: &str, canvas: &str) {
+        let Some(engine) = &self.engine else { return };
+        let snapshot = engine.snapshot();
+        let Some(scene) = parse_id(scene).and_then(|u| snapshot.scene(SceneId(u))) else {
+            return;
+        };
+        let (Some(from), Some(to)) = (
+            snapshot.canvas(scene.canvas),
+            parse_id(canvas)
+                .map(CanvasId)
+                .and_then(|c| snapshot.canvas(c)),
+        ) else {
+            return;
+        };
+        if from.id == to.id {
+            return;
+        }
+        let name = unique_name(
+            &scene.name,
+            snapshot.scenes_of(to.id).map(|s| s.name.as_str()),
+        );
+        let size = |c: &estream_project::Canvas| Vec2::new(c.width as f32, c.height as f32);
+        let copy = rescaled_scene(scene, name.clone(), to.id, size(from), size(to));
+        let (tid, tname) = (to.id, to.name.clone());
+        // Only shown at once on a canvas nothing is streaming or recording.
+        let on_air = self.canvas_on_air(&snapshot, tid);
+        let id = copy.id;
+        let mut commands = vec![Command::AddScene {
+            scene: copy,
+            index: usize::MAX,
+        }];
+        if !on_air && !self.studio {
+            commands.push(Command::SetActiveScene {
+                canvas: tid,
+                scene: Some(id),
+            });
+        }
+        if self.exec(Command::Batch { commands }) {
+            self.canvas_select(&id_str(tid));
+            if self.studio {
+                self.show_in_preview(tid, id);
+            }
+            self.toast(format!("Copied “{name}” to {tname}"), false);
+        }
+    }
+
+    /// A running stream, recording, replay buffer or virtual camera shows `canvas`.
+    fn canvas_on_air(&self, snapshot: &Project, canvas: CanvasId) -> bool {
+        let on = |wanted| Self::resolve_canvas(snapshot, wanted) == Some(canvas);
+        let rec = &self.settings.recording;
+        self.stream_dests.iter().any(|d| {
+            self.settings
+                .destinations
+                .get(d.config)
+                .is_some_and(|c| on(c.stream.canvas))
+        }) || ((self.recording.is_some() || self.replay.is_some())
+            && (rec.all_canvases || on(rec.canvas)))
+            || (self.vcam.is_some() && on(self.settings.vcam_canvas))
     }
 
     /// Switches the canvas shown and edited in the studio.
@@ -4317,6 +4548,22 @@ impl App {
             Ok(stream) => {
                 let names: Vec<&str> = dests.iter().map(|d| d.name.as_str()).collect();
                 let mut text = format!("Going live on {}", names.join(", "));
+                // With several canvases, say which one goes out.
+                let snapshot = engine.snapshot();
+                if snapshot.canvases.len() > 1 {
+                    let mut shown: Vec<String> = Vec::new();
+                    for d in &dests {
+                        if let Some(c) = Self::resolve_canvas(&snapshot, d.settings.canvas)
+                            .and_then(|c| snapshot.canvas(c))
+                        {
+                            let line = format!("“{}” ({} × {})", c.name, c.width, c.height);
+                            if !shown.contains(&line) {
+                                shown.push(line);
+                            }
+                        }
+                    }
+                    text.push_str(&format!("\nCanvas: {}", shown.join(", ")));
+                }
                 for line in lines {
                     text.push('\n');
                     text.push_str(&line);
@@ -4375,7 +4622,42 @@ impl App {
         w.set_details_busy(d.busy().unwrap_or_default().into());
         w.set_details_loading(d.loading());
         w.set_details_ask(self.settings.ask_details);
+        let (ids, names) = self.canvas_choices();
+        w.set_details_canvas(self.streamed_canvas().map_or(-1, |c| {
+            ids.iter().position(|id| *id == c).map_or(-1, |i| i as i32)
+        }));
+        w.set_details_canvases(ModelRc::new(VecModel::from(if ids.len() > 1 {
+            names
+        } else {
+            Vec::new()
+        })));
         w.set_details_open(true);
+    }
+
+    /// The canvas the enabled destinations stream, when they all stream the same one.
+    fn streamed_canvas(&self) -> Option<CanvasId> {
+        let snapshot = self.engine.as_ref()?.snapshot();
+        let mut canvases = self
+            .settings
+            .enabled_destinations()
+            .into_iter()
+            .map(|(_, d)| Self::resolve_canvas(&snapshot, d.settings.canvas));
+        let first = canvases.next()??;
+        canvases.all(|c| c == Some(first)).then_some(first)
+    }
+
+    /// The Go live window's Canvas choice: every destination streams canvas `index`.
+    pub fn details_canvas(&mut self, index: i32) {
+        let (ids, _) = self.canvas_choices();
+        let Some(id) = usize::try_from(index).ok().and_then(|i| ids.get(i)) else {
+            return;
+        };
+        for d in &mut self.settings.destinations {
+            d.stream.canvas = Some(*id);
+        }
+        self.settings.save(&self.paths.settings());
+        self.show_details();
+        self.refresh();
     }
 
     /// Takes in the Go live window's background results.
@@ -5684,6 +5966,10 @@ impl App {
         let Some(w) = self.window() else { return };
         if let (Some(engine), Some(stream)) = (&self.engine, &mut self.stream) {
             stream.poll(engine);
+        }
+        // The canvas tabs say which canvas is live.
+        if let Some(engine) = &self.engine {
+            self.refresh_canvases(&w, &engine.snapshot());
         }
 
         // Report each destination's failure once; the others keep going.
@@ -10576,6 +10862,8 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     on!(on_scene_activate, |a, id| a.scene_activate(&id));
     on!(on_scene_add, |a| a.scene_add());
     on!(on_scene_duplicate, |a, id| a.scene_duplicate(&id));
+    on!(on_scene_copy_to, |a, id, canvas| a
+        .scene_copy_to(&id, &canvas));
     on!(on_scene_remove, |a, id| a.scene_remove(&id));
     on!(on_scene_rename, |a, id, name| a.scene_rename(&id, &name));
     on!(on_layer_select, |a, id| a.layer_select(&id));
@@ -10650,6 +10938,7 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     on!(on_details_retry, |a, i| a.details_retry(i));
     on!(on_details_skip, |a, i| a.details_skip(i));
     on!(on_details_set_ask, |a, v| a.details_set_ask(v));
+    on!(on_details_canvas_picked, |a, i| a.details_canvas(i));
     on!(on_details_go, |a| a.details_go());
     on!(on_details_closed, |a| a.details_closed());
     on!(on_recovery_restore, |a| a.recovery(true));
@@ -10701,6 +10990,8 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     on!(on_canvas_select, |a, id| a.canvas_select(&id));
     on!(on_canvas_add, |a, i| a.canvas_add(i));
     on!(on_canvas_remove, |a, id| a.canvas_remove(&id));
+    on!(on_canvas_menu, |a, id, action, preset| a
+        .canvas_menu(&id, &action, preset));
     on!(on_canvas_rename, |a, id, name| a.canvas_rename(&id, &name));
     on!(on_settings_browse, |a| a.settings_browse());
     on!(on_toast_act, |a| a.toast_act());

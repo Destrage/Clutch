@@ -58,6 +58,11 @@ export component StreamDetailsDialog inherits Modal {
     /// A platform's details are still loading (Go live waits for them).
     in property <bool> loading;
     in property <bool> ask: true;
+    /// Canvases to stream (empty with one canvas), and the one every destination uses (-1:
+    /// they differ).
+    in property <[string]> canvases;
+    in property <int> canvas: -1;
+    callback pick-canvas(int);
     callback text(int, string, string);
     callback flag(int, string, bool);
     callback choose(int, string, int);
@@ -102,6 +107,27 @@ export component StreamDetailsDialog inherits Modal {
                     wrap: word-wrap;
                 }
             }
+        }
+
+        if root.canvases.length > 1 && !root.live: HorizontalLayout {
+            spacing: 10px;
+            VerticalLayout {
+                alignment: center;
+                Text { text: "Canvas"; color: Theme.text; font-size: Theme.font-m; font-weight: 600; }
+            }
+            Select {
+                horizontal-stretch: 1;
+                label: "Canvas to stream";
+                options: root.canvases;
+                current-index: root.canvas;
+                selected(i) => { root.pick-canvas(i); }
+            }
+        }
+        if root.canvases.length > 1 && !root.live && root.canvas < 0: Text {
+            text: "Your destinations stream different canvases. Pick one to stream it everywhere.";
+            color: Theme.text-faint;
+            font-size: Theme.font-xs;
+            wrap: word-wrap;
         }
 
         scroller := Flickable {

@@ -3,9 +3,9 @@
 
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
-import { SceneRow, MixerStrip } from "types.slint";
+import { SceneRow, MixerStrip, CanvasTab } from "types.slint";
 import { Icon, IconButton, TextField, Hint } from "widgets.slint";
-import { TransitionBar } from "panels.slint";
+import { TransitionBar, MenuRow } from "panels.slint";
 import { SoundKnob } from "sound.slint";
 
 component SceneCard inherits Rectangle {
@@ -14,11 +14,14 @@ component SceneCard inherits Rectangle {
     in property <image> frame;
     in property <bool> studio-mode;
     in property <bool> can-delete;
+    /// Every canvas; the others are offered to copy the scene to.
+    in property <[CanvasTab]> canvases;
     in-out property <string> renaming;
     callback activate();
     callback rename(string);
     callback duplicate();
     callback remove();
+    callback copy-to(string);
 
     width: 168px;
     accessible-role: button;
@@ -86,7 +89,45 @@ component SceneCard inherits Rectangle {
                     row := HorizontalLayout {
                         IconButton { icon: Icons.pencil; tooltip: "Rename"; size: 26px; icon-size: 13px; clicked => { root.renaming = root.scene.id; } }
                         IconButton { icon: Icons.copy; tooltip: "Duplicate scene"; size: 26px; icon-size: 13px; clicked => { root.duplicate(); } }
+                        if root.canvases.length > 1: IconButton { icon: Icons.monitor; tooltip: "Copy to another canvas"; size: 26px; icon-size: 13px; clicked => { copy-menu.show(); } }
                         IconButton { icon: Icons.trash; tooltip: "Delete scene"; size: 26px; icon-size: 13px; enabled: root.can-delete; clicked => { root.remove(); } }
+                    }
+                }
+            }
+            // Opens upwards: the cards sit at the bottom of the window.
+            copy-menu := PopupWindow {
+                x: 0;
+                y: -self.height - 8px;
+                width: 240px;
+                close-policy: close-on-click-outside;
+                Rectangle {
+                    background: Theme.surface-3;
+                    border-radius: Theme.radius-m;
+                    border-width: 1px;
+                    border-color: Theme.border-strong;
+                    drop-shadow-blur: 16px;
+                    drop-shadow-color: #00000060;
+                    VerticalLayout {
+                        padding: 4px;
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            Text {
+                                text: "COPY TO CANVAS";
+                                color: Theme.text-faint;
+                                font-size: Theme.font-xs;
+                                font-weight: 700;
+                                height: 24px;
+                                vertical-alignment: center;
+                            }
+                        }
+                        // The canvas being edited is the scene's own.
+                        for c in root.canvases: MenuRow {
+                            visible: !c.active;
+                            height: c.active ? 0px : 28px;
+                            label: c.name + "  " + c.info;
+                            icon: Icons.monitor;
+                            clicked => { root.copy-to(c.id); }
+                        }
                     }
                 }
             }
@@ -132,6 +173,9 @@ export component SceneStrip inherits Rectangle {
     callback add();
     callback duplicate(string);
     callback remove(string);
+    in property <[CanvasTab]> canvases;
+    /// (scene id, canvas id)
+    callback copy-to(string, string);
     callback rename(string, string);
     callback toggle-mute(string);
     callback fader(string, float);
@@ -163,6 +207,8 @@ export component SceneStrip inherits Rectangle {
                     activate => { root.activate(scene.id); }
                     rename(t) => { root.rename(scene.id, t); }
                     duplicate => { root.duplicate(scene.id); }
+                    canvases: root.canvases;
+                    copy-to(canvas) => { root.copy-to(scene.id, canvas); }
                     remove => { root.remove(scene.id); }
                 }
                 // New scene, then the transition used between scenes.

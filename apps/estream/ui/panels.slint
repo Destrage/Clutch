@@ -6,6 +6,48 @@ import {
     EmptyState, Hint,
 } from "widgets.slint";
 
+/// One row of a popup menu.
+export component MenuRow inherits Rectangle {
+    in property <string> label;
+    in property <image> icon;
+    in property <bool> danger;
+    in property <bool> enabled: true;
+    /// A row under the one before it (no icon of its own).
+    in property <bool> indent;
+    callback clicked();
+
+    height: 28px;
+    border-radius: Theme.radius-s;
+    background: ta.has-hover && root.enabled ? Theme.hover : transparent;
+    opacity: root.enabled ? 1 : 0.4;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 8px;
+        VerticalLayout {
+            alignment: center;
+            width: 14px;
+            if !root.indent: Icon { source: root.icon; size: 14px; tint: root.danger ? Theme.live : Theme.text-muted; }
+        }
+        Text {
+            text: root.label;
+            color: root.danger ? Theme.live : root.indent ? Theme.text-muted : Theme.text;
+            font-size: Theme.font-m;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: MouseCursor.pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
 // The open setup (scenes, sources and audio) as a menu: switch, new, rename, duplicate, delete.
 component SetupMenu inherits Rectangle {
     in property <string> name;
@@ -1119,10 +1161,13 @@ export component StatusBar inherits Rectangle {
 export component CanvasTabs inherits HorizontalLayout {
     in property <[CanvasTab]> tabs;
     in property <[string]> presets;
+    /// Canvas presets to duplicate as.
+    in property <[string]> sizes;
     in-out property <string> renaming;
     callback select(string);
     callback add(int);
-    callback remove(string);
+    /// (canvas id, "outputs" | "duplicate" | "rename" | "remove", preset index or -1)
+    callback menu(string, string, int);
     callback rename(string, string);
 
     spacing: 4px;
@@ -1178,16 +1223,79 @@ export component CanvasTabs inherits HorizontalLayout {
                 font-size: Theme.font-xs;
                 vertical-alignment: center;
             }
+            // What goes out from this canvas, so the tab being edited isn't taken for it.
+            if ct.outputs != "": VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    height: 18px;
+                    width: outputs-text.preferred-width + 10px;
+                    border-radius: 4px;
+                    background: ct.live ? Theme.live : Theme.surface-3;
+                    outputs-text := Text {
+                        text: ct.outputs;
+                        color: ct.live ? Theme.on-accent : Theme.text-muted;
+                        font-size: Theme.font-xs;
+                        font-weight: ct.live ? 700 : 400;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
             VerticalLayout {
                 alignment: center;
                 IconButton {
-                    icon: Icons.x;
-                    tooltip: "Remove canvas " + ct.name;
+                    icon: Icons.chevron-down;
+                    tooltip: "Canvas menu: outputs, duplicate, rename, remove";
                     size: 20px;
-                    icon-size: 11px;
-                    enabled: root.tabs.length > 1;
-                    opacity: (hovered || ct.active) && root.tabs.length > 1 ? 1 : 0;
-                    clicked => { root.remove(ct.id); }
+                    icon-size: 12px;
+                    opacity: hovered || ct.active ? 1 : 0.5;
+                    clicked => { menu.show(); }
+                }
+            }
+        }
+        menu := PopupWindow {
+            x: 0;
+            y: 38px;
+            width: 260px;
+            Rectangle {
+                background: Theme.surface-3;
+                border-radius: Theme.radius-m;
+                border-width: 1px;
+                border-color: Theme.border-strong;
+                drop-shadow-blur: 16px;
+                drop-shadow-color: #00000060;
+                VerticalLayout {
+                    padding: 4px;
+                    MenuRow {
+                        label: ct.feeds-all ? "Streaming and recording this canvas" : "Stream and record this canvas";
+                        icon: ct.feeds-all ? Icons.check : Icons.radio;
+                        enabled: !ct.feeds-all;
+                        clicked => { root.menu(ct.id, "outputs", -1); }
+                    }
+                    Rectangle { height: 1px; background: Theme.border; }
+                    MenuRow {
+                        label: "Duplicate";
+                        icon: Icons.copy;
+                        clicked => { root.menu(ct.id, "duplicate", -1); }
+                    }
+                    for size[i] in root.sizes: MenuRow {
+                        label: "Duplicate as " + size;
+                        indent: true;
+                        clicked => { root.menu(ct.id, "duplicate", i); }
+                    }
+                    Rectangle { height: 1px; background: Theme.border; }
+                    MenuRow {
+                        label: "Rename…";
+                        icon: Icons.pencil;
+                        clicked => { root.menu(ct.id, "rename", -1); }
+                    }
+                    MenuRow {
+                        label: "Remove";
+                        icon: Icons.trash;
+                        danger: true;
+                        enabled: root.tabs.length > 1;
+                        clicked => { root.menu(ct.id, "remove", -1); }
+                    }
                 }
             }
         }

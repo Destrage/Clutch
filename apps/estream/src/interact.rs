@@ -608,6 +608,34 @@ pub fn stretch_to_canvas(canvas: Vec2) -> ItemTransform {
     }
 }
 
+/// A top-level item's transform moved from a canvas of size `from` to one of size `to`: the
+/// layout scales evenly to fit and is centered, and an item whose box filled the old canvas
+/// fills the new one.
+pub fn rescale(t: ItemTransform, from: Vec2, to: Vec2) -> ItemTransform {
+    if t.bounds_mode != BoundsMode::None
+        && t.position.abs().max_element() < 0.5
+        && (t.bounds - from).abs().max_element() < 0.5
+    {
+        return ItemTransform {
+            position: Vec2::ZERO,
+            bounds: to,
+            ..t
+        };
+    }
+    let s = (to.x / from.x).min(to.y / from.y);
+    let offset = (to - from * s) * 0.5;
+    let mut out = ItemTransform {
+        position: t.position * s + offset,
+        ..t
+    };
+    if t.bounds_mode == BoundsMode::None {
+        out.scale *= s;
+    } else {
+        out.bounds *= s;
+    }
+    out
+}
+
 /// Moves an item so its AABB is centered on the canvas.
 pub fn centered(geom: &ItemGeom, transform: ItemTransform, canvas: Vec2) -> ItemTransform {
     let delta = canvas * 0.5 - geom.aabb.center();
@@ -817,6 +845,38 @@ mod tests {
             Vec2::new(1920.0, 1080.0),
             std::iter::empty(),
         )
+    }
+
+    #[test]
+    fn rescale_keeps_the_layout() {
+        let hd = Vec2::new(1920.0, 1080.0);
+        let qhd = Vec2::new(2560.0, 1440.0);
+        let tall = Vec2::new(1080.0, 1920.0);
+        let corner = in_corner(hd, Corner::BottomRight);
+        // Same aspect: everything scales by 4/3.
+        let t = rescale(corner, hd, qhd);
+        approx(t.position, corner.position * (4.0 / 3.0));
+        approx(t.bounds, corner.bounds * (4.0 / 3.0));
+        approx(rescale(t, qhd, hd).position, corner.position);
+        // Scale-mode items scale instead of their bounds.
+        let plain = ItemTransform {
+            position: Vec2::new(30.0, 60.0),
+            ..Default::default()
+        };
+        let t = rescale(plain, hd, qhd);
+        approx(t.scale, Vec2::splat(4.0 / 3.0));
+        approx(t.position, Vec2::new(40.0, 80.0));
+        // Other aspect: a full item fills, the rest fits and is centered.
+        let full = rescale(fit_to_canvas(hd), hd, tall);
+        approx(full.position, Vec2::ZERO);
+        approx(full.bounds, tall);
+        let t = rescale(corner, hd, tall);
+        let s = 1080.0 / 1920.0;
+        approx(t.bounds, corner.bounds * s);
+        approx(
+            t.position,
+            corner.position * s + Vec2::new(0.0, (1920.0 - 1080.0 * s) / 2.0),
+        );
     }
 
     #[test]

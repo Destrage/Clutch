@@ -52,6 +52,9 @@ export component AppWindow inherits Window {
     callback canvas-select(string);
     callback canvas-add(int);
     callback canvas-remove(string);
+    callback canvas-menu(string, string, int);
+    /// Canvas presets to duplicate a canvas as.
+    in property <[string]> canvas-sizes;
     callback canvas-rename(string, string);
     in property <image> program-frame;
     in property <int> transition-kind;
@@ -257,6 +260,10 @@ export component AppWindow inherits Window {
     in property <string> details-busy;
     in property <bool> details-loading;
     in property <bool> details-ask: true;
+    /// Canvases to stream (empty with one canvas), and the one the destinations use (-1 mixed).
+    in property <[string]> details-canvases;
+    in property <int> details-canvas: -1;
+    callback details-canvas-picked(int);
     callback details-text(int, string, string);
     callback details-flag(int, string, bool);
     callback details-choose(int, string, int);
@@ -301,6 +308,8 @@ export component AppWindow inherits Window {
     callback scene-activate(string);
     callback scene-add();
     callback scene-duplicate(string);
+    /// (scene id, canvas id)
+    callback scene-copy-to(string, string);
     callback scene-remove(string);
     callback scene-rename(string, string);
     callback layer-select(string);
@@ -452,7 +461,8 @@ export component AppWindow inherits Window {
                     renaming <=> root.renaming-canvas;
                     select(id) => { root.canvas-select(id); main-keys.focus(); }
                     add(i) => { root.canvas-add(i); }
-                    remove(id) => { root.canvas-remove(id); }
+                    sizes: root.canvas-sizes;
+                    menu(id, action, preset) => { root.canvas-menu(id, action, preset); }
                     rename(id, name) => { root.canvas-rename(id, name); main-keys.focus(); }
                 }
                 stage := Rectangle {
@@ -625,6 +635,8 @@ export component AppWindow inherits Window {
                     activate(id) => { root.scene-activate(id); main-keys.focus(); }
                     add => { root.scene-add(); }
                     duplicate(id) => { root.scene-duplicate(id); }
+                    canvases: root.canvas-tabs;
+                    copy-to(id, canvas) => { root.scene-copy-to(id, canvas); }
                     remove(id) => { root.scene-remove(id); }
                     rename(id, name) => { root.scene-rename(id, name); main-keys.focus(); }
                     toggle-mute(id) => { root.mixer-mute(id); }
@@ -894,6 +906,9 @@ export component AppWindow inherits Window {
         busy: root.details-busy;
         loading: root.details-loading;
         ask: root.details-ask;
+        canvases: root.details-canvases;
+        canvas: root.details-canvas;
+        pick-canvas(i) => { root.details-canvas-picked(i); }
         text(i, field, value) => { root.details-text(i, field, value); }
         flag(i, field, value) => { root.details-flag(i, field, value); }
         choose(i, field, value) => { root.details-choose(i, field, value); }
