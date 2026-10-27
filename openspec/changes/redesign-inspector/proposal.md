@@ -19,7 +19,8 @@ properties editor is, and for sliders where a number box is hard to use.
   - **Sound:** volume and balance, who hears it, voice effects, audio filters, and the rest
     (mono, all scenes, sync offset, tracks) under Advanced.
   The tab strip is hidden when only one tab applies (a microphone without settings). The last
-  chosen tab is kept when the selection changes, when the new selection has it.
+  chosen tab is kept when the selection changes, when the new selection has it; otherwise a
+  sound opens on Sound and anything else on its first tab.
 - **Collapsible panels:** within a tab, related settings sit in panels with a header that
   folds them, as in Blender. Rarely used panels (Crop, Advanced) start folded. Each audio or
   video filter is its own panel with its on/off switch, move and remove buttons in the header.

@@ -31,7 +31,8 @@ A video filter parameter from 0 to 1 with step 1 and no choices is a switch.
 ## Volume
 The volume slider runs from -60 dB to +26 dB (the range the engine accepts above silence),
 linear in dB, with a tick at 0 dB. At the bottom it shows "-∞ dB" and sets -100 dB, matching
-the mixer fader, which treats -60 dB and below as silence.
+the mixer fader, which treats -60 dB and below as silence. While muted it still shows the
+level; the red mute button beside it says it is muted.
 
 ## State
 Tabs and folds live on the window because the inspector is created and destroyed with the
@@ -48,4 +49,6 @@ Filter panels fold per filter while the inspector is open (local state); they ar
 ## Tabs
 `inspector-tab` holds the chosen tab's name. The shown tab is the chosen one if the selection
 has it, otherwise the first one it has, so choosing Sound on a microphone and then clicking a
-camera with sound keeps Sound, while clicking an image shows Source or Layout.
+camera with sound keeps Sound, while clicking an image shows Source or Layout. A sound with
+no picture (a microphone, a test tone) falls back to Sound rather than Source, since opening a
+sound from its knob is about how it sounds.
