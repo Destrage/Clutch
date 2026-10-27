@@ -12,7 +12,7 @@
 - [x] 2.3 Go live window: Canvas choice; toast naming the canvas when it isn't the edited one
 
 ## 3. Check
-- [ ] 3.1 Build, clippy, tests; in-app check: duplicate as 1440p, copy a scene to a vertical
+- [x] 3.1 Build, clippy, tests; in-app check: duplicate as 1440p, copy a scene to a vertical
       canvas, stream the 1440p canvas from its tab
 - [ ] 3.2 In-app check by the user: go live from the 2K canvas and check the stream's
       resolution
