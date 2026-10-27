@@ -3,8 +3,8 @@
 
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
-import { MixerStrip, AudioInspect } from "types.slint";
-import { Icon, IconButton, NumberField, Toggle, Slider, Select, SectionTitle, Hint } from "widgets.slint";
+import { MixerStrip, AudioInspect, InspectorFolds } from "types.slint";
+import { Icon, IconButton, Toggle, Select, Hint, ValueSlider, FoldPanel, Segmented, FieldRow, ParamEditor } from "widgets.slint";
 
 // A source's sound as a knob. The ring shows the volume (-60 dB to 0 dB) and the live level glows
 // inside. Double-click mutes, dragging up/down or scrolling sets the volume, Ctrl+click goes back
@@ -196,9 +196,12 @@ export component SoundKnob inherits Rectangle {
     }
 }
 
-// A source's audio settings: volume, hearing it, balance, tracks and filters.
+// A source's sound settings in panels: volume and balance, who hears it, voice effects, filters,
+// and the rarely changed rest under Advanced. Shared by the inspector's Sound tab and the Live
+// deck; `folds` is the window's fold state.
 export component AudioSettings inherits VerticalLayout {
     in property <AudioInspect> audio;
+    in-out property <InspectorFolds> folds;
     callback audio-set(string, float);
     callback filter-add(int);
     callback filter-remove(string);
@@ -207,166 +210,226 @@ export component AudioSettings inherits VerticalLayout {
     callback filter-move(string, bool);
     callback commit();
 
-    spacing: 10px;
-    SectionTitle { text: "AUDIO"; }
-    HorizontalLayout {
-        spacing: 8px;
-        NumberField { label: "dB"; value: root.audio.volume-db; step: 0.5; decimals: 1; minimum: -100; maximum: 26; changed(v) => { root.audio-set("volume", v); } committed => { root.commit(); } }
-        Toggle { label: "Mute"; checked: root.audio.muted; toggled(v) => { root.audio-set("muted", v ? 1 : 0); } }
+    property <[string]> voices: ["Off", "Deeper", "Higher", "Robot", "Radio", "Cave", "Echo"];
+    property <[string]> hearing: ["Stream only", "Stream + me", "Only me"];
+    // Monitoring is 0 off, 1 monitor only, 2 monitor and output; this is its place in `hearing`.
+    property <int> hearing-index: root.audio.monitoring == 2 ? 1 : root.audio.monitoring == 1 ? 2 : 0;
+
+    // The level stays readable while muted; the mute button beside it is red then.
+    pure function volume-text() -> string {
+        if (root.audio.volume-db <= -60) { return "-∞ dB"; }
+        return (root.audio.volume-db > 0 ? "+" : "") + root.audio.volume-db.to-fixed(1) + " dB";
     }
-    // Hearing it locally: off, on (and on the stream), or only for the streamer.
-    HorizontalLayout {
-        spacing: 16px;
-        Toggle {
-            label: "Hear on my speakers";
-            checked: root.audio.monitoring != 0;
-            toggled(v) => { root.audio-set("monitoring", v ? 2 : 0); }
-        }
-        if root.audio.monitoring != 0: Toggle {
-            label: "Only me";
-            checked: root.audio.monitoring == 1;
-            toggled(v) => { root.audio-set("monitoring", v ? 1 : 2); }
-        }
+    pure function balance-text() -> string {
+        if (abs(root.audio.balance - 0.5) < 0.01) { return "Center"; }
+        return root.audio.balance < 0.5 ? "L " + round((0.5 - root.audio.balance) * 200) : "R " + round((root.audio.balance - 0.5) * 200);
     }
-    if root.audio.monitoring == 1: Text {
-        text: "Only you hear this; it isn't sent to the stream or recordings.";
-        color: Theme.text-faint;
-        font-size: Theme.font-xs;
-        wrap: word-wrap;
-    }
-    // Voice effects, one click each (the filters below stay editable).
-    HorizontalLayout {
-        spacing: 10px;
-        Text { text: "Voice"; color: Theme.text-muted; font-size: Theme.font-s; vertical-alignment: center; width: 80px; }
-        Select {
-            label: "Voice effect";
-            options: ["Off", "Deeper", "Higher", "Robot", "Radio", "Cave", "Echo"];
-            current-index: root.audio.voice;
-            selected(i) => { root.audio-set("voice", i); }
-        }
-    }
-    if root.audio.voice > 0 && root.audio.monitoring == 0: Text {
-        text: "Turn on Hear on my speakers to try it (headphones avoid feedback).";
-        color: Theme.text-faint;
-        font-size: Theme.font-xs;
-        wrap: word-wrap;
-    }
-    if root.audio.problem != "": Rectangle {
-        border-radius: Theme.radius-m;
-        background: Theme.warn.with-alpha(0.12);
-        height: problem-text.preferred-height + 16px;
-        problem-text := Text {
-            x: 8px;
-            width: parent.width - 16px;
-            text: root.audio.problem;
-            color: Theme.text;
-            font-size: Theme.font-xs;
-            wrap: word-wrap;
-            vertical-alignment: center;
-        }
-    }
-    HorizontalLayout {
-        spacing: 10px;
-        Text { text: "Balance"; color: Theme.text-muted; font-size: Theme.font-s; vertical-alignment: center; width: 56px; }
-        Slider { label: "Balance"; value: root.audio.balance; changed(v) => { root.audio-set("balance", v); } committed => { root.commit(); } }
-        Text {
-            text: abs(root.audio.balance - 0.5) < 0.01 ? "C" : root.audio.balance < 0.5 ? "L" + round((0.5 - root.audio.balance) * 200) : "R" + round((root.audio.balance - 0.5) * 200);
-            color: Theme.text-muted; font-size: Theme.font-s; vertical-alignment: center; width: 36px; horizontal-alignment: right;
-        }
-    }
-    HorizontalLayout {
-        spacing: 16px;
-        Toggle { label: "Mono"; checked: root.audio.mono; toggled(v) => { root.audio-set("mono", v ? 1 : 0); } }
-        Toggle { label: "All scenes"; checked: root.audio.global; toggled(v) => { root.audio-set("global", v ? 1 : 0); } }
-    }
-    HorizontalLayout {
-        spacing: 10px;
-        Text { text: "Sync offset"; color: Theme.text-muted; font-size: Theme.font-s; vertical-alignment: center; width: 80px; }
-        NumberField { label: "ms"; value: root.audio.sync-ms; step: 10; minimum: 0; maximum: 2000; changed(v) => { root.audio-set("sync", v); } committed => { root.commit(); } }
-    }
-    HorizontalLayout {
-        spacing: 4px;
-        Text { text: "Tracks"; color: Theme.text-muted; font-size: Theme.font-s; vertical-alignment: center; width: 80px; }
-        for t in [0, 1, 2, 3, 4, 5]: Rectangle {
-            property <bool> on: mod(floor(root.audio.tracks / pow(2, t)), 2) == 1;
-            width: 26px;
-            height: 24px;
+
+    spacing: 8px;
+
+    FoldPanel {
+        title: "Volume";
+        folded: root.folds.volume;
+        note: root.folds.volume ? (root.audio.muted ? "Muted" : root.volume-text()) : "";
+        toggle-fold => { root.folds.volume = !root.folds.volume; }
+        if root.audio.problem != "": Rectangle {
             border-radius: Theme.radius-s;
-            background: on ? Theme.accent : Theme.surface-3;
-            accessible-role: checkbox;
-            accessible-label: "Track " + (t + 1);
-            accessible-checked: on;
-            Text { text: t + 1; color: on ? Theme.on-accent : Theme.text-muted; font-size: Theme.font-s; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
-            TouchArea {
-                mouse-cursor: MouseCursor.pointer;
-                clicked => { root.audio-set("tracks", on ? root.audio.tracks - pow(2, t) : root.audio.tracks + pow(2, t)); }
+            background: Theme.warn.with-alpha(0.12);
+            height: problem-text.preferred-height + 16px;
+            problem-text := Text {
+                x: 8px;
+                width: parent.width - 16px;
+                text: root.audio.problem;
+                color: Theme.text;
+                font-size: Theme.font-xs;
+                wrap: word-wrap;
+                vertical-alignment: center;
             }
         }
+        HorizontalLayout {
+            spacing: 6px;
+            ValueSlider {
+                label: "Volume";
+                value: max(root.audio.volume-db, -60);
+                minimum: -60;
+                maximum: 26;
+                step: 0.5;
+                decimals: 1;
+                origin: -60;
+                mark: 0;
+                display: root.volume-text();
+                // The bottom is silence, as on the mixer fader.
+                changed(v) => { root.audio-set("volume", v <= -60 ? -100 : v); }
+                committed => { root.commit(); }
+            }
+            VerticalLayout {
+                alignment: center;
+                IconButton {
+                    icon: root.audio.muted ? Icons.volume-x : Icons.volume;
+                    tooltip: root.audio.muted ? "Unmute" : "Mute";
+                    toggled: root.audio.muted;
+                    tint: root.audio.muted ? Theme.live : Theme.text-muted;
+                    size: 26px;
+                    icon-size: 14px;
+                    clicked => { root.audio-set("muted", root.audio.muted ? 0 : 1); }
+                }
+            }
+        }
+        ValueSlider {
+            label: "Balance";
+            value: root.audio.balance;
+            minimum: 0;
+            maximum: 1;
+            step: 0.01;
+            origin: 0.5;
+            mark: 0.5;
+            display: root.balance-text();
+            changed(v) => { root.audio-set("balance", v); }
+            committed => { root.commit(); }
+        }
     }
-    HorizontalLayout {
-        SectionTitle { text: "FILTERS"; horizontal-stretch: 1; vertical-alignment: center; }
+
+    FoldPanel {
+        title: "Who hears it";
+        folded: root.folds.hearing;
+        note: root.folds.hearing ? root.hearing[root.hearing-index] : "";
+        toggle-fold => { root.folds.hearing = !root.folds.hearing; }
+        Segmented {
+            label: "Who hears it";
+            options: root.hearing;
+            current: root.hearing-index;
+            selected(i) => { root.audio-set("monitoring", i == 1 ? 2 : i == 2 ? 1 : 0); }
+        }
+        Text {
+            text: root.audio.monitoring == 1 ? "Only you hear this on your speakers; it isn't sent to the stream or recordings."
+                : root.audio.monitoring == 2 ? "Viewers hear it, and so do you on your speakers. Headphones avoid echo."
+                : "Viewers and recordings hear it; it isn't played on your speakers.";
+            color: Theme.text-faint;
+            font-size: Theme.font-xs;
+            wrap: word-wrap;
+        }
+    }
+
+    FoldPanel {
+        title: "Voice";
+        folded: root.folds.voice;
+        note: root.folds.voice && root.audio.voice > 0 ? root.voices[root.audio.voice] : "";
+        toggle-fold => { root.folds.voice = !root.folds.voice; }
+        for row in [[0, 1, 2, 3], [4, 5, 6]]: HorizontalLayout {
+            spacing: 6px;
+            for i in row: Rectangle {
+                property <bool> on: i == root.audio.voice;
+                horizontal-stretch: 1;
+                height: 28px;
+                border-radius: Theme.radius-s;
+                background: on ? Theme.accent-soft : chip-ta.has-hover ? Theme.surface-3.mix(Theme.text, 0.92) : Theme.surface-3;
+                border-width: 1px;
+                border-color: on ? Theme.accent : transparent;
+                accessible-role: radio-button;
+                accessible-label: root.voices[i] + " voice";
+                accessible-checked: on;
+                accessible-action-default => { root.audio-set("voice", i); }
+                Text {
+                    text: root.voices[i];
+                    color: on ? Theme.accent-strong : Theme.text;
+                    font-size: Theme.font-s;
+                    font-weight: on ? 600 : 400;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                chip-ta := TouchArea {
+                    mouse-cursor: MouseCursor.pointer;
+                    clicked => { root.audio-set("voice", i); }
+                }
+            }
+            // The short row's buttons stay as wide as the full row's.
+            if row.length < 4: Rectangle { horizontal-stretch: 4 - row.length; }
+        }
+        if root.audio.voice > 0 && root.audio.monitoring == 0: Text {
+            text: "To try it, choose Stream + me under Who hears it (headphones avoid feedback).";
+            color: Theme.text-faint;
+            font-size: Theme.font-xs;
+            wrap: word-wrap;
+        }
+    }
+
+    FoldPanel {
+        title: "Filters";
+        folded: root.folds.filters;
+        note: root.audio.filters.length > 0 ? root.audio.filters.length : "";
+        toggle-fold => { root.folds.filters = !root.folds.filters; }
         Select {
-            width: 150px;
             label: "Add filter";
             options: ["+ Add filter…", "Noise suppression", "Noise gate", "Compressor", "Limiter", "Gain", "Pitch shift", "Robot voice", "Radio voice", "Echo", "Reverb"];
             current-index: 0;
             selected(i) => { if (i > 0) { root.filter-add(i - 1); } }
         }
-    }
-    if root.audio.filters.length == 0: Text {
-        text: "No filters. Noise suppression and a limiter are a good start for microphones.";
-        color: Theme.text-faint;
-        font-size: Theme.font-xs;
-        wrap: word-wrap;
-    }
-    for filter in root.audio.filters: Rectangle {
-        border-radius: Theme.radius-m;
-        background: Theme.surface-2;
-        border-width: 1px;
-        border-color: Theme.border;
-        height: filter-body.preferred-height;
-        filter-body := VerticalLayout {
-            padding: 8px;
-            spacing: 6px;
-            HorizontalLayout {
-                spacing: 2px;
-                Toggle { checked: filter.enabled; toggled(v) => { root.filter-toggle(filter.id, v); } }
-                Text { text: filter.name; color: filter.enabled ? Theme.text : Theme.text-faint; font-size: Theme.font-s; font-weight: 600; vertical-alignment: center; horizontal-stretch: 1; }
-                IconButton { icon: Icons.chevron-up; tooltip: "Move up"; size: 22px; icon-size: 12px; clicked => { root.filter-move(filter.id, true); } }
-                IconButton { icon: Icons.chevron-down; tooltip: "Move down"; size: 22px; icon-size: 12px; clicked => { root.filter-move(filter.id, false); } }
-                IconButton { icon: Icons.trash; tooltip: "Remove filter"; size: 22px; icon-size: 12px; clicked => { root.filter-remove(filter.id); } }
+        if root.audio.filters.length == 0: Text {
+            text: "No filters. Noise suppression and a limiter are a good start for microphones.";
+            color: Theme.text-faint;
+            font-size: Theme.font-xs;
+            wrap: word-wrap;
+        }
+        for filter in root.audio.filters: FoldPanel {
+            property <bool> closed;
+            sub: true;
+            title: filter.name;
+            folded: self.closed;
+            has-switch: true;
+            switch-on: filter.enabled;
+            has-moves: true;
+            toggle-fold => { self.closed = !self.closed; }
+            switched(v) => { root.filter-toggle(filter.id, v); }
+            move(up) => { root.filter-move(filter.id, up); }
+            remove => { root.filter-remove(filter.id); }
+            for param in filter.params: ParamEditor {
+                param: param;
+                changed(v) => { root.filter-param(filter.id, param.key, v); }
+                committed => { root.commit(); }
             }
-            for param in filter.params: VerticalLayout {
-                spacing: 4px;
-                HorizontalLayout {
-                    spacing: 8px;
-                    Text { text: param.label; color: Theme.text-muted; font-size: Theme.font-xs; vertical-alignment: center; width: 96px; }
-                    if param.choices.length > 0: Select {
-                        label: param.label;
-                        options: param.choices;
-                        current-index: param.value;
-                        selected(i) => {
-                            root.filter-param(filter.id, param.key, i);
-                            root.commit();
-                        }
-                    }
-                    if param.choices.length == 0: NumberField {
-                        label: "";
-                        value: param.value;
-                        minimum: param.minimum;
-                        maximum: param.maximum;
-                        step: param.step;
-                        decimals: param.step < 1 ? 1 : 0;
-                        suffix: param.unit;
-                        changed(v) => { root.filter-param(filter.id, param.key, v); }
-                        committed => { root.commit(); }
-                    }
-                }
-                if param.note != "": Text {
-                    text: param.note;
-                    color: Theme.text-faint;
-                    font-size: Theme.font-xs;
-                    wrap: word-wrap;
+        }
+    }
+
+    FoldPanel {
+        title: "Advanced";
+        folded: root.folds.advanced;
+        toggle-fold => { root.folds.advanced = !root.folds.advanced; }
+        ValueSlider {
+            label: "Sync offset";
+            value: root.audio.sync-ms;
+            minimum: 0;
+            maximum: 2000;
+            step: 10;
+            decimals: 0;
+            suffix: " ms";
+            changed(v) => { root.audio-set("sync", v); }
+            committed => { root.commit(); }
+        }
+        Text {
+            text: "Delays this sound to line it up with a camera that lags behind.";
+            color: Theme.text-faint;
+            font-size: Theme.font-xs;
+            wrap: word-wrap;
+        }
+        Toggle { label: "Mono"; checked: root.audio.mono; toggled(v) => { root.audio-set("mono", v ? 1 : 0); } }
+        Toggle { label: "Heard in all scenes"; checked: root.audio.global; toggled(v) => { root.audio-set("global", v ? 1 : 0); } }
+        FieldRow {
+            label: "Tracks";
+            label-width: 56px;
+            for t in [0, 1, 2, 3, 4, 5]: Rectangle {
+                property <bool> on: mod(floor(root.audio.tracks / pow(2, t)), 2) == 1;
+                horizontal-stretch: 1;
+                height: 26px;
+                border-radius: Theme.radius-s;
+                background: on ? Theme.accent : Theme.surface-3;
+                accessible-role: checkbox;
+                accessible-label: "Track " + (t + 1);
+                accessible-checked: on;
+                accessible-action-default => { root.audio-set("tracks", on ? root.audio.tracks - pow(2, t) : root.audio.tracks + pow(2, t)); }
+                Text { text: t + 1; color: on ? Theme.on-accent : Theme.text-muted; font-size: Theme.font-s; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                TouchArea {
+                    mouse-cursor: MouseCursor.pointer;
+                    clicked => { root.audio-set("tracks", on ? root.audio.tracks - pow(2, t) : root.audio.tracks + pow(2, t)); }
                 }
             }
         }

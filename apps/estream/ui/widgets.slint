@@ -2,6 +2,7 @@
 
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
+import { FilterParamRow } from "types.slint";
 
 // Shared tooltip state, rendered once at the window root (see TooltipLayer).
 export global Hint {
@@ -446,6 +447,353 @@ export component Slider inherits Rectangle {
     }
 }
 
+// A bounded number as a bar: the name on the left, the value on the right, filled up to the
+// value. Dragging moves the value with the pointer (Shift is ten times finer) without jumping
+// to where the press landed, a click without dragging types an exact value, and arrow keys
+// step it.
+export component ValueSlider inherits Rectangle {
+    in property <string> label;
+    in property <float> value;
+    in property <float> minimum: 0;
+    in property <float> maximum: 1;
+    in property <float> step: 0.01;
+    in property <int> decimals: 2;
+    in property <string> suffix;
+    /// Shown instead of the number ("" = the number and suffix).
+    in property <string> display;
+    /// Where the fill starts: zero for ranges that cross it, else the bottom.
+    in property <float> origin: minimum < 0 && maximum > 0 ? 0 : minimum;
+    /// A tick at this value (0 dB on a volume); outside the range for none.
+    in property <float> mark: minimum - 1;
+    in property <bool> enabled: true;
+    callback changed(float);
+    callback committed();
+
+    property <float> span: max(root.maximum - root.minimum, 0.000001);
+    property <float> ratio: clamp((root.value - root.minimum) / root.span, 0, 1);
+    property <float> origin-ratio: clamp((root.origin - root.minimum) / root.span, 0, 1);
+    property <bool> editing;
+    property <bool> dragging;
+    // Unsnapped value while dragging, and the pointer's last x.
+    property <float> drag-value;
+    property <length> last-x;
+
+    pure function snap(v: float) -> float {
+        return clamp(root.minimum + round((v - root.minimum) / root.step) * root.step, root.minimum, root.maximum);
+    }
+    pure function value-text() -> string {
+        return root.display != "" ? root.display : root.value.to-fixed(root.decimals) + root.suffix;
+    }
+    function nudge(steps: float) {
+        root.changed(root.snap(root.value + steps * root.step));
+        root.committed();
+    }
+
+    height: 26px;
+    min-width: 80px;
+    horizontal-stretch: 1;
+    clip: true;
+    border-radius: Theme.radius-s;
+    background: Theme.surface-2;
+    border-width: 1px;
+    border-color: keys.has-focus || root.editing ? Theme.accent : ta.has-hover ? Theme.border-strong : Theme.border;
+    opacity: root.enabled ? 1 : 0.5;
+    accessible-role: slider;
+    accessible-label: root.label;
+    accessible-value: root.value-text();
+    accessible-value-minimum: root.minimum;
+    accessible-value-maximum: root.maximum;
+    accessible-value-step: root.step;
+    accessible-action-increment => { root.nudge(1); }
+    accessible-action-decrement => { root.nudge(-1); }
+
+    // The fill, from the origin to the value.
+    Rectangle {
+        x: parent.width * min(root.origin-ratio, root.ratio);
+        width: parent.width * abs(root.ratio - root.origin-ratio);
+        background: Theme.accent.with-alpha(ta.has-hover || root.dragging ? 0.34 : 0.26);
+    }
+    if root.mark >= root.minimum && root.mark <= root.maximum: Rectangle {
+        x: parent.width * (root.mark - root.minimum) / root.span - 1px;
+        y: 5px;
+        width: 2px;
+        height: parent.height - 10px;
+        background: Theme.text-faint.with-alpha(0.6);
+    }
+    if !root.editing: HorizontalLayout {
+        padding-left: 9px;
+        padding-right: 9px;
+        spacing: 8px;
+        Text {
+            text: root.label;
+            color: Theme.text-muted;
+            font-size: Theme.font-s;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+        Text {
+            text: root.value-text();
+            color: Theme.text;
+            font-size: Theme.font-s;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
+    }
+
+    keys := FocusScope {
+        enabled: root.enabled && !root.editing;
+        key-pressed(e) => {
+            let n = e.modifiers.shift ? 10 : 1;
+            if (e.text == Key.LeftArrow || e.text == Key.DownArrow) {
+                root.nudge(-n);
+                return accept;
+            }
+            if (e.text == Key.RightArrow || e.text == Key.UpArrow) {
+                root.nudge(n);
+                return accept;
+            }
+            if (e.text == Key.Return) {
+                root.editing = true;
+                return accept;
+            }
+            reject
+        }
+    }
+    ta := TouchArea {
+        enabled: root.enabled && !root.editing;
+        mouse-cursor: MouseCursor.ew-resize;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                root.dragging = false;
+                root.drag-value = root.value;
+                root.last-x = self.mouse-x;
+            } else if (e.kind == PointerEventKind.move && self.pressed) {
+                if (!root.dragging && abs(self.mouse-x - self.pressed-x) > 3px) {
+                    root.dragging = true;
+                    root.last-x = self.mouse-x;
+                }
+                if (root.dragging) {
+                    root.drag-value += (self.mouse-x - root.last-x) / max(root.width, 1px) * root.span * (e.modifiers.shift ? 0.1 : 1);
+                    root.drag-value = clamp(root.drag-value, root.minimum, root.maximum);
+                    root.last-x = self.mouse-x;
+                    root.changed(root.snap(root.drag-value));
+                }
+            } else if (e.kind == PointerEventKind.up && e.button == PointerEventButton.left) {
+                if (root.dragging) {
+                    root.dragging = false;
+                    root.committed();
+                } else {
+                    root.editing = true;
+                }
+            }
+        }
+    }
+    if root.editing: FocusScope {
+        key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                root.editing = false;
+                return accept;
+            }
+            reject
+        }
+        input := TextInput {
+            x: 9px;
+            width: parent.width - 18px;
+            single-line: true;
+            vertical-alignment: center;
+            color: Theme.text;
+            font-size: Theme.font-s;
+            selection-background-color: Theme.accent.with-alpha(0.35);
+            selection-foreground-color: Theme.text;
+            text: root.value.to-fixed(root.decimals);
+            init => {
+                self.focus();
+                self.select-all();
+            }
+            accepted => {
+                if (self.text.is-float()) {
+                    root.changed(clamp(self.text.to-float(), root.minimum, root.maximum));
+                    root.committed();
+                }
+                root.editing = false;
+            }
+            changed has-focus => {
+                if (!self.has-focus && root.editing) {
+                    if (self.text.is-float() && self.text.to-float() != root.value) {
+                        root.changed(clamp(self.text.to-float(), root.minimum, root.maximum));
+                        root.committed();
+                    }
+                    root.editing = false;
+                }
+            }
+        }
+    }
+}
+
+// A group of settings under a header that folds it, like Blender's panels. A `sub` panel sits
+// inside another panel with a lighter header. The header can carry a switch (a filter's on/off),
+// one action button, and move/remove buttons.
+export component FoldPanel inherits Rectangle {
+    in property <string> title;
+    /// Folded state belongs to the caller, which flips it on `toggle-fold`.
+    in property <bool> folded;
+    in property <bool> sub;
+    /// Muted text on the right of the header.
+    in property <string> note;
+    in property <bool> has-switch;
+    in property <bool> switch-on;
+    in property <image> action-icon;
+    in property <string> action-tooltip;
+    in property <bool> has-action;
+    in property <bool> has-moves;
+    callback toggle-fold();
+    callback switched(bool);
+    callback action();
+    callback move(bool);
+    callback remove();
+
+    height: col.preferred-height;
+    border-radius: root.sub ? Theme.radius-s : Theme.radius-m;
+    background: root.sub ? Theme.surface : Theme.surface-2;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    col := VerticalLayout {
+        Rectangle {
+            height: root.sub ? 30px : 34px;
+            border-radius: root.border-radius;
+            background: head-ta.has-hover ? Theme.hover : transparent;
+            accessible-role: button;
+            accessible-label: root.title;
+            accessible-expandable: true;
+            accessible-expanded: !root.folded;
+            accessible-action-default => { root.toggle-fold(); }
+            head-ta := TouchArea {
+                mouse-cursor: MouseCursor.pointer;
+                clicked => { root.toggle-fold(); }
+            }
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                spacing: 6px;
+                VerticalLayout {
+                    alignment: center;
+                    Icon {
+                        source: Icons.chevron-down;
+                        size: 13px;
+                        tint: Theme.text-faint;
+                        transform-rotation: root.folded ? -90deg : 0deg;
+                        animate transform-rotation { duration: 120ms; easing: ease-out; }
+                    }
+                }
+                if root.has-switch: VerticalLayout {
+                    alignment: center;
+                    Toggle {
+                        label: "";
+                        accessible-label: root.title + " on";
+                        checked: root.switch-on;
+                        toggled(v) => { root.switched(v); }
+                    }
+                }
+                Text {
+                    text: root.title;
+                    color: root.has-switch && !root.switch-on ? Theme.text-faint : Theme.text;
+                    font-size: root.sub ? Theme.font-s : Theme.font-m;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+                if root.note != "": Text {
+                    text: root.note;
+                    color: Theme.text-faint;
+                    font-size: Theme.font-xs;
+                    vertical-alignment: center;
+                }
+                if root.has-action: VerticalLayout {
+                    alignment: center;
+                    IconButton { icon: root.action-icon; tooltip: root.action-tooltip; size: 24px; icon-size: 13px; clicked => { root.action(); } }
+                }
+                if root.has-moves: HorizontalLayout {
+                    VerticalLayout {
+                        alignment: center;
+                        IconButton { icon: Icons.chevron-up; tooltip: "Move up"; size: 22px; icon-size: 12px; clicked => { root.move(true); } }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        IconButton { icon: Icons.chevron-down; tooltip: "Move down"; size: 22px; icon-size: 12px; clicked => { root.move(false); } }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        IconButton { icon: Icons.trash; tooltip: "Remove"; size: 22px; icon-size: 12px; clicked => { root.remove(); } }
+                    }
+                }
+            }
+        }
+        Rectangle {
+            height: root.folded ? 0px : body.preferred-height;
+            clip: true;
+            animate height { duration: 140ms; easing: ease-out; }
+            body := VerticalLayout {
+                y: 0;
+                height: self.preferred-height;
+                padding-left: 10px;
+                padding-right: 10px;
+                padding-top: 2px;
+                padding-bottom: 10px;
+                spacing: 8px;
+                @children
+            }
+        }
+    }
+}
+
+// A choice of two to four options shown side by side.
+export component Segmented inherits Rectangle {
+    in property <[string]> options;
+    in property <int> current;
+    in property <string> label;
+    callback selected(int);
+
+    height: 28px;
+    horizontal-stretch: 1;
+    border-radius: Theme.radius-s;
+    background: Theme.surface-3;
+    accessible-role: radio-group;
+    accessible-label: root.label;
+    HorizontalLayout {
+        padding: 2px;
+        spacing: 2px;
+        for option[i] in root.options: Rectangle {
+            horizontal-stretch: 1;
+            min-width: 0px;
+            border-radius: Theme.radius-s - 2px;
+            background: i == root.current ? Theme.surface : seg-ta.has-hover ? Theme.hover : transparent;
+            drop-shadow-blur: i == root.current ? 3px : 0px;
+            drop-shadow-color: #00000030;
+            accessible-role: radio-button;
+            accessible-label: option;
+            accessible-checked: i == root.current;
+            accessible-action-default => { root.selected(i); }
+            Text {
+                width: parent.width - 8px;
+                text: option;
+                color: i == root.current ? Theme.text : Theme.text-muted;
+                font-size: Theme.font-s;
+                font-weight: i == root.current ? 600 : 400;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            seg-ta := TouchArea {
+                mouse-cursor: MouseCursor.pointer;
+                clicked => { root.selected(i); }
+            }
+        }
+    }
+}
+
 export component Select inherits Rectangle {
     in property <[string]> options;
     in property <int> current-index;
@@ -667,4 +1015,102 @@ export component EmptyState inherits VerticalLayout {
         wrap: word-wrap;
     }
     @children
+}
+
+// A setting's name on the left and its control on the right.
+export component FieldRow inherits HorizontalLayout {
+    in property <string> label;
+    in property <length> label-width: 84px;
+    spacing: 8px;
+    Text {
+        width: root.label-width;
+        text: root.label;
+        color: Theme.text-muted;
+        font-size: Theme.font-s;
+        vertical-alignment: center;
+        wrap: word-wrap;
+    }
+    @children
+}
+
+// One audio or video filter parameter, as the control that suits it: a segmented choice or a
+// dropdown for named options, a switch for on/off, a slider for a range that can be dragged
+// precisely, and a number field otherwise.
+export component ParamEditor inherits VerticalLayout {
+    in property <FilterParamRow> param;
+    callback changed(float);
+    callback committed();
+
+    property <bool> choice: root.param.choices.length > 0;
+    property <bool> switch: !root.choice && root.param.minimum == 0 && root.param.maximum == 1 && root.param.step == 1;
+    property <bool> slider: !root.choice && !root.switch && root.param.step > 0
+        && (root.param.maximum - root.param.minimum) / root.param.step <= 1000;
+    property <int> decimals: root.param.step < 0.1 ? 2 : root.param.step < 1 ? 1 : 0;
+    // Units that read as words get a space ("-26 dB"); symbols don't ("100%", "4.0:1").
+    property <string> unit: root.param.unit == "dB" || root.param.unit == "ms" || root.param.unit == "Hz" || root.param.unit == "px" ? " " + root.param.unit : root.param.unit;
+
+    spacing: 4px;
+    if root.choice && root.param.choices.length <= 3: FieldRow {
+        label: root.param.label;
+        Segmented {
+            label: root.param.label;
+            options: root.param.choices;
+            current: root.param.value;
+            selected(i) => {
+                root.changed(i);
+                root.committed();
+            }
+        }
+    }
+    if root.choice && root.param.choices.length > 3: FieldRow {
+        label: root.param.label;
+        Select {
+            label: root.param.label;
+            options: root.param.choices;
+            current-index: root.param.value;
+            selected(i) => {
+                root.changed(i);
+                root.committed();
+            }
+        }
+    }
+    if root.switch: Toggle {
+        label: root.param.label;
+        checked: root.param.value > 0.5;
+        toggled(v) => {
+            root.changed(v ? 1 : 0);
+            root.committed();
+        }
+    }
+    if root.slider: ValueSlider {
+        label: root.param.label;
+        value: root.param.value;
+        minimum: root.param.minimum;
+        maximum: root.param.maximum;
+        step: root.param.step;
+        decimals: root.decimals;
+        suffix: root.unit;
+        changed(v) => { root.changed(v); }
+        committed => { root.committed(); }
+    }
+    if !root.choice && !root.switch && !root.slider: FieldRow {
+        label: root.param.label;
+        NumberField {
+            label: "";
+            value: root.param.value;
+            minimum: root.param.minimum;
+            maximum: root.param.maximum;
+            step: root.param.step;
+            decimals: root.decimals;
+            suffix: root.param.unit;
+            changed(v) => { root.changed(v); }
+            committed => { root.committed(); }
+        }
+    }
+    if root.param.note != "": Text {
+        text: root.param.note;
+        color: Theme.text-faint;
+        font-size: Theme.font-xs;
+        wrap: word-wrap;
+    }
 }

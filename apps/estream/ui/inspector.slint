@@ -1,0 +1,703 @@
+// The selected item's settings, grouped like Blender's properties editor: tabs by category
+// (Source, Layout, Look, Sound), each holding panels that fold.
+
+import { Theme } from "theme.slint";
+import { Icons } from "icons.slint";
+import { Inspect, PropRow, AudioInspect, VideoFilterRow, MediaInspect, InspectorFolds } from "types.slint";
+import {
+    Button, IconButton, Icon, TextField, TextArea, NumberField, Toggle, Select, Panel, Badge,
+    EmptyState, Hint, ValueSlider, FoldPanel, FieldRow, ParamEditor,
+} from "widgets.slint";
+import { AudioSettings } from "sound.slint";
+import { KindIcon } from "panels.slint";
+
+// Editor for one generic source property.
+component PropEditor inherits VerticalLayout {
+    in property <PropRow> prop;
+    callback set-flag(bool);
+    callback set-number(float);
+    callback set-text(string);
+    callback set-color(color);
+    callback set-index(int);
+    callback browse();
+    callback commit();
+
+    // Numbers with a range small enough to drag precisely are sliders; the rest are typed.
+    property <bool> number: root.prop.kind == "int" || root.prop.kind == "float";
+    property <bool> slider: root.number && root.prop.step > 0
+        && (root.prop.maximum - root.prop.minimum) / root.prop.step <= 1000;
+
+    spacing: 4px;
+    if prop.kind != "bool" && !root.slider: Text {
+        text: root.prop.label;
+        color: Theme.text-muted;
+        font-size: Theme.font-s;
+        wrap: word-wrap;
+    }
+    if prop.kind == "bool": Toggle {
+        label: root.prop.label;
+        checked: root.prop.flag;
+        toggled(v) => { root.set-flag(v); }
+    }
+    if root.slider: ValueSlider {
+        label: root.prop.label;
+        value: root.prop.number;
+        minimum: root.prop.minimum;
+        maximum: root.prop.maximum;
+        step: root.prop.step;
+        decimals: root.prop.decimals;
+        changed(v) => { root.set-number(v); }
+        committed => { root.commit(); }
+    }
+    if root.number && !root.slider: NumberField {
+        label: "";
+        value: root.prop.number;
+        minimum: root.prop.minimum;
+        maximum: root.prop.maximum;
+        step: root.prop.step;
+        decimals: root.prop.decimals;
+        changed(v) => { root.set-number(v); }
+        committed => { root.commit(); }
+    }
+    if prop.kind == "text": TextField {
+        text: root.prop.text;
+        label: root.prop.label;
+        edited(t) => { root.set-text(t); }
+        accepted => { root.commit(); }
+    }
+    if prop.kind == "multiline": TextArea {
+        text: root.prop.text;
+        label: root.prop.label;
+        edited(t) => { root.set-text(t); }
+    }
+    if prop.kind == "select": Select {
+        label: root.prop.label;
+        options: root.prop.options;
+        current-index: root.prop.index;
+        selected(i) => { root.set-index(i); }
+    }
+    if prop.kind == "path": HorizontalLayout {
+        spacing: 6px;
+        TextField {
+            text: root.prop.text;
+            label: root.prop.label;
+            placeholder: "No file selected";
+            accepted(t) => { root.set-text(t); }
+        }
+        Button { text: "Browse…"; clicked => { root.browse(); } }
+    }
+    if prop.kind == "button": HorizontalLayout {
+        alignment: start;
+        Button { text: root.prop.text; clicked => { root.browse(); } }
+    }
+    if prop.kind == "color": HorizontalLayout {
+        spacing: 6px;
+        Rectangle {
+            width: 28px;
+            height: 28px;
+            border-radius: Theme.radius-s;
+            background: root.prop.color;
+            border-width: 1px;
+            border-color: Theme.border-strong;
+        }
+        TextField {
+            text: root.prop.text;
+            label: root.prop.label;
+            placeholder: "#rrggbb or #rrggbbaa";
+            accepted(t) => { root.set-text(t); }
+        }
+    }
+    if prop.kind == "color": HorizontalLayout {
+        spacing: 6px;
+        for swatch in [#ffffff, #000000, #6c8cff, #f0435a, #3dd68c, #f2b84b, #b06cff, #00b5d8]: Rectangle {
+            width: 20px;
+            height: 20px;
+            border-radius: 10px;
+            background: swatch;
+            border-width: 1px;
+            border-color: Theme.border-strong;
+            TouchArea {
+                mouse-cursor: MouseCursor.pointer;
+                clicked => { root.set-color(swatch); }
+            }
+        }
+    }
+    if prop.hint != "": Text {
+        text: root.prop.hint;
+        color: Theme.text-faint;
+        font-size: Theme.font-xs;
+        wrap: word-wrap;
+    }
+}
+
+// A spot on the small canvas picture; clicking it moves the item there.
+component PlaceSpot inherits Rectangle {
+    in property <string> tip;
+    callback clicked;
+
+    border-radius: 3px;
+    background: ta.has-hover ? Theme.accent : Theme.accent.with-alpha(0.28);
+    border-width: 1px;
+    border-color: Theme.accent.with-alpha(0.7);
+    accessible-role: button;
+    accessible-label: root.tip;
+    accessible-action-default => { root.clicked(); }
+    ta := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        clicked => { root.clicked(); }
+        changed has-hover => {
+            if (self.has-hover) {
+                Hint.text = root.tip;
+                Hint.x = root.absolute-position.x + root.width / 2;
+                Hint.y = root.absolute-position.y + root.height + 6px;
+            } else if (Hint.text == root.tip) {
+                Hint.text = "";
+            }
+        }
+    }
+}
+
+component InspectorTab inherits Rectangle {
+    in property <string> label;
+    in property <image> icon;
+    in property <bool> active;
+    callback clicked;
+
+    horizontal-stretch: 1;
+    min-width: 0px;
+    height: 32px;
+    border-radius: Theme.radius-s;
+    background: root.active ? Theme.accent-soft : ta.has-hover ? Theme.hover : transparent;
+    accessible-role: tab;
+    accessible-label: root.label;
+    accessible-item-selected: root.active;
+    accessible-action-default => { root.clicked(); }
+    HorizontalLayout {
+        alignment: center;
+        spacing: 6px;
+        VerticalLayout {
+            alignment: center;
+            Icon { source: root.icon; size: 14px; tint: root.active ? Theme.accent-strong : Theme.text-muted; }
+        }
+        Text {
+            text: root.label;
+            color: root.active ? Theme.text : Theme.text-muted;
+            font-size: Theme.font-s;
+            font-weight: root.active ? 600 : 500;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component InspectorPanel inherits Panel {
+    in property <Inspect> sel;
+    in property <string> canvas-info;
+    in property <string> gpu-info;
+    callback edit(string, float);
+    callback edit-text(string, string);
+    callback edit-color(color);
+    callback select-option(string, int);
+    callback toggle(string, bool);
+    in property <[PropRow]> props;
+    in property <AudioInspect> audio;
+    callback audio-set(string, float);
+    callback filter-add(int);
+    callback filter-remove(string);
+    callback filter-toggle(string, bool);
+    callback filter-param(string, string, float);
+    callback filter-move(string, bool);
+    in property <[VideoFilterRow]> video-filters;
+    in property <MediaInspect> media;
+    callback media-control(string);
+    callback media-seek(float);
+    in property <bool> browser: false;
+    in property <string> browser-status;
+    callback browser-reload();
+    in property <[string]> video-filter-kinds;
+    callback vfilter-add(int);
+    callback vfilter-remove(string);
+    callback vfilter-toggle(string, bool);
+    callback vfilter-param(string, string, float);
+    callback vfilter-move(string, bool);
+    callback vfilter-browse(string);
+    callback vfilter-code(string);
+    callback commit();
+    callback action(string);
+    callback prop-flag(string, bool);
+    callback prop-number(string, float);
+    callback prop-text(string, string);
+    callback prop-color(string, color);
+    callback prop-index(string, int);
+    callback prop-browse(string);
+    callback prop-refresh();
+    /// Close the panel (deselect).
+    callback close();
+    /// The chosen tab ("source", "layout", "look" or "sound"; "" for the first) and the folded
+    /// panels. Both belong to the window, so they outlive the selection.
+    in-out property <string> tab;
+    in-out property <InspectorFolds> folds;
+
+    property <bool> has-source: root.sel.has && !root.sel.group && (root.props.length > 0 || root.browser || root.media.has);
+    property <bool> has-layout: root.sel.has && !root.sel.no-video;
+    property <bool> has-look: root.sel.has && !root.sel.no-video;
+    property <bool> has-sound: root.audio.has;
+    property <int> tab-count: (root.has-source ? 1 : 0) + (root.has-layout ? 1 : 0) + (root.has-look ? 1 : 0) + (root.has-sound ? 1 : 0);
+    // The chosen tab when the selection has it, else the selection's first.
+    property <string> shown: root.tab == "source" && root.has-source ? "source"
+        : root.tab == "layout" && root.has-layout ? "layout"
+        : root.tab == "look" && root.has-look ? "look"
+        : root.tab == "sound" && root.has-sound ? "sound"
+        // A sound with no picture opens on its sound settings.
+        : root.sel.no-video && root.has-sound ? "sound"
+        : root.has-source ? "source" : root.has-layout ? "layout" : root.has-look ? "look" : "sound";
+    changed shown => { flick.content-y = 0; }
+
+    // What it is and its name, with show, lock and close always in reach.
+    Rectangle {
+        height: 56px;
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 8px;
+            spacing: 4px;
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 32px;
+                    height: 32px;
+                    border-radius: Theme.radius-m;
+                    background: Theme.surface-3;
+                    KindIcon { kind: root.sel.has ? root.sel.kind : "audio_output"; size: 16px; tint: Theme.accent; }
+                }
+            }
+            Rectangle { width: 6px; }
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                horizontal-stretch: 1;
+                if root.sel.has: TextField {
+                    text: root.sel.name;
+                    label: "Name";
+                    accepted(t) => { root.edit-text("name", t); }
+                }
+                if !root.sel.has: Text {
+                    text: root.audio.name;
+                    color: Theme.text;
+                    font-size: Theme.font-l;
+                    font-weight: 600;
+                    overflow: elide;
+                }
+                Text {
+                    text: root.sel.has ? root.sel.kind-label : "Sound";
+                    color: Theme.text-faint;
+                    font-size: Theme.font-xs;
+                    overflow: elide;
+                }
+            }
+            if root.sel.has && !root.sel.no-video: VerticalLayout {
+                alignment: center;
+                IconButton {
+                    icon: root.sel.visible ? Icons.eye : Icons.eye-off;
+                    tooltip: root.sel.visible ? "Hide" : "Show";
+                    tint: root.sel.visible ? Theme.text-muted : Theme.warn;
+                    size: 28px;
+                    icon-size: 15px;
+                    clicked => { root.toggle("visible", !root.sel.visible); }
+                }
+            }
+            if root.sel.has && !root.sel.no-video: VerticalLayout {
+                alignment: center;
+                IconButton {
+                    icon: root.sel.locked ? Icons.lock : Icons.lock-open;
+                    tooltip: root.sel.locked ? "Unlock" : "Lock in place";
+                    toggled: root.sel.locked;
+                    size: 28px;
+                    icon-size: 15px;
+                    clicked => { root.toggle("locked", !root.sel.locked); }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                IconButton { icon: Icons.x; tooltip: "Close (Esc)"; size: 28px; icon-size: 14px; clicked => { root.close(); } }
+            }
+        }
+        Rectangle { y: parent.height - 1px; height: 1px; background: Theme.border; }
+    }
+
+    if root.tab-count > 1: Rectangle {
+        height: 44px;
+        accessible-role: tab-list;
+        accessible-label: "Settings for";
+        HorizontalLayout {
+            padding-left: 8px;
+            padding-right: 8px;
+            padding-top: 6px;
+            padding-bottom: 6px;
+            spacing: 2px;
+            if root.has-source: InspectorTab { label: "Source"; icon: Icons.sliders-horizontal; active: root.shown == "source"; clicked => { root.tab = "source"; } }
+            if root.has-layout: InspectorTab { label: "Layout"; icon: Icons.scan; active: root.shown == "layout"; clicked => { root.tab = "layout"; } }
+            if root.has-look: InspectorTab { label: "Look"; icon: Icons.palette; active: root.shown == "look"; clicked => { root.tab = "look"; } }
+            if root.has-sound: InspectorTab { label: "Sound"; icon: Icons.volume; active: root.shown == "sound"; clicked => { root.tab = "sound"; } }
+        }
+        Rectangle { y: parent.height - 1px; height: 1px; background: Theme.border; }
+    }
+
+    flick := Flickable {
+        vertical-stretch: 1;
+        content-height: body.preferred-height;
+        body := VerticalLayout {
+            padding: 10px;
+            spacing: 8px;
+            alignment: start;
+
+            if !root.sel.has && !root.audio.has: EmptyState {
+                icon: Icons.square;
+                title: "Nothing selected";
+                body: "Click a source in the preview or the list to edit its position, size, crop and appearance.";
+                VerticalLayout {
+                    padding-top: 12px;
+                    spacing: 4px;
+                    Text { text: root.canvas-info; color: Theme.text-muted; font-size: Theme.font-s; horizontal-alignment: center; }
+                    Text { text: root.gpu-info; color: Theme.text-faint; font-size: Theme.font-xs; horizontal-alignment: center; wrap: word-wrap; }
+                }
+            }
+
+            if root.sel.has && root.sel.problem != "": Rectangle {
+                border-radius: Theme.radius-m;
+                background: Theme.warn.with-alpha(0.12);
+                height: problem-text.preferred-height + 16px;
+                problem-text := Text {
+                    x: 10px;
+                    width: parent.width - 20px;
+                    text: root.sel.problem;
+                    color: Theme.warn;
+                    font-size: Theme.font-s;
+                    wrap: word-wrap;
+                    vertical-alignment: center;
+                }
+            }
+
+            // Source: what it captures or shows.
+            if root.sel.has && root.shown == "source": VerticalLayout {
+                spacing: 8px;
+                if root.props.length > 0: FoldPanel {
+                    title: "Settings";
+                    folded: root.folds.settings;
+                    has-action: true;
+                    action-icon: Icons.refresh;
+                    action-tooltip: "Refresh devices and windows";
+                    toggle-fold => { root.folds.settings = !root.folds.settings; }
+                    action => { root.prop-refresh(); }
+                    for prop in root.props: PropEditor {
+                        prop: prop;
+                        set-flag(v) => { root.prop-flag(prop.key, v); }
+                        set-number(v) => { root.prop-number(prop.key, v); }
+                        set-text(v) => { root.prop-text(prop.key, v); }
+                        set-color(v) => { root.prop-color(prop.key, v); }
+                        set-index(i) => { root.prop-index(prop.key, i); }
+                        browse => { root.prop-browse(prop.key); }
+                        commit => { root.commit(); }
+                    }
+                }
+                if root.browser: FoldPanel {
+                    title: "Page";
+                    folded: root.folds.page;
+                    toggle-fold => { root.folds.page = !root.folds.page; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text { text: root.browser-status; color: Theme.text-muted; font-size: Theme.font-xs; vertical-alignment: center; horizontal-stretch: 1; wrap: word-wrap; }
+                        VerticalLayout {
+                            alignment: center;
+                            Button { text: "Refresh"; icon: Icons.refresh; has-icon: true; tooltip: "Reload the page"; clicked => { root.browser-reload(); } }
+                        }
+                    }
+                }
+                if root.media.has: FoldPanel {
+                    title: "Playback";
+                    folded: root.folds.playback;
+                    note: root.folds.playback ? root.media.time : "";
+                    toggle-fold => { root.folds.playback = !root.folds.playback; }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        Text { text: root.media.item; color: Theme.text; font-size: Theme.font-s; font-weight: 600; overflow: elide; horizontal-stretch: 1; vertical-alignment: center; }
+                        if root.media.index != "": Badge { text: root.media.index; }
+                    }
+                    // Seek bar
+                    Rectangle {
+                        height: 14px;
+                        accessible-role: slider;
+                        accessible-label: "Position";
+                        accessible-value: root.media.time;
+                        TouchArea {
+                            mouse-cursor: MouseCursor.pointer;
+                            clicked => { root.media-seek(clamp(self.mouse-x / self.width, 0, 1)); }
+                        }
+                        Rectangle {
+                            y: (parent.height - 4px) / 2;
+                            height: 4px;
+                            border-radius: 2px;
+                            background: Theme.surface-3;
+                        }
+                        Rectangle {
+                            x: 0;
+                            y: (parent.height - 4px) / 2;
+                            width: parent.width * clamp(root.media.progress, 0, 1);
+                            height: 4px;
+                            border-radius: 2px;
+                            background: Theme.accent;
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 2px;
+                        IconButton { icon: Icons.skip-back; tooltip: "Previous item"; size: 26px; icon-size: 13px; clicked => { root.media-control("previous"); } }
+                        IconButton { icon: root.media.paused || root.media.ended ? Icons.play : Icons.pause; tooltip: root.media.paused ? "Play" : root.media.ended ? "Play again" : "Pause"; size: 26px; icon-size: 13px; clicked => { root.media-control(root.media.ended ? "restart" : "toggle"); } }
+                        IconButton { icon: Icons.refresh; tooltip: "Restart"; size: 26px; icon-size: 13px; clicked => { root.media-control("restart"); } }
+                        IconButton { icon: Icons.skip-forward; tooltip: "Next item"; size: 26px; icon-size: 13px; clicked => { root.media-control("next"); } }
+                        if root.media.music: IconButton {
+                            icon: Icons.rotate-cw;
+                            tooltip: root.media.repeat ? "Repeat is on: this track plays again" : "Repeat this track";
+                            toggled: root.media.repeat;
+                            size: 26px;
+                            icon-size: 13px;
+                            clicked => { root.media-control("repeat"); }
+                        }
+                        Text { text: root.media.time; color: Theme.text-muted; font-size: Theme.font-xs; horizontal-alignment: right; vertical-alignment: center; horizontal-stretch: 1; }
+                    }
+                    // Music: the playing track and what comes next; click one to play it.
+                    if root.media.tracks.length > 0: VerticalLayout {
+                        spacing: 2px;
+                        Text { text: "Playlist"; color: Theme.text-muted; font-size: Theme.font-xs; font-weight: 600; }
+                        for track[i] in root.media.tracks: Rectangle {
+                            height: 26px;
+                            border-radius: Theme.radius-s;
+                            background: i == root.media.track ? Theme.accent.with-alpha(0.14) : track-ta.has-hover ? Theme.hover : transparent;
+                            accessible-role: button;
+                            accessible-label: (i == root.media.track ? "Playing: " : "Play ") + track;
+                            accessible-action-default => { root.media-control("track:" + i); }
+                            HorizontalLayout {
+                                padding-left: 6px;
+                                padding-right: 6px;
+                                spacing: 6px;
+                                VerticalLayout {
+                                    alignment: center;
+                                    width: 12px;
+                                    if i == root.media.track: Icon { source: Icons.volume; size: 12px; tint: Theme.accent; }
+                                }
+                                Text {
+                                    text: track;
+                                    color: i == root.media.track ? Theme.text : i < root.media.track ? Theme.text-faint : Theme.text-muted;
+                                    font-size: Theme.font-xs;
+                                    font-weight: i == root.media.track ? 600 : 400;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                    horizontal-stretch: 1;
+                                }
+                            }
+                            track-ta := TouchArea {
+                                mouse-cursor: MouseCursor.pointer;
+                                clicked => { root.media-control("track:" + i); }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Layout: where it sits on the canvas and how big it is.
+            if root.sel.has && root.shown == "layout": VerticalLayout {
+                spacing: 8px;
+                FoldPanel {
+                    title: "Place";
+                    folded: root.folds.place;
+                    toggle-fold => { root.folds.place = !root.folds.place; }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        // The canvas in small: click a spot to move the item there.
+                        Rectangle {
+                            width: 128px;
+                            height: 72px;
+                            border-radius: 6px;
+                            background: Theme.canvas-bg;
+                            border-width: 1px;
+                            border-color: Theme.border-strong;
+                            PlaceSpot { x: 7px; y: 7px; width: 32px; height: 18px; tip: "Small, top left"; clicked => { root.action("transform.corner.tl"); } }
+                            PlaceSpot { x: parent.width - 39px; y: 7px; width: 32px; height: 18px; tip: "Small, top right"; clicked => { root.action("transform.corner.tr"); } }
+                            PlaceSpot { x: 7px; y: parent.height - 25px; width: 32px; height: 18px; tip: "Small, bottom left (a webcam over gameplay)"; clicked => { root.action("transform.corner.bl"); } }
+                            PlaceSpot { x: parent.width - 39px; y: parent.height - 25px; width: 32px; height: 18px; tip: "Small, bottom right (a webcam over gameplay)"; clicked => { root.action("transform.corner.br"); } }
+                            PlaceSpot { x: (parent.width - 36px) / 2; y: (parent.height - 20px) / 2; width: 36px; height: 20px; tip: "Center (Ctrl+E)"; clicked => { root.action("transform.center"); } }
+                        }
+                        VerticalLayout {
+                            spacing: 6px;
+                            alignment: center;
+                            horizontal-stretch: 1;
+                            Button { text: "Fit to screen"; tooltip: "Fit inside the canvas, keeping its shape (Ctrl+F)"; clicked => { root.action("transform.fit"); } }
+                            Button { text: "Stretch"; tooltip: "Stretch over the whole canvas"; clicked => { root.action("transform.stretch"); } }
+                        }
+                    }
+                }
+                FoldPanel {
+                    title: "Position and size";
+                    folded: root.folds.position;
+                    has-action: true;
+                    action-icon: Icons.undo;
+                    action-tooltip: "Reset position, size and rotation (Ctrl+R)";
+                    toggle-fold => { root.folds.position = !root.folds.position; }
+                    action => { root.action("transform.reset"); }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        NumberField { label: "X"; value: root.sel.x; step: 1; changed(v) => { root.edit("x", v); } committed => { root.commit(); } }
+                        NumberField { label: "Y"; value: root.sel.y; step: 1; changed(v) => { root.edit("y", v); } committed => { root.commit(); } }
+                    }
+                    if !root.sel.group: HorizontalLayout {
+                        spacing: 8px;
+                        NumberField { label: "W"; value: root.sel.w; step: 1; minimum: 1; changed(v) => { root.edit("w", v); } committed => { root.commit(); } }
+                        NumberField { label: "H"; value: root.sel.h; step: 1; minimum: 1; changed(v) => { root.edit("h", v); } committed => { root.commit(); } }
+                    }
+                    ValueSlider {
+                        label: "Rotation";
+                        value: root.sel.rotation;
+                        minimum: -180;
+                        maximum: 180;
+                        step: 1;
+                        decimals: 0;
+                        suffix: "°";
+                        mark: 0;
+                        changed(v) => { root.edit("rotation", v); }
+                        committed => { root.commit(); }
+                    }
+                    if !root.sel.group: FieldRow {
+                        label: "Size mode";
+                        Select {
+                            label: "Size mode";
+                            options: ["Free scale", "Stretch", "Fit", "Fill"];
+                            current-index: root.sel.size-mode;
+                            selected(i) => { root.select-option("size-mode", i); }
+                        }
+                    }
+                }
+                if !root.sel.group: FoldPanel {
+                    title: "Crop";
+                    folded: root.folds.crop;
+                    note: root.folds.crop && root.sel.crop-l + root.sel.crop-r + root.sel.crop-t + root.sel.crop-b > 0 ? "Cropped" : "";
+                    toggle-fold => { root.folds.crop = !root.folds.crop; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        NumberField { label: "L"; value: root.sel.crop-l; minimum: 0; changed(v) => { root.edit("crop-l", v); } committed => { root.commit(); } }
+                        NumberField { label: "R"; value: root.sel.crop-r; minimum: 0; changed(v) => { root.edit("crop-r", v); } committed => { root.commit(); } }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        NumberField { label: "T"; value: root.sel.crop-t; minimum: 0; changed(v) => { root.edit("crop-t", v); } committed => { root.commit(); } }
+                        NumberField { label: "B"; value: root.sel.crop-b; minimum: 0; changed(v) => { root.edit("crop-b", v); } committed => { root.commit(); } }
+                    }
+                    Text {
+                        text: "Or hold Alt and drag an edge in the preview.";
+                        color: Theme.text-faint;
+                        font-size: Theme.font-xs;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+
+            // Look: how it is drawn.
+            if root.sel.has && root.shown == "look": VerticalLayout {
+                spacing: 8px;
+                FoldPanel {
+                    title: "Appearance";
+                    folded: root.folds.appearance;
+                    toggle-fold => { root.folds.appearance = !root.folds.appearance; }
+                    ValueSlider {
+                        label: "Opacity";
+                        value: root.sel.opacity * 100;
+                        minimum: 0;
+                        maximum: 100;
+                        step: 1;
+                        decimals: 0;
+                        suffix: "%";
+                        changed(v) => { root.edit("opacity", v / 100); }
+                        committed => { root.commit(); }
+                    }
+                    FieldRow {
+                        label: "Blend";
+                        Select {
+                            label: "Blend mode";
+                            options: ["Normal", "Additive", "Multiply", "Screen"];
+                            current-index: root.sel.blend;
+                            selected(i) => { root.select-option("blend", i); }
+                        }
+                    }
+                }
+                if !root.sel.group && root.video-filter-kinds.length > 0: FoldPanel {
+                    title: "Filters";
+                    folded: root.folds.effects;
+                    note: root.video-filters.length > 0 ? root.video-filters.length : "";
+                    toggle-fold => { root.folds.effects = !root.folds.effects; }
+                    Select {
+                        label: "Add video filter";
+                        options: root.video-filter-kinds;
+                        current-index: 0;
+                        selected(i) => { if (i > 0) { root.vfilter-add(i - 1); } }
+                    }
+                    if root.video-filters.length == 0: Text {
+                        text: "No filters. Try a chroma key for green screens or color correction to match cameras.";
+                        color: Theme.text-faint;
+                        font-size: Theme.font-xs;
+                        wrap: word-wrap;
+                    }
+                    for filter in root.video-filters: FoldPanel {
+                        property <bool> closed;
+                        sub: true;
+                        title: filter.name;
+                        folded: self.closed;
+                        has-switch: true;
+                        switch-on: filter.enabled;
+                        has-moves: true;
+                        toggle-fold => { self.closed = !self.closed; }
+                        switched(v) => { root.vfilter-toggle(filter.id, v); }
+                        move(up) => { root.vfilter-move(filter.id, up); }
+                        remove => { root.vfilter-remove(filter.id); }
+                        if filter.file-label != "": FieldRow {
+                            label: filter.file-label;
+                            Text {
+                                text: filter.file != "" ? filter.file : "No file chosen";
+                                color: filter.file != "" ? Theme.text : Theme.text-faint;
+                                font-size: Theme.font-xs;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                                overflow: elide;
+                            }
+                            Button { text: "Browse…"; kind: "ghost"; clicked => { root.vfilter-browse(filter.id); } }
+                        }
+                        if filter.code: Button {
+                            text: "Edit shader…";
+                            has-icon: true;
+                            icon: Icons.sparkles;
+                            kind: "ghost";
+                            clicked => { root.vfilter-code(filter.id); }
+                        }
+                        for param in filter.params: ParamEditor {
+                            param: param;
+                            changed(v) => { root.vfilter-param(filter.id, param.key, v); }
+                            committed => { root.commit(); }
+                        }
+                    }
+                }
+            }
+
+            if root.shown == "sound" && root.audio.has: AudioSettings {
+                audio: root.audio;
+                folds <=> root.folds;
+                audio-set(k, v) => { root.audio-set(k, v); }
+                filter-add(i) => { root.filter-add(i); }
+                filter-remove(id) => { root.filter-remove(id); }
+                filter-toggle(id, v) => { root.filter-toggle(id, v); }
+                filter-param(id, k, v) => { root.filter-param(id, k, v); }
+                filter-move(id, up) => { root.filter-move(id, up); }
+                commit => { root.commit(); }
+            }
+        }
+    }
+}

@@ -80,6 +80,24 @@ export struct Inspect {
     no-video: bool,
 }
 
+/// Which inspector panels are folded (true = folded). Kept on the window so it survives the
+/// selection changing, and saved with the layout.
+export struct InspectorFolds {
+    settings: bool,
+    page: bool,
+    playback: bool,
+    place: bool,
+    position: bool,
+    crop: bool,
+    appearance: bool,
+    effects: bool,
+    volume: bool,
+    hearing: bool,
+    voice: bool,
+    filters: bool,
+    advanced: bool,
+}
+
 export struct PaletteEntry {
     id: string,
     title: string,

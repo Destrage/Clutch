@@ -151,6 +151,25 @@ impl Default for PanelLayout {
     }
 }
 
+/// The inspector's chosen tab and folded panels, kept between runs.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InspectorState {
+    /// "source", "layout", "look" or "sound"; empty for the selection's first tab.
+    pub tab: String,
+    /// Names of the folded panels.
+    pub folded: Vec<String>,
+}
+
+impl Default for InspectorState {
+    fn default() -> Self {
+        Self {
+            tab: String::new(),
+            folded: vec!["crop".into(), "advanced".into()],
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -159,6 +178,7 @@ pub struct Settings {
     pub accent: String,
     pub window: Option<WindowState>,
     pub layout: PanelLayout,
+    pub inspector: InspectorState,
     pub snapping: bool,
     pub last_collection: Option<PathBuf>,
     pub recording: estream_media::RecordingSettings,
@@ -521,6 +541,7 @@ impl Default for Settings {
             accent: DEFAULT_ACCENT.into(),
             window: None,
             layout: PanelLayout::default(),
+            inspector: InspectorState::default(),
             snapping: true,
             last_collection: None,
             recording: estream_media::RecordingSettings::default(),

@@ -4,7 +4,7 @@
 
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
-import { SceneRow, MixerStrip, LiveRow, AudioInspect } from "types.slint";
+import { SceneRow, MixerStrip, LiveRow, AudioInspect, InspectorFolds } from "types.slint";
 import { Button, Icon, IconButton, Hint } from "widgets.slint";
 import { ProgramView } from "panels.slint";
 import { ChatPanel, ChatTabRow, ChatLive, ChatLine, ChatStateRow } from "chat.slint";
@@ -106,6 +106,8 @@ export component LiveDeck inherits Rectangle {
     callback edit-layout();
     // A sound's settings over the deck (opened by clicking its name under the knob).
     in property <AudioInspect> audio;
+    /// The window's folded sound panels, shared with the inspector.
+    in-out property <InspectorFolds> folds;
     in-out property <bool> sound-open;
     callback open-sound(string);
     callback close-sound();
@@ -450,6 +452,7 @@ export component LiveDeck inherits Rectangle {
                     alignment: start;
                     AudioSettings {
                         audio: root.audio;
+                        folds <=> root.folds;
                         audio-set(k, v) => { root.audio-set(k, v); }
                         filter-add(i) => { root.filter-add(i); }
                         filter-remove(id) => { root.filter-remove(id); }

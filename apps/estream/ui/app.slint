@@ -5,10 +5,11 @@ import "fonts/Figtree.ttf";
 import "fonts/Jost.ttf";
 import { Theme, Platform } from "theme.slint";
 import { Icons } from "icons.slint";
-import { CanvasTab, SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SourceType, PropRow, MixerStrip, AudioInspect, SettingsForm, LiveRow, DestinationRow, VideoFilterRow, MediaInspect, AutomationForm, MacroRow, TriggerRow, StepRow, ClipsForm, ClipRow, ClipPlayerState, MontageForm, StatsForm, StatTile, StatRow, AlertRow } from "types.slint";
+import { CanvasTab, SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SourceType, PropRow, MixerStrip, AudioInspect, SettingsForm, LiveRow, DestinationRow, VideoFilterRow, MediaInspect, AutomationForm, MacroRow, TriggerRow, StepRow, ClipsForm, ClipRow, ClipPlayerState, MontageForm, StatsForm, StatTile, StatRow, AlertRow, InspectorFolds } from "types.slint";
 import { VSplitter, HSplitter, TooltipLayer, Hint } from "widgets.slint";
 import { Preview } from "preview.slint";
-import { TopBar, ScenesPanel, SourcesPanel, InspectorPanel, MixerPanel, StatusBar, TransitionColumn, ProgramView, CanvasTabs } from "panels.slint";
+import { InspectorPanel } from "inspector.slint";
+import { TopBar, ScenesPanel, SourcesPanel, MixerPanel, StatusBar, TransitionColumn, ProgramView, CanvasTabs } from "panels.slint";
 import { CommandPalette, AddSourceDialog, SetupWizard, SetupDialog, RecoveryPrompt, GameAudioPrompt, Toast, SettingsDialog, LivePanel, ShaderDialog } from "overlays.slint";
 import { AutomationDialog } from "automation.slint";
 import { StatsDialog } from "stats.slint";
@@ -288,6 +289,9 @@ export component AppWindow inherits Window {
     /// Stage: the floating layers list and the mixer.
     in-out property <bool> layers-open: true;
     in-out property <bool> mixer-open;
+    /// The inspector's chosen tab and its folded panels (Crop and Advanced start folded).
+    in-out property <string> inspector-tab;
+    in-out property <InspectorFolds> inspector-folds: { crop: true, advanced: true };
 
     property <bool> space-down;
 
@@ -539,6 +543,8 @@ export component AppWindow inherits Window {
                             width: parent.width;
                             height: parent.height;
                             sel: root.inspect;
+                            tab <=> root.inspector-tab;
+                            folds <=> root.inspector-folds;
                             canvas-info: root.canvas-info;
                             gpu-info: root.gpu-info;
                             edit(field, v) => { root.inspect-edit(field, v); }
@@ -674,6 +680,7 @@ export component AppWindow inherits Window {
             toggle-record => { root.action("record.toggle"); main-keys.focus(); }
             end-stream => { root.action("stream.toggle"); main-keys.focus(); }
             edit-layout => { root.deck-edit = true; main-keys.focus(); }
+            folds <=> root.inspector-folds;
             audio: root.audio-inspect;
             open-sound(id) => { root.mixer-select(id); main-keys.focus(); }
             close-sound => { root.action("selection.clear"); main-keys.focus(); }

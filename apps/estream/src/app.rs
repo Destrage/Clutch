@@ -4,11 +4,13 @@
 use crate::actions::{self, Action, Key};
 use crate::interact::{self, Corner, Drag, DragKind, Handle, ItemGeom, Modifiers};
 use crate::presets::{self, PRESETS};
-use crate::settings::{GameAudio, PanelLayout, Paths, Settings, ThemeMode, WindowState};
+use crate::settings::{
+    GameAudio, InspectorState, PanelLayout, Paths, Settings, ThemeMode, WindowState,
+};
 use crate::ui::{
     AppWindow, AudioInspect, CanvasBox, CanvasTab, DestinationRow, FilterParamRow, FilterRow,
-    Guide, Inspect, LayerRow, LiveRow, MediaInspect, MixerStrip, PaletteEntry, Platform, Preset,
-    PropRow, SceneRow, SettingsForm, SourceType, Theme, VideoFilterRow,
+    Guide, Inspect, InspectorFolds, LayerRow, LiveRow, MediaInspect, MixerStrip, PaletteEntry,
+    Platform, Preset, PropRow, SceneRow, SettingsForm, SourceType, Theme, VideoFilterRow,
 };
 use estream_core::{BlendMode, BoundsMode, CanvasId, ItemId, Rgba8, SceneId, SourceId};
 use estream_engine::{
@@ -875,6 +877,8 @@ impl App {
         }
         self.apply_theme();
         self.apply_layout(self.settings.layout);
+        w.set_inspector_tab(self.settings.inspector.tab.as_str().into());
+        w.set_inspector_folds(inspector_folds(&self.settings.inspector.folded));
         let info = &self.gpu.info;
         w.set_gpu_info(format!("{} · {:?}", info.name, info.backend).into());
         w.set_app_version(format!("Clutch {}", crate::update::current().label()).into());
@@ -2514,6 +2518,10 @@ impl App {
                 inspector_width: w.get_inspector_width(),
                 bottom_height: w.get_bottom_height(),
                 sources_width: w.get_sources_width(),
+            };
+            self.settings.inspector = InspectorState {
+                tab: w.get_inspector_tab().into(),
+                folded: folded_panels(&w.get_inspector_folds()),
             };
         }
         self.settings.save(&self.paths.settings());
@@ -10331,6 +10339,63 @@ fn meter_position(level: f32) -> f32 {
     ((db + 60.0) / 60.0).clamp(0.0, 1.0)
 }
 
+/// The inspector's panels, by the names their folds are saved under.
+const INSPECTOR_PANELS: [&str; 13] = [
+    "settings",
+    "page",
+    "playback",
+    "place",
+    "position",
+    "crop",
+    "appearance",
+    "effects",
+    "volume",
+    "hearing",
+    "voice",
+    "filters",
+    "advanced",
+];
+
+fn inspector_fold<'a>(folds: &'a mut InspectorFolds, panel: &str) -> Option<&'a mut bool> {
+    Some(match panel {
+        "settings" => &mut folds.settings,
+        "page" => &mut folds.page,
+        "playback" => &mut folds.playback,
+        "place" => &mut folds.place,
+        "position" => &mut folds.position,
+        "crop" => &mut folds.crop,
+        "appearance" => &mut folds.appearance,
+        "effects" => &mut folds.effects,
+        "volume" => &mut folds.volume,
+        "hearing" => &mut folds.hearing,
+        "voice" => &mut folds.voice,
+        "filters" => &mut folds.filters,
+        "advanced" => &mut folds.advanced,
+        _ => return None,
+    })
+}
+
+/// The window's fold flags from saved panel names; unknown names are ignored.
+fn inspector_folds(folded: &[String]) -> InspectorFolds {
+    let mut folds = InspectorFolds::default();
+    for name in folded {
+        if let Some(flag) = inspector_fold(&mut folds, name) {
+            *flag = true;
+        }
+    }
+    folds
+}
+
+/// The names of the folded panels, to save.
+fn folded_panels(folds: &InspectorFolds) -> Vec<String> {
+    let mut folds = folds.clone();
+    INSPECTOR_PANELS
+        .iter()
+        .filter(|name| inspector_fold(&mut folds, name).is_some_and(|flag| *flag))
+        .map(|name| name.to_string())
+        .collect()
+}
+
 /// Fader position (0..1) to dB: linear in dB from -60 to 0; the bottom is silence.
 fn fader_to_db(position: f32) -> f32 {
     if position <= 0.005 {
@@ -10686,6 +10751,18 @@ fn parse_color(hex: &str) -> Option<slint::Color> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inspector_folds_round_trip() {
+        let saved = vec!["crop".to_owned(), "advanced".to_owned(), "gone".to_owned()];
+        let folds = inspector_folds(&saved);
+        assert!(folds.crop && folds.advanced && !folds.volume);
+        assert_eq!(folded_panels(&folds), ["crop", "advanced"]);
+        for name in INSPECTOR_PANELS {
+            let one = inspector_folds(&[name.to_owned()]);
+            assert_eq!(folded_panels(&one), [name], "{name} is saved");
+        }
+    }
 
     #[test]
     fn setup_names_are_checked() {
