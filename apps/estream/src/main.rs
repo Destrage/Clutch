@@ -107,7 +107,8 @@ fn register_portal_app() {
 const GENERATED: &str = "X-Clutch-Generated=true";
 
 /// Writes a hidden desktop entry for [`APP_ID`] that starts this executable (the AppImage
-/// when run from one), unless the system or the user already has one.
+/// when run from one), unless the system or the user already has one. Once the system has one
+/// (Clutch installed from a package), the hidden entry goes: it would hide the menu entry.
 #[cfg(target_os = "linux")]
 fn keep_desktop_entry() -> std::io::Result<()> {
     let file = format!("{APP_ID}.desktop");
@@ -123,7 +124,14 @@ fn keep_desktop_entry() -> std::io::Result<()> {
                 .exists()
         });
     let existing = std::fs::read_to_string(&ours).ok();
-    if system || existing.as_ref().is_some_and(|t| !t.contains(GENERATED)) {
+    let generated = existing.as_ref().is_some_and(|t| t.contains(GENERATED));
+    if system {
+        if generated {
+            std::fs::remove_file(&ours)?;
+        }
+        return Ok(());
+    }
+    if existing.is_some() && !generated {
         return Ok(());
     }
     let exe = std::env::var_os("APPIMAGE")

@@ -104,9 +104,42 @@ pub struct Release {
     pub sha256: String,
 }
 
-/// The installer file type for this platform.
+/// The installer file type for this platform: on Linux, the package format Clutch was
+/// installed from, else the AppImage.
 pub fn asset_extension() -> &'static str {
-    if cfg!(windows) { ".msi" } else { ".AppImage" }
+    if cfg!(windows) {
+        return ".msi";
+    }
+    match package_kind() {
+        Some(Package::Deb) => ".deb",
+        Some(Package::Rpm) => ".rpm",
+        None => ".AppImage",
+    }
+}
+
+/// A Linux package Clutch was installed from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Package {
+    Deb,
+    Rpm,
+}
+
+impl Package {
+    fn parse(marker: &str) -> Option<Self> {
+        match marker.trim() {
+            "deb" => Some(Package::Deb),
+            "rpm" => Some(Package::Rpm),
+            _ => None,
+        }
+    }
+}
+
+/// Which package installed this copy, from the `package` file the .deb or .rpm puts next to
+/// the executable. `None` for the AppImage, the Windows installer and source builds.
+pub fn package_kind() -> Option<Package> {
+    let exe = std::env::current_exe().ok()?;
+    let marker = std::fs::read_to_string(exe.parent()?.join("package")).ok()?;
+    Package::parse(&marker)
 }
 
 /// The newest release newer than `installed` with an installer ending in `extension`, from a
@@ -387,22 +420,101 @@ fn install_script(file: &Path, exe: &Path, pid: u32, restart: bool) -> String {
 /// What the last install after exit wrote (see [`install_after_exit`]).
 const INSTALL_LOG: &str = "install.log";
 
-/// Copies the last install's outcome into the log once, then removes it.
-pub fn report_last_install(dir: &Path) {
+/// Copies the last install's outcome into the log once, then removes it. Returns what to tell
+/// the user when it failed (a package install says how to install it by hand).
+pub fn report_last_install(dir: &Path) -> Option<String> {
     static ONCE: std::sync::Once = std::sync::Once::new();
+    let mut failure = None;
     ONCE.call_once(|| {
         let path = dir.join(INSTALL_LOG);
         if let Ok(text) = std::fs::read_to_string(&path) {
             tracing::info!(result = text.trim(), "last update install");
             let _ = std::fs::remove_file(&path);
+            failure = text.trim().strip_prefix("failed: ").map(str::to_owned);
         }
     });
+    failure
 }
 
-/// Replaces the running AppImage with `file` (the running copy keeps working), then starts the
-/// new one if `restart`.
+/// The command that installs a downloaded package (run through `pkexec`), and the one to give
+/// the user when that fails.
+#[cfg(not(windows))]
+fn package_install(kind: Package, file: &Path) -> (Vec<String>, String) {
+    let file = file.display().to_string();
+    let on_path = |tool: &str| {
+        std::env::var_os("PATH")
+            .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(tool).is_file()))
+    };
+    let tool: &[&str] = match kind {
+        Package::Deb => &["apt-get", "install", "-y", "--allow-downgrades"],
+        Package::Rpm if !on_path("dnf") && on_path("zypper") => &[
+            "zypper",
+            "--non-interactive",
+            "install",
+            "--allow-unsigned-rpm",
+        ],
+        Package::Rpm => &["dnf", "install", "-y"],
+    };
+    let mut command: Vec<String> = std::iter::once("pkexec")
+        .chain(tool.iter().copied())
+        .map(str::to_owned)
+        .collect();
+    command.push(file.clone());
+    let by_hand = match kind {
+        Package::Deb => format!("sudo apt install '{file}'"),
+        Package::Rpm => format!("sudo {} install '{file}'", tool[0]),
+    };
+    (command, by_hand)
+}
+
+/// Waits for `$1` (Clutch) to exit, runs the install command (the rest of the arguments), notes
+/// the outcome in `$2` (`failed: <hint>` with `$4` when it didn't work) and starts `$3` if set.
+#[cfg(not(windows))]
+const PACKAGE_SCRIPT: &str = r#"pid=$1 log=$2 restart=$3 hint=$4; shift 4
+while kill -0 "$pid" 2>/dev/null; do sleep 0.3; done
+"$@" >"$log.out" 2>&1
+code=$?
+if [ "$code" -eq 0 ]; then
+  echo "installer exit code 0" >"$log"
+  [ -n "$restart" ] && "$restart" >/dev/null 2>&1 &
+else
+  echo "failed: The update wasn't installed (exit code $code). To install it yourself, run: $hint" >"$log"
+fi"#;
+
+/// Installs `file` once Clutch has exited: a package through the system's password prompt, or
+/// the AppImage by replacing it right away (the running copy keeps working). Then starts the
+/// new version if `restart`.
 #[cfg(not(windows))]
 pub fn install_after_exit(file: &Path, restart: bool) -> Result<(), String> {
+    use std::os::unix::process::CommandExt;
+    let Some(kind) = package_kind() else {
+        return replace_appimage(file, restart);
+    };
+    let (command, by_hand) = package_install(kind, file);
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    tracing::info!(file = %file.display(), restart, "installing update after exit");
+    std::process::Command::new("sh")
+        .arg("-c")
+        .arg(PACKAGE_SCRIPT)
+        .arg("sh")
+        .arg(std::process::id().to_string())
+        .arg(file.with_file_name(INSTALL_LOG))
+        .arg(if restart {
+            exe.as_os_str()
+        } else {
+            "".as_ref()
+        })
+        .arg(&by_hand)
+        .args(&command)
+        // Its own process group, so it outlives Clutch's.
+        .process_group(0)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("couldn't start the installer ({e})"))
+}
+
+#[cfg(not(windows))]
+fn replace_appimage(file: &Path, restart: bool) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
     let target = std::env::var_os("APPIMAGE")
         .map(PathBuf::from)
@@ -495,6 +607,41 @@ mod tests {
         assert!(r.is_none());
         // Nothing newer than what's installed.
         assert!(newest(&listing(), &v("0.3.6-beta.1"), true, ".msi").is_none());
+    }
+
+    #[test]
+    fn package_installs_pick_their_own_format() {
+        let asset = |name: &str| {
+            json!({"name": name, "digest": "sha256:ab", "size": 1,
+                   "browser_download_url": format!("https://example.com/{name}")})
+        };
+        let listing = json!([{"tag_name": "v0.8.0", "assets": [
+            asset("Clutch-0.8.0-x64.msi"), asset("Clutch-0.8.0-x86_64.AppImage"),
+            asset("Clutch-0.8.0-amd64.deb"), asset("Clutch-0.8.0-x86_64.rpm")]}]);
+        for (ext, name) in [
+            (".deb", "Clutch-0.8.0-amd64.deb"),
+            (".rpm", "Clutch-0.8.0-x86_64.rpm"),
+            (".AppImage", "Clutch-0.8.0-x86_64.AppImage"),
+        ] {
+            let r = newest(&listing, &v("0.7.0"), false, ext).unwrap();
+            assert_eq!(r.asset_name, name);
+        }
+        assert_eq!(Package::parse("deb\n"), Some(Package::Deb));
+        assert_eq!(Package::parse("rpm"), Some(Package::Rpm));
+        assert_eq!(Package::parse(""), None);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn package_updates_go_through_pkexec() {
+        let file = Path::new("/home/a/.config/Clutch/updates/Clutch-0.8.0-amd64.deb");
+        let (command, by_hand) = package_install(Package::Deb, file);
+        assert_eq!(&command[..3], ["pkexec", "apt-get", "install"]);
+        assert_eq!(command.last().unwrap(), &file.display().to_string());
+        assert!(by_hand.starts_with("sudo apt install '/home/a/"));
+        let (command, _) = package_install(Package::Rpm, file);
+        assert_eq!(command[0], "pkexec");
+        assert!(command.iter().any(|a| a == "install"));
     }
 
     #[test]

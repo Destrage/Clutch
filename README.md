@@ -107,14 +107,17 @@ On Linux the folder is `~/.config/Clutch`, and `CLUTCH_HOME` works the same way.
 
 ### Install
 
-Download `Clutch-<version>-x86_64.AppImage`, make it executable and run it:
+Each release has three Linux files. Pick the one for your distribution:
 
-```sh
-chmod +x Clutch-*-x86_64.AppImage
-./Clutch-*-x86_64.AppImage
-```
+| File | For | Install | Remove |
+|---|---|---|---|
+| `Clutch-<version>-amd64.deb` | Ubuntu, Debian, Linux Mint, Pop!_OS | open it in your software centre, or `sudo apt install ./Clutch-*-amd64.deb` | `sudo apt remove clutch` |
+| `Clutch-<version>-x86_64.rpm` | Fedora, openSUSE | open it in your software centre, or `sudo dnf install ./Clutch-*-x86_64.rpm` (openSUSE: `sudo zypper install --allow-unsigned-rpm ./Clutch-*.rpm`) | `sudo dnf remove clutch` |
+| `Clutch-<version>-x86_64.AppImage` | any other distribution | `chmod +x Clutch-*.AppImage`, then run it | delete the file |
 
-It runs on distributions from 2024 on (glibc 2.39 or newer: Ubuntu 24.04, Debian 13, Fedora 40, current Arch), and contains FFmpeg and the browser source's Chromium runtime. Everything else comes from your desktop:
+The .deb and .rpm install Clutch like any other app: in `/opt/clutch`, with a `clutch` command, an entry in the app menu and search, and an uninstaller. They bring the libraries Clutch needs along. Updates install the same kind of file, and ask for your password. The AppImage is a single file that isn't added to the menu.
+
+All three run on distributions from 2024 on (PipeWire 1.0 or newer: Ubuntu 24.04, Debian 13, Fedora 40, current Arch). They contain FFmpeg and the browser source's Chromium runtime. Everything else comes from your desktop:
 
 | What | Needed for | Usually |
 |---|---|---|
@@ -124,7 +127,7 @@ It runs on distributions from 2024 on (glibc 2.39 or newer: Ubuntu 24.04, Debian
 | a Vulkan or OpenGL driver | the preview and compositing | installed with the desktop |
 | `v4l2loopback` | the virtual camera | `sudo apt install v4l2loopback-dkms` |
 
-On first start Clutch writes a hidden desktop entry (`~/.local/share/applications/io.github.destrage.Clutch.desktop`, not shown in menus) pointing at the AppImage. Desktops only give permissions such as global hotkeys to an app they can find an entry for. Clutch never changes an entry it didn't write.
+When run as an AppImage, Clutch writes a hidden desktop entry (`~/.local/share/applications/io.github.destrage.Clutch.desktop`, not shown in menus) pointing at the AppImage. Desktops only give permissions such as global hotkeys to an app they can find an entry for. Clutch never changes an entry it didn't write, and removes its hidden one once the .deb or .rpm is installed.
 
 ### Build from source on Linux
 
@@ -153,7 +156,17 @@ cargo build --release -p estream -p estream-browser
 ./target/release/clutch
 ```
 
-The FFmpeg and CEF libraries are copied next to the binaries, which find them there. `cargo xtask package` builds the AppImage into `target/package/`; it downloads `appimagetool` once into `third_party/appimage`.
+The FFmpeg and CEF libraries are copied next to the binaries, which find them there. `cargo xtask package` builds the AppImage, .deb and .rpm into `target/package/`; it downloads `appimagetool` and `nfpm` once into `third_party/`.
+
+### Release builds for Linux
+
+Binaries need the glibc of the system they were built on, or newer, so release builds come from an Ubuntu 24.04 container rather than your own (possibly newer) system. On Windows, with Podman and the Linux FFmpeg and CEF in `third_party/linux/ffmpeg` and `third_party/linux/cef`:
+
+```powershell
+pwsh -File tools\linux-build\package.ps1
+```
+
+It builds the image from `tools/linux-build/Containerfile`, runs `cargo xtask package` in it, and copies the three files to `target\installer`.
 
 ### What differs on Linux
 

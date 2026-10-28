@@ -1,0 +1,14 @@
+# Linux release builds. Ubuntu 24.04 is the oldest system Clutch supports, so binaries built here
+# need no newer glibc than 2.39 (building on a newer distro raises that floor).
+FROM docker.io/library/ubuntu:24.04
+
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    build-essential pkg-config clang libclang-dev cmake ninja-build binutils curl ca-certificates \
+    git file libasound2-dev libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev \
+    libxrandr-dev libxi-dev libfontconfig-dev libssl-dev libdbus-1-dev libudev-dev \
+    libpipewire-0.3-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+ENV PATH=/root/.cargo/bin:$PATH

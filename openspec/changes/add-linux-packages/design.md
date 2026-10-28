@@ -42,7 +42,7 @@ the user's data dir, take precedence over `/usr/share/applications` and hide the
 ## Risks
 - **Dependency names drift between distro releases.** Mitigation: alternatives in the .deb list,
   and soname requirements in the .rpm. A clean-container install test runs on Ubuntu 24.04,
-  Debian 12 and Fedora before each release.
+  Debian 13 and Fedora before each release.
 - **Unsigned packages.** apt installs a local .deb without a signature. dnf needs `--nogpgcheck`
   for a local unsigned rpm only when gpgcheck is forced for local files; the docs give the
   command.

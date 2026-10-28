@@ -1,9 +1,10 @@
 //! Developer tasks: `cargo xtask doctor`, `cargo xtask icon` and `cargo xtask package`
-//! (the Windows installer, or on Linux the AppImage).
+//! (the Windows installer, or on Linux the AppImage, .deb and .rpm).
 
 mod appimage;
 mod doctor;
 mod icon;
+mod packages;
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};

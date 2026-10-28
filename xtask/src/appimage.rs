@@ -1,4 +1,5 @@
-//! `cargo xtask package` on Linux: `target/package/Clutch-<version>-x86_64.AppImage`.
+//! `cargo xtask package` on Linux: `target/package/Clutch-<version>-x86_64.AppImage`, then the
+//! .deb and .rpm (see `packages`).
 //!
 //! Everything Clutch ships sits next to the binaries in `usr/bin` (FFmpeg, CEF), found through
 //! their `$ORIGIN` rpath, so no library paths need rewriting. glibc, the GPU driver, PipeWire,
@@ -9,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// The desktop entry's name; must match `APP_ID` in `apps/estream/src/main.rs`.
-const APP_ID: &str = "io.github.destrage.Clutch";
+pub const APP_ID: &str = "io.github.destrage.Clutch";
 const APPIMAGETOOL_URL: &str =
     "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage";
 
@@ -117,7 +118,9 @@ pub fn package() -> Result<()> {
         .env("ARCH", "x86_64"))?;
     let size = std::fs::metadata(&image).map(|m| m.len()).unwrap_or(0);
     println!("\nbuilt {} ({:.0} MB)", image.display(), size as f64 / 1e6);
-    Ok(())
+
+    // 4. The .deb and .rpm, from the same AppDir.
+    super::packages::package(&root, &appdir, &out)
 }
 
 /// Starts Clutch from wherever the image is mounted.
