@@ -7,6 +7,12 @@ export struct CanvasTab {
     /// e.g. "1080 × 1920 · 30 fps"
     info: string,
     active: bool,
+    /// What the canvas feeds, e.g. "Stream · Record" (empty with one canvas).
+    outputs: string,
+    /// A running stream shows this canvas.
+    live: bool,
+    /// Every destination and the recording already use it.
+    feeds-all: bool,
 }
 
 export struct SceneRow {
