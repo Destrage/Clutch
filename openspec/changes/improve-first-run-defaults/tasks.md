@@ -12,4 +12,4 @@
 
 ## 3. Verification
 - [x] 3.1 Unit tests (defaults per purpose, left-out parts, extra scenes)
-- [ ] 3.2 In-app: each purpose with boxes ticked and unticked
+- [x] 3.2 In-app: each purpose with boxes ticked and unticked
