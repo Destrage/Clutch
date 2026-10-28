@@ -5,7 +5,7 @@ import "fonts/Figtree.ttf";
 import "fonts/Jost.ttf";
 import { Theme, Platform } from "theme.slint";
 import { Icons } from "icons.slint";
-import { CanvasTab, SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SourceType, PropRow, MixerStrip, AudioInspect, SettingsForm, LiveRow, DestinationRow, VideoFilterRow, MediaInspect, AutomationForm, MacroRow, TriggerRow, StepRow, ClipsForm, ClipRow, ClipPlayerState, MontageForm, StatsForm, StatTile, StatRow, AlertRow, InspectorFolds } from "types.slint";
+import { CanvasTab, SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SetupLine, SourceType, PropRow, MixerStrip, AudioInspect, SettingsForm, LiveRow, DestinationRow, VideoFilterRow, MediaInspect, AutomationForm, MacroRow, TriggerRow, StepRow, ClipsForm, ClipRow, ClipPlayerState, MontageForm, StatsForm, StatTile, StatRow, AlertRow, InspectorFolds } from "types.slint";
 import { VSplitter, HSplitter, TooltipLayer, Hint } from "widgets.slint";
 import { Preview } from "preview.slint";
 import { InspectorPanel } from "inspector.slint";
@@ -145,7 +145,7 @@ export component AppWindow inherits Window {
     in property <[Preset]> presets;
     in property <[Preset]> wizard-purposes;
     in-out property <int> wizard-purpose;
-    in property <[string]> wizard-summary;
+    in property <[SetupLine]> wizard-summary;
     in-out property <bool> wizard-custom;
     in-out property <int> wizard-current;
     in property <bool> recording;
@@ -334,6 +334,7 @@ export component AppWindow inherits Window {
     callback add-source-pick(string);
     callback wizard-create();
     callback wizard-purpose-changed(int);
+    callback wizard-toggled(string);
     callback recovery-restore();
     callback recovery-discard();
     callback toggle-theme();
@@ -929,6 +930,7 @@ export component AppWindow inherits Window {
         current <=> root.wizard-current;
         setup-name: root.wizard-setup-name;
         purpose-changed(i) => { root.wizard-purpose-changed(i); }
+        toggled(key) => { root.wizard-toggled(key); }
         create => { root.wizard-create(); }
         cancel => { root.wizard-cancel(); main-keys.focus(); }
     }

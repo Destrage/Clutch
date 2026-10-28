@@ -110,6 +110,13 @@ export struct Preset {
     detail: string,
 }
 
+/// A line of the setup wizard's list; `key` is set when it can be left out.
+export struct SetupLine {
+    text: string,
+    key: string,
+    on: bool,
+}
+
 export struct SourceType {
     kind: string,
     title: string,

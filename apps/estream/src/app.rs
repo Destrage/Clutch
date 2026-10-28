@@ -10,7 +10,8 @@ use crate::settings::{
 use crate::ui::{
     AppWindow, AudioInspect, CanvasBox, CanvasTab, DestinationRow, FilterParamRow, FilterRow,
     Guide, Inspect, InspectorFolds, LayerRow, LiveRow, MediaInspect, MixerStrip, PaletteEntry,
-    Platform, Preset, PropRow, SceneRow, SettingsForm, SourceType, Theme, VideoFilterRow,
+    Platform, Preset, PropRow, SceneRow, SettingsForm, SetupLine, SourceType, Theme,
+    VideoFilterRow,
 };
 use estream_core::{BlendMode, BoundsMode, CanvasId, ItemId, Rgba8, SceneId, SourceId};
 use estream_engine::{
@@ -151,6 +152,8 @@ pub struct App {
     vcam_error_shown: bool,
     /// Devices found for the first-run wizard.
     wizard_detected: Option<presets::Detected>,
+    /// What the user ticked or unticked in the wizard.
+    wizard_choices: presets::Choices,
     /// Macros and triggers (taken out while it calls back into the app).
     runner: Option<estream_automation::Runner>,
     /// Macro open in the Automation dialog.
@@ -787,6 +790,7 @@ impl App {
             vcam_install: None,
             vcam_error_shown: false,
             wizard_detected: None,
+            wizard_choices: presets::Choices::default(),
             runner: Some(new_runner()),
             auto_selected: None,
             auto_recording: None,
@@ -952,6 +956,7 @@ impl App {
                     .collect::<Vec<_>>(),
             )));
             self.wizard_detected = Some(self.detect_devices());
+            self.wizard_choices = presets::Choices::default();
             w.set_wizard_purpose(0);
             self.wizard_purpose_changed(0);
             w.set_startup("wizard".into());
@@ -2313,19 +2318,44 @@ impl App {
             .get(index.max(0) as usize)
             .copied()
             .unwrap_or(presets::Purpose::Gaming);
+        self.wizard_show_summary(purpose);
+        if let Some(i) = PRESETS.iter().position(|p| *p == purpose.preset()) {
+            w.set_wizard_current(i as i32);
+        }
+    }
+
+    /// A wizard line's checkbox was clicked: include or leave out that part.
+    pub fn wizard_toggled(&mut self, key: &str) {
+        let Some(w) = self.window() else { return };
+        let Some(part) = presets::Part::from_key(key) else {
+            return;
+        };
+        let purpose = presets::Purpose::ALL
+            .get(w.get_wizard_purpose().max(0) as usize)
+            .copied()
+            .unwrap_or(presets::Purpose::Gaming);
+        self.wizard_choices.toggle(part, purpose);
+        self.wizard_show_summary(purpose);
+    }
+
+    fn wizard_show_summary(&self, purpose: presets::Purpose) {
+        let Some(w) = self.window() else { return };
         let detected = self.wizard_detected.clone().unwrap_or_default();
-        let preset = purpose.preset();
-        let mut lines = vec![format!("Canvas: {}", preset.label)];
-        lines.extend(presets::summary(purpose, &detected));
+        let mut lines = vec![presets::Line::fixed(format!(
+            "Canvas: {}",
+            purpose.preset().label
+        ))];
+        lines.extend(presets::summary(purpose, &detected, &self.wizard_choices));
         w.set_wizard_summary(ModelRc::new(VecModel::from(
             lines
                 .into_iter()
-                .map(SharedString::from)
+                .map(|l| SetupLine {
+                    text: l.text.into(),
+                    key: l.part.map_or("", presets::Part::key).into(),
+                    on: l.on,
+                })
                 .collect::<Vec<_>>(),
         )));
-        if let Some(i) = PRESETS.iter().position(|p| *p == preset) {
-            w.set_wizard_current(i as i32);
-        }
     }
 
     /// Creates the first scene collection for the chosen purpose.
@@ -2347,7 +2377,7 @@ impl App {
             .wizard_detected
             .take()
             .unwrap_or_else(|| self.detect_devices());
-        let project = presets::build_project(purpose, preset, &detected);
+        let project = presets::build_project(purpose, preset, &detected, &self.wizard_choices);
         if let Err(e) = persist::save(&self.collection, &project) {
             self.toast(format!("Couldn't create the setup: {e}"), true);
             return;
@@ -10635,6 +10665,7 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     on!(on_setup_cancel, |a| a.setup_cancel());
     on!(on_wizard_purpose_changed, |a, i| a
         .wizard_purpose_changed(i));
+    on!(on_wizard_toggled, |a, key| a.wizard_toggled(&key));
     on!(on_golive_pick, |a, i| a.golive_pick(i));
     on!(on_golive_key_edited, |a, t| a.golive_key_edited(&t));
     on!(on_golive_open_key_page, |a| a.golive_open_key_page());

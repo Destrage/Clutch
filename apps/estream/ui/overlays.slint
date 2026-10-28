@@ -1,6 +1,6 @@
 import { Theme, Platform } from "theme.slint";
 import { Icons } from "icons.slint";
-import { PaletteEntry, Preset, SourceType, SettingsForm, DestinationRow, LiveRow } from "types.slint";
+import { PaletteEntry, Preset, SetupLine, SourceType, SettingsForm, DestinationRow, LiveRow } from "types.slint";
 import { Button, IconButton, Icon, Badge, TextField, TextArea, NumberField, Select, Slider, Toggle, SectionTitle } from "widgets.slint";
 import { KindIcon } from "panels.slint";
 
@@ -244,8 +244,8 @@ export component SetupWizard inherits Modal {
     /// What the user wants to do (label + detail).
     in property <[Preset]> purposes;
     in-out property <int> purpose;
-    /// What will be set up, from device detection.
-    in property <[string]> summary;
+    /// What will be set up, from device detection; lines with a key can be left out.
+    in property <[SetupLine]> summary;
     in property <[Preset]> presets;
     in-out property <int> current;
     /// Show the resolution list (otherwise the purpose decides).
@@ -253,6 +253,8 @@ export component SetupWizard inherits Modal {
     /// A setup made from the menu (not the first run): another title, and Cancel.
     in property <string> setup-name;
     callback purpose-changed(int);
+    /// A line's checkbox was clicked (its key).
+    callback toggled(string);
     callback create();
     callback cancel();
 
@@ -340,13 +342,44 @@ export component SetupWizard inherits Modal {
                 padding-left: 14px;
                 spacing: 5px;
                 Text { text: "WE'LL SET UP"; color: Theme.text-faint; font-size: Theme.font-xs; font-weight: 700; }
-                for line in root.summary: HorizontalLayout {
-                    spacing: 8px;
-                    VerticalLayout {
-                        alignment: center;
-                        Icon { source: Icons.check; size: 13px; tint: Theme.ok; }
+                for line in root.summary: Rectangle {
+                    property <bool> optional: line.key != "";
+                    height: 20px;
+                    if optional: TouchArea {
+                        accessible-role: checkbox;
+                        accessible-label: line.text;
+                        accessible-checked: line.on;
+                        mouse-cursor: MouseCursor.pointer;
+                        clicked => { root.toggled(line.key); }
                     }
-                    Text { text: line; color: Theme.text; font-size: Theme.font-s; overflow: elide; horizontal-stretch: 1; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        VerticalLayout {
+                            alignment: center;
+                            if !optional: Rectangle {
+                                width: 15px;
+                                height: 15px;
+                                Icon { source: Icons.check; size: 13px; tint: Theme.ok; }
+                            }
+                            if optional: Rectangle {
+                                width: 15px;
+                                height: 15px;
+                                border-radius: 4px;
+                                border-width: line.on ? 0px : 1px;
+                                border-color: Theme.text-faint;
+                                background: line.on ? Theme.accent : transparent;
+                                if line.on: Icon { source: Icons.check; size: 11px; tint: Theme.on-accent; }
+                            }
+                        }
+                        Text {
+                            text: line.text;
+                            color: line.on ? Theme.text : Theme.text-faint;
+                            font-size: Theme.font-s;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            horizontal-stretch: 1;
+                        }
+                    }
                 }
             }
         }
