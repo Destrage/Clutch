@@ -188,4 +188,4 @@ Each change below gets its own `openspec/changes/<id>/` when work starts. ✅ = 
 | 4 | `add-iso-recording` | Per-source isolated recordings | Beyond OBS |
 | 4 | `add-obs-import` | Import OBS scene collections & profiles | Migration path |
 | 4 | ✅ `add-linux` | Linux backends (PipeWire, portals, V4L2) and an AppImage | Parity |
-| 4 | `add-macos` | macOS backends (ScreenCaptureKit, AVFoundation) | Parity |
+| 4 | ✅ `add-macos` | macOS backends (ScreenCaptureKit, AVFoundation, VideoToolbox), app bundle and dmg; parity with 0.7.0 | Parity |
