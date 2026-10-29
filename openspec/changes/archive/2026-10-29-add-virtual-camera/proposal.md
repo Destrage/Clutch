@@ -2,8 +2,8 @@
 
 ## Why
 People use their stream layout in calls and in other apps: Zoom, Teams, Discord, Google Meet in
-Chrome or Edge, and recording tools. OBS offers a virtual camera that most of its users rely on.
-eStream needs one too.
+Chrome or Edge, and recording tools. eStream needs
+a virtual camera for that.
 
 ## What Changes
 - **virtual-camera** capability (new): "eStream Virtual Camera" appears as a webcam in every app

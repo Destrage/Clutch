@@ -1,8 +1,8 @@
 # Change: Hotkeys, macros and triggers
 
 ## Why
-Streamers drive their show with keys and automation. OBS has per-action hotkeys and leaves
-anything smarter to plugins like Advanced Scene Switcher. Examples:
+Streamers drive their show with keys and automation. Per-action hotkeys cover the
+basics; the rest needs automation built in. Examples:
 - switch to "Game" when the game window takes focus;
 - start the replay buffer whenever the stream starts;
 - cycle "Be right back" scenes on a timer.
@@ -48,7 +48,7 @@ starting or stopping).
 
 ## Out of scope
 - Conditions (if/else) and variables. Triggers plus steps cover the common cases first.
-- Scene-specific hotkeys (OBS's "hotkey only while this scene is active").
+- Scene-specific hotkeys (a hotkey that works only while a given scene is active).
 - Hotkeys on macOS and Linux.
 
 ## Impact

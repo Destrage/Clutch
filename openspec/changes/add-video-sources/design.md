@@ -21,8 +21,8 @@ Media Foundation `IMFSourceReader` with hardware MJPEG/NV12/YUY2 → GPU upload.
 runs in a WGSL shader with the correct matrix (BT.601/709) and range (limited/full).
 
 ### Game capture
-OBS uses DLL injection hooks (graphics-hook) for exclusive-fullscreen games. That approach has
-anti-cheat risk and is complex. Phase 1 uses WGC, which handles borderless and windowed games well.
+Exclusive-fullscreen games are usually captured with hooks injected into the game process. That
+approach has anti-cheat risk and is complex. Phase 1 uses WGC, which handles borderless and windowed games well.
 A hook-based capture may come later as a separate change, with a signed helper.
 
 ### Text

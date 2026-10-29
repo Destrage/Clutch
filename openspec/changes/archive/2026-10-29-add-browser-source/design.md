@@ -57,7 +57,7 @@ Names are `Local\estream-browser-<helper pid>-<id>-<kind>-<n>`, created by the h
 - `LoadHandler`: `on_load_end` injects the custom CSS as a `<style>` element, then reports `loaded`.
   `on_load_error` reports `error`.
 - **Default CSS:** `body { background-color: rgba(0,0,0,0); margin: 0 auto; overflow: hidden; }`
-  (same as OBS).
+  (what overlay pages expect).
 
 ## Host (`estream-capture::browser`)
 - `BrowserHost` (process-wide): owns the helper child, its stdin, a stdout reader thread and the

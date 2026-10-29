@@ -1,7 +1,7 @@
 # Change: Add core video sources (Windows first)
 
 ## Why
-A studio is only useful once it can capture something. These sources cover the most common OBS
+A studio is only useful once it can capture something. These sources cover the most common streaming
 setups: screen, window, game, webcam, images and text overlays.
 
 ## What Changes

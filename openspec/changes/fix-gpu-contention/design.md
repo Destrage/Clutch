@@ -96,16 +96,16 @@ and run on one shared device as before (previews are shown directly). Linux and 
 In `estream-gpu` on Windows, after the adapter is chosen:
 `D3DKMTSetProcessSchedulingPriorityClass(GetCurrentProcess(), HIGH if HAGS else REALTIME)`.
 Skip it when the vendor ID is Intel (0x8086). A failure (non-admin) is logged at debug
-level. This mirrors the obs-studio `set_priority` behaviour. `IDXGIDevice::SetGPUThreadPriority`
+level. `IDXGIDevice::SetGPUThreadPriority`
 applies to D3D11 devices, so it's set on the capture interop device only.
 
 ## Alternatives considered
-- **Native child HWND for the preview, drawn by the video thread** (the obs-studio layout).
+- **Native child HWND for the preview, drawn by the video thread**.
   This removes contention fully, but Slint draws on top of the preview: the floating "In
   this scene" panel, selection handles and guides would be covered by the child window and
   would have to move into the engine. Too invasive for now.
 - **Pause compositor submits around window resizes.** Fixes only the configure race; the
   Present lock remains.
-- **`SetMaximumFrameLatency(16)`**: obs-studio sets it on its D3D11 DXGI device to avoid
+- **`SetMaximumFrameLatency(16)`**: often set on a D3D11 DXGI device to avoid
   Present stalls. For D3D12 the latency belongs to each swap chain, which Slint owns, so it
   isn't adopted. The device split makes it unnecessary for the compositor.

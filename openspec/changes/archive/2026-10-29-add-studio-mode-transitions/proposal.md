@@ -3,7 +3,7 @@
 ## Why
 Switching scenes is an instant cut today, and every edit happens live on the program. Producers
 need to prepare the next scene off-air (studio mode) and change scenes with smooth transitions.
-OBS has both. eStream can go further by making custom transitions a first-class feature: a short
+eStream also makes custom transitions a first-class feature: a short
 WGSL shader instead of a plugin.
 
 ## What Changes

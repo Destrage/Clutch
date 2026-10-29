@@ -1,9 +1,9 @@
 # Change: Remote control API (obs-websocket v5 compatible)
 
 ## Why
-Stream Deck, Touch Portal, Streamer.bot, chat bots and many web dashboards control OBS through
-obs-websocket v5. If eStream speaks the same protocol, these tools work without changes. That
-removes one of the biggest reasons people can't switch away from OBS.
+Stream Deck, Touch Portal, Streamer.bot, chat bots and many web dashboards speak
+the obs-websocket v5 protocol. If eStream speaks the same protocol, these tools work without
+changes, and people keep the control setups they already have.
 
 ## What Changes
 - **remote-api** capability (new): a WebSocket server that speaks obs-websocket protocol v5

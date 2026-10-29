@@ -5,7 +5,7 @@ After `add-clips`, users end up with a library of tagged clips and long recordin
 markers. The next step for most of them is a montage: a short highlight video set to music, often
 vertical for Shorts or TikTok. Today that means exporting everything into a separate editor.
 
-Medal and similar apps showed that a **one-click montage** plus a **simple editor** covers most of
+A **one-click montage** plus a **simple editor** covers most of
 what people want, without a full NLE. eStream already decodes, composites on the GPU and encodes,
 which are the three hard parts. This change puts them together for editing.
 

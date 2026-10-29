@@ -7,7 +7,7 @@ When a stream stutters, the streamer needs to know why, and fast. The cause coul
 - the network is dropping frames;
 - the disk is filling up.
 
-OBS has a Stats dock full of raw numbers but doesn't say what's wrong or what to do about it.
+Raw numbers alone don't say what's wrong or what to do about it.
 eStream should watch these signals continuously, show them with a little history, and **tell the
 user** in plain words when something is going wrong, with a concrete fix.
 

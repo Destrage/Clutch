@@ -20,7 +20,7 @@ There is also a second contention point. wgpu-core holds the device's `command_i
 lock across `IDXGISwapChain::Present`. While the UI presents (Slint uses `AutoVsync`), every
 compositor `queue.submit` waits behind it.
 
-The obs-studio source shows the usual way to avoid this: one thread owns all rendering for its
+The usual way to avoid this: one thread owns all rendering for its
 device, preview swap chains are resized on that thread, and the render loop only presents
 when the frame-latency waitable reports a free slot. The UI toolkit draws elsewhere. The same
 codebase also raises the process's GPU scheduling priority, which matters when an uncapped

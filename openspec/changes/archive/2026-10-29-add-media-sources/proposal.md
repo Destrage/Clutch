@@ -2,7 +2,7 @@
 
 ## Why
 Streams need intros, B-roll, background music, sound effects and image slideshows, all played
-in sync with the program. OBS has a media source, a VLC source and a slideshow, each separate.
+in sync with the program.
 eStream offers one media source that plays any mix of video, audio and image files as a
 playlist. The same playback path enables stinger transitions (video with alpha over the scene
 change), which were deferred from the transitions change.

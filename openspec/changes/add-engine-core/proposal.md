@@ -3,8 +3,8 @@
 ## Why
 Every eStream feature (sources, outputs, UI, remote API, plugins) depends on a solid engine:
 a real-time frame clock, a scene model, a GPU compositor, and a single mutation path that enables
-undo/redo and remote control. Getting this foundation right first avoids the architectural debt
-that OBS carries (global mutable state, mutations that can't be undone, single canvas).
+undo/redo and remote control. Getting this foundation right first avoids architectural debt
+later (global mutable state, mutations that can't be undone, a single canvas).
 
 ## What Changes
 - Create the Cargo workspace and crate layout described in `project.md`.

@@ -2,7 +2,7 @@
 
 ## Why
 Sources come in as they are. Creators need to fix colors, key out green screens, apply looks
-(LUTs), crop or pad, blur, sharpen and mask, as OBS filters do. eStream runs all of this on the
+(LUTs), crop or pad, blur, sharpen and mask. eStream runs all of this on the
 GPU in its linear-light pipeline, and makes custom filters a short WGSL function instead of a
 plugin.
 

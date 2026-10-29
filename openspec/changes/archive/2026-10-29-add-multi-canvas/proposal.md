@@ -2,7 +2,7 @@
 
 ## Why
 Creators publish the same show horizontally (Twitch, YouTube) and vertically (Shorts, TikTok,
-Reels). OBS needs a plugin and a second scene collection for that. The eStream engine already
+Reels). Doing that with one studio and one set of scenes saves running two setups. The eStream engine already
 renders any number of canvases, each at its own size and frame rate. This change exposes that in
 the studio and lets every output choose its canvas.
 

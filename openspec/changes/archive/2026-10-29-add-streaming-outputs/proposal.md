@@ -3,7 +3,7 @@
 ## Why
 eStream can record but not go live. Streaming is the core job of the app. It must survive bad
 networks without stalling rendering, reconnect by itself, and support the newer protocols (SRT,
-WHIP, HEVC/AV1 over Enhanced RTMP) that OBS only partly covers.
+WHIP, HEVC/AV1 over Enhanced RTMP).
 
 ## What Changes
 - **streaming** capability (new):

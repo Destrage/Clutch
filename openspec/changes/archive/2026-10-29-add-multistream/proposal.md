@@ -1,9 +1,8 @@
 # Change: Multistream to several destinations at once
 
 ## Why
-Creators often go live on several platforms at once (e.g. Twitch + YouTube + Kick). OBS needs a
-plugin for this and runs a separate encoder per output. eStream should do it natively and share
-encoders where possible, so it uses fewer GPU encoder sessions and less GPU time.
+Creators often go live on several platforms at once (e.g. Twitch + YouTube + Kick). eStream should
+do it natively and share encoders between outputs where possible, so it uses fewer GPU encoder sessions and less GPU time.
 
 ## What Changes
 - **streaming** capability (modified): a list of **destinations** replaces the single stream

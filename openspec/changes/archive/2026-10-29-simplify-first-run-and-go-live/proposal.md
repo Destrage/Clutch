@@ -1,7 +1,7 @@
 # Change: Simple first run and one-step Go Live
 
 ## Why
-eStream should be easier than OBS, not just as capable. Today a new user has to:
+Getting started should take minutes, not an afternoon of settings. Today a new user has to:
 1. pick a canvas resolution they may not understand;
 2. start from an empty scene and figure out "display capture" against "game capture";
 3. find Settings → Stream destinations and fill in a service, server, key, encoder and bitrate

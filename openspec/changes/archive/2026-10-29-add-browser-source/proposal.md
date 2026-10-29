@@ -1,9 +1,9 @@
 # Change: Browser source (out-of-process CEF)
 
 ## Why
-Alerts, chat boxes, donation goals, scoreboards and most stream widgets are web pages. OBS embeds
-CEF in its own process, so a misbehaving page can freeze or crash the stream. eStream renders
-pages in a separate helper process. If it crashes, the stream keeps going and the pages come
+Alerts, chat boxes, donation goals, scoreboards and most stream widgets are web pages. A web engine
+running inside the studio's own process lets a misbehaving page freeze or crash the stream, so
+eStream renders pages in a separate helper process. If it crashes, the stream keeps going and the pages come
 back.
 
 ## What Changes

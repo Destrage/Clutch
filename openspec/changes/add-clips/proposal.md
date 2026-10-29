@@ -1,8 +1,8 @@
 # Change: Clips (game-aware replay, clip library, auto-clip)
 
 ## Why
-Most gamers don't stream. They want to grab the moment that just happened. Medal, ShadowPlay
-and Xbox Game Bar have made "clip first, think later" the norm:
+Most gamers don't stream. They want to grab the moment that just happened. "Clip first, think later"
+is what they expect:
 - press a key after something cool happens and the last 30 s is saved;
 - or let the app notice the kill or the win and save it without a key press at all.
 
@@ -23,7 +23,7 @@ library of tagged clips that the montage editor (`add-montage-editor`) builds on
     - the buffer length defaults to 2 minutes;
     - it doesn't need a scene: if the active scene has no game capture, clip mode captures the
       game directly.
-  - **Manual clip:** a global hotkey (default F8 like Medal, rebindable; Alt+F10 is avoided because ShadowPlay uses it) saves the last *N* seconds
+  - **Manual clip:** a global hotkey (default F8, rebindable; Alt+F10 is avoided because a common GPU overlay already uses it) saves the last *N* seconds
     (default 30, set per hotkey). The buffer keeps running, a sound cue confirms the save, and
     the clip is tagged with the game.
   - **Time-window saves:** a clip can include time *after* the request (e.g. 10 s before a kill

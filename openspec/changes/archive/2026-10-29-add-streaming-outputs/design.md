@@ -14,8 +14,8 @@ video/audio threads ──frames──▶ encoder thread ──packets──▶ 
 `SendQueue` = `Mutex<VecDeque<Queued>>` + `Condvar`. Each entry carries the stream index, the
 packet, whether it is video/keyframe, and its time in seconds.
 - If the buffered video span (newest − oldest video time) exceeds `drop_threshold` (default
-  700 ms), the queue drops video packets from the oldest end up to the next keyframe. This is like
-  OBS's frame dropping and keeps decoders valid (no P-frames without their reference). Audio
+  700 ms), the queue drops video packets from the oldest end up to the next keyframe. This keeps
+  decoders valid (no P-frames without their reference). Audio
   packets are never dropped.
 - If no keyframe is queued, all queued video is dropped and the queue waits for the next keyframe
   before accepting video again.
