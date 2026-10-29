@@ -23,6 +23,23 @@ pub fn shared_runner() -> bool {
     std::env::var_os("CI").is_some()
 }
 
+/// True on a Windows CI runner whose GPU is WARP (the software renderer). WARP there can't
+/// render even one 640x360 canvas at 30 fps (4 of 15 frames in 20 s), so tests that need
+/// real-time video skip themselves. Linux CI (lavapipe) and machines with a GPU run them.
+pub fn skip_without_realtime_gpu() -> bool {
+    let info = &gpu().info;
+    let software = info.device_type == estream_gpu::wgpu::DeviceType::Cpu
+        || info.name.contains("Basic Render");
+    let skip = cfg!(windows) && shared_runner() && software;
+    if skip {
+        eprintln!(
+            "skipped: needs real-time video; this runner renders on {}",
+            info.name
+        );
+    }
+    skip
+}
+
 /// Waits until `rec`'s first file has `frames` encoded frames. The file only exists once the
 /// first frame reaches the encoder, which takes longer on CI runners that render on the CPU, so
 /// a fixed sleep isn't enough there. A failed output panics with its own error.
