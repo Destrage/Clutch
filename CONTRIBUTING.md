@@ -110,15 +110,17 @@ Naming the obs-websocket protocol for compatibility is fine.
 
 ## The guards
 
-Three layers keep `main` safe. If one of them stops you, it is working as intended: change your
+Four layers keep `main` safe. If one of them stops you, it is working as intended: change your
 approach rather than working around it, and ask a maintainer when unsure.
 
-1. **Claude Code hook** (`.claude/settings.json`, `.claude/hooks/git-guard.sh`): blocks the
+1. **GitHub ruleset on `main`**: changes arrive only through a pull request approved by the code
+   owner (`.github/CODEOWNERS`); force pushes and deleting `main` are refused.
+2. **Claude Code hook** (`.claude/settings.json`, `.claude/hooks/git-guard.sh`): blocks the
    commands listed under "Never" before they run.
-2. **Git hooks** (`tools/git-hooks/`): `pre-commit` and `pre-merge-commit` refuse commits on
+3. **Git hooks** (`tools/git-hooks/`): `pre-commit` and `pre-merge-commit` refuse commits on
    `main`; `pre-push` refuses pushes to `main`, tag pushes, force pushes and branch deletes.
-3. **Main guard workflow** (`.github/workflows/main-guard.yml`): a direct push to `main` by anyone
+4. **Main guard workflow** (`.github/workflows/main-guard.yml`): a direct push to `main` by anyone
    but the maintainer fails CI and opens an issue for the maintainer.
 
-Maintainer clones set `git config clutch.maintainer true`, which turns the first two layers off.
+Maintainer clones set `git config clutch.maintainer true`, which turns layers 2 and 3 off.
 Contributors never set it.

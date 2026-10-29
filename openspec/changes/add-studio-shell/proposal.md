@@ -1,8 +1,9 @@
 # Change: Add studio shell (modern desktop UI with live preview)
 
 ## Why
-OBS's UI is functional but dated: dense dock clutter, modal property dialogs, no command palette,
-no undo, and limited on-canvas editing. eStream's main differentiator for most users is a clean,
+A studio is used live, under pressure, so its interface has to be clear and fast: no dock
+clutter or modal property dialogs, a command palette, undo for every edit, and editing right on
+the canvas. eStream's main differentiator for most users is a clean,
 fast, modern interface built on top of the engine core.
 
 ## What Changes

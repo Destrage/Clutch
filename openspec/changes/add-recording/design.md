@@ -34,7 +34,7 @@ for crash-safe MP4. Plain MP4/MOV write the index at the end. Optional remux MKV
 (stream copy, no re-encode).
 
 ## Settings
-Stored in the app settings (like OBS profiles), not in scene collections: folder, filename
+Stored in the app settings (per user, like a profile), not in scene collections: folder, filename
 pattern, container, encoder, codec, rate control, bitrate / quality, keyframe interval, preset,
 audio codec + bitrate, tracks, replay seconds, auto-remux.
 

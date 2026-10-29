@@ -1,21 +1,20 @@
 # Change: Lighter capture → compose → encode pipeline
 
 ## Why
-A matched benchmark on 2026-10-25 (RTX 4070 Ti SUPER, 20 cores, Apex Legends in the Firing
-Range) recorded the same scene with Clutch 0.5.0-beta.1 and with obs-studio 32.2.2: one game
-capture, desktop audio and mic, 1920×1080 at 60 fps, NVENC H.264 CBR 12 Mbps, mkv, no replay
-buffer. Both encoded every frame with nothing dropped, and NVENC load was the same (~20%).
-Clutch's own overhead was much higher:
+A benchmark on 2026-10-25 (RTX 4070 Ti SUPER, 20 cores, Apex Legends in the Firing Range)
+recorded one scene with Clutch 0.5.0-beta.1: one game capture, desktop audio and mic,
+1920×1080 at 60 fps, NVENC H.264 CBR 12 Mbps, mkv, no replay buffer. Every frame was encoded
+with nothing dropped and NVENC load was ~20%, but Clutch's own overhead was far above what this
+scene needs:
 
-| Metric (5 min average) | Clutch | obs-studio |
+| Metric (5 min average) | Clutch 0.5.0-beta.1 | Target |
 |---|---|---|
-| CPU, whole process tree (% of 20 cores) | 3.23 | 0.73 |
-| Private memory | 1206 MB | 490 MB |
-| GPU 3D engine, process | 10.7% | 8.5% |
-| Render time per frame, avg / p95 | 0.94 / 1.67 ms | 0.36 / 0.37 ms |
+| CPU, whole process tree (% of 20 cores) | 3.23 | ≤ 0.75 |
+| Private memory | 1206 MB | < 500 MB |
+| GPU 3D engine, process | 10.7% | ≤ 8.5% |
+| Render time per frame, avg / p95 | 0.94 / 1.67 ms | ≤ 0.4 / < 0.6 ms |
 
-Reading the pipeline shows where the cost comes from. obs-studio's source was studied for its
-approach only; nothing is copied from it (it is GPL-2.0, Clutch is MIT OR Apache-2.0).
+Reading the pipeline shows where the cost comes from.
 
 - **Every encoded frame goes through the CPU.** The canvas is converted to NV12, copied into a
   mapped buffer, de-strided into a `Vec`, cloned once per extra output, copied again into the
@@ -33,8 +32,8 @@ approach only; nothing is copied from it (it is GPL-2.0, Clutch is MIT OR Apache
   canvas, and the UI loop wakes every 4 ms whether or not anything changed.
 
 ## What Changes
-- **Measure first:** the matched benchmark scripts move into the repo (`tools/bench/`), and the
-  video thread reports per-stage timings, so each step below is measured against the baseline.
+- **Measure first:** a repeatable recording benchmark (kept by the maintainers in the private
+  `clutch-bench` repository), and the video thread reports per-stage timings, so each step below is measured against the baseline.
 - **Capture without CPU waits:** capture copies are ordered with a shared GPU fence that the
   engine's queue waits on, instead of the capture thread spinning. Frames that arrive faster
   than the fastest canvas needs are released without being copied, and the capture session's
@@ -61,11 +60,11 @@ tuning for more quality at the same cost (adaptive quantization, multipass) is l
 `add-performance-profiles`, where it can be measured per profile.
 
 ## Targets
-Measured with `tools/bench/run-pair.ps1` on the reference PC above, same scene and settings:
-- process CPU and render time at or below obs-studio's in the same run;
-- render time p95 under 0.6 ms;
+Measured with the recording benchmark on the reference PC above, same scene and settings:
+- process CPU at most 0.75% of 20 cores;
+- render time at most 0.4 ms on average and under 0.6 ms at p95;
 - private memory under 500 MB with clip mode off;
-- GPU 3D engine use at or below obs-studio's;
+- GPU 3D engine use at most 8.5%;
 - clip mode + recording + three destinations with different bitrates: 4 encoder sessions
   instead of 5, zero dropped frames.
 
@@ -74,8 +73,7 @@ Measured with `tools/bench/run-pair.ps1` on the reference PC above, same scene a
 - Affected code: `crates/estream-engine` (video loop, feed, stage timings, pass-through),
   `crates/estream-gpu` (fused conversion, shared NV12 targets), `crates/estream-capture`
   (fence-ordered capture, capture rate cap), `crates/estream-media` (D3D11 hardware frames,
-  shared encoder sessions, probe process), `apps/estream/src` (preview demand, UI loop),
-  `tools/bench/` (new).
+  shared encoder sessions, probe process), `apps/estream/src` (preview demand, UI loop).
 - Builds on `fix-gpu-contention` where both touch the engine's GPU device: the shared fence
   and textures here are created on the engine device that change introduces, or on the single
   shared device when it falls back.

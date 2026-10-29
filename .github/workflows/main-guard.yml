@@ -1,7 +1,7 @@
 name: Main guard
 
-# Branch protection isn't available on this repository's plan, so a direct push to main by
-# anyone but the maintainer is reported instead of refused: the run fails and an issue is
+# The main ruleset refuses direct pushes from contributors. This is the backstop: if main still
+# moves by anyone but the maintainer (a ruleset change, a bypass), the run fails and an issue is
 # opened for the maintainer. Merged pull requests are pushed by the maintainer and pass.
 on:
   push:

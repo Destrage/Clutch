@@ -2,10 +2,11 @@
 
 ## Purpose
 
-**eStream** is a live-streaming and recording studio built from scratch. It aims to match the
-OBS Studio feature set and improve on it in performance, reliability, UX and extensibility.
+**Clutch** (formerly eStream; crate names still use `estream-*`) is a streaming, recording and
+clipping studio built from scratch, focused on performance, reliability, a clear UX and
+extensibility.
 
-### What "better than OBS" means (product pillars)
+### Product pillars
 
 1. **Modern, clean UX.** A single coherent design system, a command palette (Ctrl+K), undo/redo for
    every edit, on-canvas snapping and guides, drag-and-drop everywhere, and sensible defaults
@@ -45,7 +46,7 @@ OBS Studio feature set and improve on it in performance, reliability, UX and ext
 | Audio DSP | In-house mixer (f32, 48 kHz); `nnnoiseless` (RNNoise); CLAP hosting via `clack` | Low-latency mixer we control |
 | Screen capture | Windows.Graphics.Capture / DXGI Desktop Duplication (`windows` crate); ScreenCaptureKit; PipeWire portal | Native, GPU-texture based |
 | Camera | Media Foundation / AVFoundation / V4L2 (via `nokhwa` or direct) | |
-| Browser source | CEF, **out of process** (offscreen rendering, shared texture) | Isolation; feature parity with OBS browser source |
+| Browser source | CEF, **out of process** (offscreen rendering, shared texture) | Isolation; existing overlay and widget pages work unchanged |
 | Plugins / scripting | **wasmtime** + WIT component model | Sandboxed, language-agnostic, crash-isolated |
 | Remote API | `tokio` + `tokio-tungstenite`, obs-websocket v5 protocol | Ecosystem compatibility |
 | Async runtime | `tokio` (I/O only; never on render/audio threads) | |
@@ -129,7 +130,7 @@ crates/estream-plugin/   # WASM plugin host + WIT interfaces
 ## Domain Context
 
 - **Canvas**: an output video surface with its own resolution/FPS (e.g. 1920×1080@60 landscape,
-  1080×1920@30 vertical). OBS has exactly one; eStream supports many.
+  1080×1920@30 vertical). A project can have several.
 - **Scene**: an ordered list of scene items composited onto a canvas.
 - **Source**: a producer of video and/or audio (display capture, camera, media file, text, browser…).
   A source can be referenced by many scene items.
@@ -160,32 +161,32 @@ crates/estream-plugin/   # WASM plugin host + WIT interfaces
 
 Each change below gets its own `openspec/changes/<id>/` when work starts. ✅ = proposal written.
 
-| Phase | Change ID | Delivers | OBS parity / beyond |
-|---|---|---|---|
-| 1 – Foundation | ✅ `add-engine-core` | Workspace, command bus, scene graph, wgpu compositor, frame clock, persistence, undo/redo | Parity + undo/redo |
-| 1 | ✅ `add-studio-shell` | Slint app, live preview with on-canvas editing, scenes/sources panels, properties, command palette | Better UX |
-| 1 | ✅ `add-video-sources` | Display, window, game capture (Windows), camera, image, color, text | Parity |
-| 1 | ✅ `add-audio-engine` | Device/app capture, mixer, meters, monitoring, 6 tracks, core filters | Parity + per-app capture |
-| 1 | ✅ `add-recording` | HW/SW encoders, MKV/MP4/fMP4, multi-track audio, remux, replay buffer | Parity + crash-safe fMP4 |
-| 2 – Go live | ✅ `add-streaming-outputs` | RTMP(S), Enhanced RTMP, SRT, WHIP; service presets; auto-reconnect | Parity + WHIP/eRTMP |
-| 2 | ✅ `add-multistream` | N simultaneous destinations; shared or per-destination encoders | Beyond OBS |
-| 2 | ✅ `add-studio-mode-transitions` | Preview/Program, cut/fade/slide/stinger/shader transitions | Parity |
-| 2 | ✅ `add-video-filters` | Color correction, LUT, chroma/luma key, crop/pad, blur, mask, sharpen, custom WGSL shaders | Parity + shaders built in |
-| 2 | ✅ `add-media-sources` | Media files/playlists, image slideshow, VLC-like playlist | Parity |
-| 3 – Pro | ✅ `add-multi-canvas` | Multiple canvases (vertical + horizontal), per-canvas outputs | Beyond OBS |
-| 3 | ✅ `add-browser-source` | Out-of-process CEF, transparent overlays, custom CSS, audio | Parity + isolation |
-| 3 | ✅ `add-remote-api` | obs-websocket v5 compatible server | Parity (ecosystem compatible) |
-| 3 | ✅ `add-virtual-camera` | Virtual webcam output (Windows/macOS/Linux) | Parity |
-| 3 | ✅ `add-hotkeys-macros` | Global hotkeys, macros and triggers (scene switch on window focus, timers…) | Beyond OBS (built-in Advanced Scene Switcher) |
-| 3 | ✅ `add-stats-health` | Stats dock, network health, encoder overload hints (auto-quality fallback deferred) | Better |
-| 3 | ✅ `simplify-first-run-and-go-live` | Purpose-based first run with device detection; two-step Go Live box (platform + key) | Simpler than OBS |
-| 3 | ✅ `add-clips` | Game-aware replay buffer, clip hotkey, auto-clip (game integrations + audio hype), clip library with trim | Beyond OBS (Medal-style clipping) |
-| 3 | ✅ `add-montage-editor` | Highlight scan of recordings, beat-synced auto-montage, single-track timeline editor, export | Beyond OBS |
-| 3 | ✅ `refine-sound-controls` | Sound knobs (click mutes, drag sets volume, name opens settings), closable settings panel | Better UX |
-| 3 | ✅ `add-voice-effects` | Pitch shift, robot, radio, echo, reverb; one-click voice presets; hear yourself | Beyond OBS |
-| 4 – Ecosystem | `add-plugin-system` | WASM plugin host (sources, filters, docks, commands) | Better (sandboxed) |
-| 4 | `add-ai-features` | Background blur and replacement (virtual background), face masks and avatars for camera privacy, auto captions, AI voice conversion | Beyond OBS |
-| 4 | `add-iso-recording` | Per-source isolated recordings | Beyond OBS |
-| 4 | `add-obs-import` | Import OBS scene collections & profiles | Migration path |
-| 4 | ✅ `add-linux` | Linux backends (PipeWire, portals, V4L2) and an AppImage | Parity |
-| 4 | ✅ `add-macos` | macOS backends (ScreenCaptureKit, AVFoundation, VideoToolbox), app bundle and dmg; parity with 0.7.0 | Parity |
+| Phase | Change ID | Delivers |
+|---|---|---|
+| 1 – Foundation | ✅ `add-engine-core` | Workspace, command bus, scene graph, wgpu compositor, frame clock, persistence, undo/redo |
+| 1 | ✅ `add-studio-shell` | Slint app, live preview with on-canvas editing, scenes/sources panels, properties, command palette |
+| 1 | ✅ `add-video-sources` | Display, window, game capture (Windows), camera, image, color, text |
+| 1 | ✅ `add-audio-engine` | Device/app capture, mixer, meters, monitoring, 6 tracks, core filters |
+| 1 | ✅ `add-recording` | HW/SW encoders, MKV/MP4/fMP4, multi-track audio, remux, replay buffer |
+| 2 – Go live | ✅ `add-streaming-outputs` | RTMP(S), Enhanced RTMP, SRT, WHIP; service presets; auto-reconnect |
+| 2 | ✅ `add-multistream` | N simultaneous destinations; shared or per-destination encoders |
+| 2 | ✅ `add-studio-mode-transitions` | Preview/Program, cut/fade/slide/stinger/shader transitions |
+| 2 | ✅ `add-video-filters` | Color correction, LUT, chroma/luma key, crop/pad, blur, mask, sharpen, custom WGSL shaders |
+| 2 | ✅ `add-media-sources` | Media files/playlists, image slideshow, VLC-like playlist |
+| 3 – Pro | ✅ `add-multi-canvas` | Multiple canvases (vertical + horizontal), per-canvas outputs |
+| 3 | ✅ `add-browser-source` | Out-of-process CEF, transparent overlays, custom CSS, audio |
+| 3 | ✅ `add-remote-api` | obs-websocket v5 compatible server |
+| 3 | ✅ `add-virtual-camera` | Virtual webcam output (Windows/macOS/Linux) |
+| 3 | ✅ `add-hotkeys-macros` | Global hotkeys, macros and triggers (scene switch on window focus, timers…) |
+| 3 | ✅ `add-stats-health` | Stats dock, network health, encoder overload hints (auto-quality fallback deferred) |
+| 3 | ✅ `simplify-first-run-and-go-live` | Purpose-based first run with device detection; two-step Go Live box (platform + key) |
+| 3 | ✅ `add-clips` | Game-aware replay buffer, clip hotkey, auto-clip (game integrations + audio hype), clip library with trim |
+| 3 | ✅ `add-montage-editor` | Highlight scan of recordings, beat-synced auto-montage, single-track timeline editor, export |
+| 3 | ✅ `refine-sound-controls` | Sound knobs (click mutes, drag sets volume, name opens settings), closable settings panel |
+| 3 | ✅ `add-voice-effects` | Pitch shift, robot, radio, echo, reverb; one-click voice presets; hear yourself |
+| 4 – Ecosystem | `add-plugin-system` | WASM plugin host (sources, filters, docks, commands) |
+| 4 | `add-ai-features` | Background blur and replacement (virtual background), face masks and avatars for camera privacy, auto captions, AI voice conversion |
+| 4 | `add-iso-recording` | Per-source isolated recordings |
+| 4 | `add-obs-import` | Import OBS scene collections & profiles |
+| 4 | ✅ `add-linux` | Linux backends (PipeWire, portals, V4L2) and an AppImage |
+| 4 | ✅ `add-macos` | macOS backends (ScreenCaptureKit, AVFoundation, VideoToolbox), app bundle and dmg; parity with 0.7.0 |

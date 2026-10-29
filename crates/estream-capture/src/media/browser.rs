@@ -24,7 +24,7 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::Duration;
 
-/// Same default as OBS: transparent page, no margins or scrollbars.
+/// The default overlay pages expect: transparent page, no margins or scrollbars.
 pub const DEFAULT_CSS: &str =
     "body { background-color: rgba(0, 0, 0, 0); margin: 0px auto; overflow: hidden; }";
 

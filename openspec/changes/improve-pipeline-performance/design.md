@@ -14,9 +14,8 @@ encoder thread: Vec ─copy─▶ AVFrame (system memory) ─▶ h264_nvenc (CUD
 Versions in use: wgpu 30.0.1 (DX12 backend), Slint 1.18.1 on the same wgpu device (until
 `fix-gpu-contention` splits it), ffmpeg-next 9.0 over FFmpeg 7.x shared libraries.
 
-obs-studio was read for its approach only (it is GPL-2.0; Clutch is MIT OR Apache-2.0, so no
-code is copied or translated). Its texture-encoder path hands NVENC a D3D11 texture it renders
-NV12 into, and its outputs share one encoder when their settings match. The implementation
+The approach is the usual one for hardware encoders: hand the encoder a D3D11 texture that NV12
+is rendered into, and let outputs with matching settings share one encoder. The implementation
 below is our own, built from FFmpeg's hwcontext API documentation and the D3D11/D3D12
 documentation.
 

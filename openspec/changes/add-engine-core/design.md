@@ -58,7 +58,7 @@ swaps (`arc-swap`) whenever the project changes. This keeps rendering lock-free.
 ## Alternatives Considered
 - **Bevy ECS for the scene graph**: powerful but heavy; it imposes its scheduler and app model on us.
   A plain data model with an explicit render graph is simpler and easier to reason about for real time.
-- **Locks around shared state (OBS model)**: rejected. It causes UI hitches and priority inversion
+- **Locks around shared state**: rejected. It causes UI hitches and priority inversion
   on the render thread.
 - **8-bit sRGB compositing**: rejected. It gives incorrect blending and blocks HDR.
 
