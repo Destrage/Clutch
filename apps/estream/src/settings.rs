@@ -865,6 +865,7 @@ mod tests {
         ));
         assert!(!is_kick_ingest("rtmp://live.twitch.tv/app/"));
     }
+    #[cfg(windows)]
     #[test]
     fn system_theme_matches_the_registry() {
         let out = std::process::Command::new("reg")

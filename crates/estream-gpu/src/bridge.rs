@@ -56,7 +56,10 @@ impl PreviewBridge {
             self.imp.create_preview(width, height)
         }
         #[cfg(not(windows))]
-        match self.never {}
+        {
+            let _ = (width, height);
+            match self.never {}
+        }
     }
 
     /// Call on the engine's thread right after the submit that drew previews. Returns the
@@ -77,7 +80,10 @@ impl PreviewBridge {
             self.imp.copied(copy)
         }
         #[cfg(not(windows))]
-        match self.never {}
+        {
+            let _ = copy;
+            match self.never {}
+        }
     }
 
     /// On the UI's thread: copies `preview` (the UI's side of a bridge texture) into `target`
@@ -94,7 +100,10 @@ impl PreviewBridge {
             self.imp.copy_to_ui(ui, preview, target, frame)
         }
         #[cfg(not(windows))]
-        match self.never {}
+        {
+            let _ = (ui, preview, target, frame);
+            match self.never {}
+        }
     }
 }
 

@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{gpu, probe, temp_dir};
+use common::{gpu, probe, temp_dir, wait_frames};
 use estream_core::{Alignment, BoundsMode, CanvasId, ItemTransform, Rational};
 use estream_engine::{Engine, EngineConfig};
 use estream_media::{Destination, MultiStream, Recording, RecordingSettings, StreamSettings};
@@ -74,7 +74,7 @@ fn recording_all_canvases_writes_one_file_per_canvas() {
     )
     .unwrap();
     assert_eq!(rec.file_count(), 2);
-    std::thread::sleep(Duration::from_millis(1500));
+    wait_frames(&rec, 30);
     let paths = rec.stop_all(&engine).unwrap();
     assert_eq!(paths.len(), 2);
     let main = probe(&paths[0]).video.unwrap();
@@ -99,7 +99,7 @@ fn recording_one_canvas_and_unknown_canvas_falls_back() {
         },
     )
     .unwrap();
-    std::thread::sleep(Duration::from_millis(800));
+    wait_frames(&rec, 15);
     let path = rec.stop(&engine).unwrap();
     let v = probe(&path).video.unwrap();
     assert_eq!((v.1, v.2), (360, 640));
@@ -114,7 +114,7 @@ fn recording_one_canvas_and_unknown_canvas_falls_back() {
         },
     )
     .unwrap();
-    std::thread::sleep(Duration::from_millis(800));
+    wait_frames(&rec, 15);
     let path = rec.stop(&engine).unwrap();
     let v = probe(&path).video.unwrap();
     assert_eq!((v.1, v.2), (640, 360));
