@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{engine, probe, skip_without_realtime_gpu, temp_dir};
+use common::{engine, probe, temp_dir};
 use estream_media::trim::{TrimMode, trim};
 use estream_media::{Container, Recording, RecordingSettings};
 use std::path::{Path, PathBuf};
@@ -50,9 +50,6 @@ fn assert_in_sync(path: &Path) {
 
 #[test]
 fn lossless_trim_starts_at_a_keyframe() {
-    if skip_without_realtime_gpu() {
-        return;
-    }
     let (dir, input) = copy_of("lossless");
     let output = dir.join("out.mp4");
     let kept = trim(&input, &output, 2.5, 4.5, TrimMode::Lossless, &mut |_| true).unwrap();
@@ -148,9 +145,6 @@ fn bad_ranges_are_refused() {
 
 #[test]
 fn thumbnail_is_a_small_jpeg_of_the_requested_frame() {
-    if skip_without_realtime_gpu() {
-        return;
-    }
     let (dir, input) = copy_of("thumb");
     let jpg = dir.join("clip.jpg");
     let t = estream_media::thumbnail::thumbnail(&input, 3.0, 320, &jpg).unwrap();
@@ -199,9 +193,6 @@ fn audio_decodes_to_48k_stereo_from_any_point() {
 
 #[test]
 fn frame_reader_gives_the_frame_at_any_time() {
-    if skip_without_realtime_gpu() {
-        return;
-    }
     use estream_media::frames::FrameReader;
     let (_dir, input) = copy_of("frames");
     let mut r = FrameReader::open(&input).unwrap();

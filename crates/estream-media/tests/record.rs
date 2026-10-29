@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{engine, probe, shared_runner, skip_without_realtime_gpu, temp_dir};
+use common::{engine, probe, shared_runner, temp_dir};
 use estream_core::Timestamp;
 use estream_media::{Container, Recording, RecordingSettings, ReplayBuffer, VideoCodec, encode};
 use std::path::Path;
@@ -37,9 +37,6 @@ fn hardware_encoder_is_picked_automatically() {
 
 #[test]
 fn records_video_and_two_audio_tracks_in_sync() {
-    if skip_without_realtime_gpu() {
-        return;
-    }
     let engine = engine();
     let dir = temp_dir("mkv");
     std::thread::sleep(Duration::from_millis(300));
@@ -133,9 +130,6 @@ fn replay_buffer_saves_the_last_seconds() {
 
 #[test]
 fn replay_buffer_saves_a_time_window() {
-    if skip_without_realtime_gpu() {
-        return;
-    }
     let engine = engine();
     let dir = temp_dir("replay-range");
     std::thread::sleep(Duration::from_millis(300));

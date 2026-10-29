@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{gpu, probe, skip_without_realtime_gpu, temp_dir, wait_frames};
+use common::{gpu, probe, temp_dir, wait_frames};
 use estream_core::{Alignment, BoundsMode, CanvasId, ItemTransform, Rational};
 use estream_engine::{Engine, EngineConfig};
 use estream_media::{Destination, MultiStream, Recording, RecordingSettings, StreamSettings};
@@ -61,9 +61,6 @@ fn two_canvas_engine() -> (Engine, CanvasId, CanvasId) {
 
 #[test]
 fn recording_all_canvases_writes_one_file_per_canvas() {
-    if skip_without_realtime_gpu() {
-        return;
-    }
     let (engine, _, _) = two_canvas_engine();
     let dir = temp_dir("all-canvases");
     std::thread::sleep(Duration::from_millis(300));
@@ -90,9 +87,6 @@ fn recording_all_canvases_writes_one_file_per_canvas() {
 
 #[test]
 fn recording_one_canvas_and_unknown_canvas_falls_back() {
-    if skip_without_realtime_gpu() {
-        return;
-    }
     let (engine, _, vertical) = two_canvas_engine();
     let dir = temp_dir("one-canvas");
     std::thread::sleep(Duration::from_millis(300));
