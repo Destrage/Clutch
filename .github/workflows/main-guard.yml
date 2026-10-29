@@ -1,0 +1,29 @@
+name: Main guard
+
+# Branch protection isn't available on this repository's plan, so a direct push to main by
+# anyone but the maintainer is reported instead of refused: the run fails and an issue is
+# opened for the maintainer. Merged pull requests are pushed by the maintainer and pass.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Only the maintainer moves main
+        if: github.actor != 'Destrage'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+        run: |
+          gh issue create -R "$GITHUB_REPOSITORY" --assignee Destrage \
+            --title "Direct push to main by $ACTOR" \
+            --body "main moved from $BEFORE to $AFTER without a pull request. Review it, then revert or keep it."
+          echo "::error::$ACTOR pushed to main directly. Changes reach main through pull requests (CONTRIBUTING.md)."
+          exit 1
