@@ -5,6 +5,15 @@ The system SHALL stream the program canvas to one or more destinations at the sa
 destination uses RTMP, RTMPS, SRT, RIST or WHIP (chosen by its URL) and has its own key, codec,
 bitrate, audio and reconnect settings.
 
+#### Scenario: RTMP stream
+- **WHEN** the user goes live to an RTMP server with a stream key
+- **THEN** the server receives H.264 (or HEVC/AV1 via Enhanced RTMP) video and AAC audio at the
+  canvas resolution and frame rate
+
+#### Scenario: SRT stream
+- **WHEN** the destination URL starts with `srt://`
+- **THEN** the stream is sent as MPEG-TS over SRT
+
 #### Scenario: Two platforms at once
 - **WHEN** two destinations are enabled and the user goes live
 - **THEN** both servers receive the stream
