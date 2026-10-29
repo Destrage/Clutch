@@ -35,7 +35,10 @@ jobs:
       - run: cargo build -p estream-browser
       # One test at a time: WARP renders on the runner's few cores, and engines rendering in
       # parallel starve each other's encoder feeds.
-      - run: cargo test --workspace --no-fail-fast -- --test-threads=1
+      - run: cargo test --workspace --exclude estream-media --no-fail-fast -- --test-threads=1
+      # estream-media's integration tests record and stream in real time, which WARP can't keep
+      # up with on this runner (a different few fail on each run). rust-linux runs them all.
+      - run: cargo test -p estream-media --lib --no-fail-fast
       - name: Upload golden image diffs
         if: failure()
         uses: actions/upload-artifact@v4
