@@ -33,7 +33,9 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       # The browser test launches the helper binary, which `cargo test` doesn't build.
       - run: cargo build -p estream-browser
-      - run: cargo test --workspace --no-fail-fast
+      # One test at a time: WARP renders on the runner's few cores, and engines rendering in
+      # parallel starve each other's encoder feeds.
+      - run: cargo test --workspace --no-fail-fast -- --test-threads=1
       - name: Upload golden image diffs
         if: failure()
         uses: actions/upload-artifact@v4
