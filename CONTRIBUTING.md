@@ -16,8 +16,12 @@ git clone https://github.com/Destrage/Clutch.git
 cd Clutch
 git config core.hooksPath tools/git-hooks   # Claude Code also sets this when a session starts
 git config user.name  "Your Name"
-git config user.email "you@example.com"
+git config user.email "you@example.com"   # an email on your GitHub account
 ```
+
+Your commits carry your name and email, so they stay yours in the history and on GitHub. Use an
+email that is verified on your GitHub account (or your `<id>+<user>@users.noreply.github.com`
+address), or GitHub can't link the commits to your profile.
 
 Then follow the build instructions for your system: `README.md` for Windows and Linux, and the
 "Development setup" section of `openspec/changes/add-macos/design.md` for macOS.
