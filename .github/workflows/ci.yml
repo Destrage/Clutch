@@ -33,7 +33,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       # The browser test launches the helper binary, which `cargo test` doesn't build.
       - run: cargo build -p estream-browser
-      - run: cargo test --workspace
+      - run: cargo test --workspace --no-fail-fast
       - name: Upload golden image diffs
         if: failure()
         uses: actions/upload-artifact@v4
@@ -67,7 +67,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       # The browser test launches the helper binary, which `cargo test` doesn't build.
       - run: cargo build -p estream-browser
-      - run: cargo test --workspace
+      - run: cargo test --workspace --no-fail-fast
 
   appimage:
     # Built on the oldest supported Ubuntu (PipeWire 1.0, which the bindings need), so the

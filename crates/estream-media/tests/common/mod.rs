@@ -4,15 +4,37 @@
 use estream_core::{Alignment, BoundsMode, ItemTransform, Rational};
 use estream_engine::{Command, Engine, EngineConfig};
 use estream_gpu::{GpuContext, GpuOptions};
-use estream_media::ffmpeg;
+use estream_media::{Recording, ffmpeg};
 use estream_project::{Project, SceneItem, SourceDef};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
 
 pub fn gpu() -> GpuContext {
     static GPU: OnceLock<GpuContext> = OnceLock::new();
     GPU.get_or_init(|| GpuContext::new_headless(&GpuOptions::default()).unwrap())
         .clone()
+}
+
+/// Waits until `rec`'s first file has `frames` encoded frames. The file only exists once the
+/// first frame reaches the encoder, which takes longer on CI runners that render on the CPU, so
+/// a fixed sleep isn't enough there. A failed output panics with its own error.
+pub fn wait_frames(rec: &Recording, frames: u64) {
+    let stats = rec.stats();
+    let start = Instant::now();
+    while stats.frames.load(Ordering::Relaxed) < frames {
+        if let Some(e) = stats.error.lock().unwrap().clone() {
+            panic!("recording failed: {e}");
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "{} of {frames} frames after 20 s (encoder {:?})",
+            stats.frames.load(Ordering::Relaxed),
+            stats.encoder.lock().unwrap()
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 pub fn temp_dir(name: &str) -> PathBuf {
