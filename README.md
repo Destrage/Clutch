@@ -249,3 +249,5 @@ openspec/               specs and change proposals (start with openspec/project.
 ## Contributing
 
 Clutch is spec-driven. Read `openspec/AGENTS.md` and `openspec/project.md` first. A new feature starts as a change proposal in `openspec/changes/`, and its `tasks.md` is ticked off as the work is done.
+
+All work reaches `main` through pull requests. `CONTRIBUTING.md` has the setup, branch names, commit format and git rules.

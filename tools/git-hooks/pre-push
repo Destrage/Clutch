@@ -1,0 +1,24 @@
+#!/bin/sh
+# Contributors push their own branches only: main and tags move through pull requests and
+# releases, and branches are never force-pushed or deleted. Maintainer clones
+# (`git config clutch.maintainer true`) are not checked. See CONTRIBUTING.md.
+
+[ "$(git config --get clutch.maintainer)" = "true" ] && exit 0
+
+zero=0000000000000000000000000000000000000000
+refuse() {
+  echo "Push refused: $1 (see CONTRIBUTING.md)." >&2
+  exit 1
+}
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  case "$remote_ref" in
+    refs/heads/main | refs/heads/master) refuse "nothing is pushed to ${remote_ref#refs/heads/}; open a pull request" ;;
+    refs/tags/*) refuse "tags are made by the maintainers at release time" ;;
+  esac
+  [ "$local_sha" = "$zero" ] && refuse "branches on GitHub are deleted by the maintainers"
+  if [ "$remote_sha" != "$zero" ] && ! git merge-base --is-ancestor "$remote_sha" "$local_sha" 2>/dev/null; then
+    refuse "$remote_ref would be rewritten; merge main into your branch instead of rebasing"
+  fi
+done
+exit 0

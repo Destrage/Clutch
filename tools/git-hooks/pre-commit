@@ -1,0 +1,15 @@
+#!/bin/sh
+# Contributors never commit on main: it only changes through pull requests. Maintainer clones
+# (`git config clutch.maintainer true`) are not checked. See CONTRIBUTING.md.
+
+[ "$(git config --get clutch.maintainer)" = "true" ] && exit 0
+
+branch=$(git symbolic-ref --short HEAD 2>/dev/null)
+case "$branch" in
+  main | master)
+    echo "Commit refused: you are on $branch. Create a branch first:" >&2
+    echo "  git switch -c <windows|linux|mac>/<change-id>   (or <change-id> for shared work)" >&2
+    exit 1
+    ;;
+esac
+exit 0

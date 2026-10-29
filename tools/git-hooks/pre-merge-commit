@@ -1,0 +1,3 @@
+#!/bin/sh
+# A merge commit on main is a commit on main: same rule as pre-commit.
+exec "$(dirname "$0")/pre-commit"

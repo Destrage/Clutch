@@ -116,8 +116,14 @@ crates/estream-plugin/   # WASM plugin host + WIT interfaces
 - Every OpenSpec scenario should map to at least one automated test where feasible.
 
 ### Git Workflow
-- Trunk-based: short-lived branches named `<change-id>`, PRs that reference the OpenSpec change.
-- Conventional Commits (`feat:`, `fix:`, `perf:`, `refactor:`, `docs:`, `chore:`).
+- `main` is the release line and only moves when a maintainer merges a pull request (`--no-ff`).
+  Full rules and the guards that enforce them: `CONTRIBUTING.md`.
+- Short-lived branches from `main`, one per change (or per step of a large change). Work for one
+  platform carries its prefix: `windows/<change-id>`, `linux/<change-id>`, `mac/<change-id>`;
+  shared work is plain `<change-id>`. Change ids themselves stay unprefixed.
+- PRs into `main` that reference the OpenSpec change; CI must pass on every platform job.
+- Conventional Commits (`feat:`, `fix:`, `perf:`, `refactor:`, `docs:`, `chore:`), with the
+  platform as scope for platform work (`feat(mac):`, `fix(windows):`, `feat(linux):`).
 - A change is archived (`openspec archive <id>`) after it merges.
 
 ## Domain Context
