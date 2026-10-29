@@ -1,4 +1,4 @@
-//! Recording settings (stored in app settings, like an OBS profile).
+//! Recording settings (stored in app settings, per user, not in the scene collection).
 
 use estream_core::CanvasId;
 use serde::{Deserialize, Serialize};

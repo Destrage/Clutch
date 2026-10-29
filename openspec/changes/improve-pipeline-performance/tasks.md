@@ -1,5 +1,5 @@
 ## 1. Measure
-- [x] 1.1 Move the matched benchmark (`bench.ps1`, `run-pair.ps1`, `compare.ps1`) into `tools/bench/` with a README; record the 2026-10-25 baseline in it
+- [x] 1.1 Recording benchmark (`bench.ps1`, `run-pair.ps1`, `compare.ps1`) with a README and the 2026-10-25 baseline, kept in the private `clutch-bench` repository
 - [x] 1.2 Per-stage video thread timings (tick, filters, render, convert, submit, deliver) as rolling averages and p95 in the stats panel and `GetStats` log, without allocating on the video thread
 - [ ] 1.3 Take a memory breakdown of the bench scene (VMMap + D3D12 allocations) and note the largest items in this change's design
 
@@ -49,6 +49,6 @@ Measured first (per-thread CPU and a tick profile, your setup, 2026-10-25): the 
 
 ## 8. Verify
 - [ ] 8.1 `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`
-- [ ] 8.2 Matched bench against obs-studio meets the targets in proposal.md; measure the clip buffer's memory with clip mode on
+- [ ] 8.2 The recording benchmark meets the targets in proposal.md; measure the clip buffer's memory with clip mode on
 - [ ] 8.3 Real setup (clip mode + recording + three destinations): 4 encoder sessions, zero dropped frames over 10 minutes
 - [ ] 8.4 Windows 10 test machine (GTX 1650 Ti laptop): GPU path or a clean fallback, no stalls

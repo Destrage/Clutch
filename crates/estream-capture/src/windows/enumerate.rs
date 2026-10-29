@@ -91,7 +91,7 @@ pub struct WindowInfo {
     pub hwnd: HWND,
     pub title: String,
     pub class: String,
-    /// Executable file name, e.g. `obs64.exe`.
+    /// Executable file name, e.g. `chrome.exe`.
     pub exe: String,
     /// The owning process.
     pub pid: u32,

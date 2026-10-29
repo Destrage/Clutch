@@ -292,7 +292,7 @@ pub struct AudioConfig {
     pub monitoring: Monitoring,
     /// Bitmask of output tracks 1–6 (bit 0 = track 1).
     pub tracks: u8,
-    /// Mixed in every scene (like OBS's global audio devices).
+    /// Mixed in every scene (global audio devices).
     pub global: bool,
     pub filters: Vec<AudioFilterDef>,
 }
