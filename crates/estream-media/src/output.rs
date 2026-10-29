@@ -244,7 +244,9 @@ struct Run {
     settings: RecordingSettings,
     encoder_name: &'static str,
     fps: Rational,
-    /// Set while this output asks the engine for GPU frames; cleared to fall back.
+    /// Set while this output asks the engine for GPU frames; cleared to fall back. Only
+    /// Windows has GPU frames, so only it reads this.
+    #[cfg_attr(not(windows), allow(dead_code))]
     gpu_frames: Arc<AtomicBool>,
     video_rx: Receiver<VideoFrame>,
     audio_rx: Receiver<AudioChunk>,

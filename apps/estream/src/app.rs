@@ -10530,7 +10530,9 @@ fn show_picture(
 enum Visibility {
     /// In front, with focus.
     Focused,
-    /// On screen without focus (e.g. a second monitor while a game is played).
+    /// On screen without focus (e.g. a second monitor while a game is played). Only told
+    /// apart on Windows so far.
+    #[cfg_attr(not(windows), allow(dead_code))]
     Background,
     /// Minimized, hidden, or covered by a fullscreen game on its monitor.
     Hidden,
