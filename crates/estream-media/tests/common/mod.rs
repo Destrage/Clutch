@@ -17,6 +17,12 @@ pub fn gpu() -> GpuContext {
         .clone()
 }
 
+/// CI runners are shared VMs whose GPU tests render on the CPU (WARP, lavapipe), so the first
+/// video frame can reach the encoder well after audio starts (GitHub sets `CI`).
+pub fn shared_runner() -> bool {
+    std::env::var_os("CI").is_some()
+}
+
 /// Waits until `rec`'s first file has `frames` encoded frames. The file only exists once the
 /// first frame reaches the encoder, which takes longer on CI runners that render on the CPU, so
 /// a fixed sleep isn't enough there. A failed output panics with its own error.
