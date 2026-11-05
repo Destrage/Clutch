@@ -6,12 +6,15 @@ use estream_audio::devices::MonitorOutput;
 use estream_audio::mixer::MeterSet;
 use estream_audio::{AudioCore, TrackSink};
 use estream_core::frame_clock::{FrameClock, wait_until};
-use estream_core::{EngineClock, Rational, SourceId, SourceStatus, Timestamp};
+use estream_core::{CanvasId, EngineClock, Rational, SourceId, SourceStatus, Timestamp};
 use estream_project::Monitoring;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+
+/// An output's track sink and the canvas whose mix it takes (`None` = the first).
+pub(crate) type CanvasSink = (Option<CanvasId>, Box<dyn TrackSink>);
 
 /// Callbacks from the audio thread to the engine's shared state.
 pub(crate) trait AudioHost: Send + Sync + 'static {
@@ -29,7 +32,7 @@ pub(crate) fn run(
     mut core: AudioCore,
     clock: EngineClock,
     host: Arc<dyn AudioHost>,
-    new_sinks: Receiver<Box<dyn TrackSink>>,
+    new_sinks: Receiver<CanvasSink>,
 ) {
     let mut frames = FrameClock::new(Rational::fps(100), clock.now());
     let mut revision = u64::MAX;
@@ -37,8 +40,8 @@ pub(crate) fn run(
     let mut last_statuses = HashMap::new();
     let mut statuses_checked = Instant::now();
     while !host.shutdown_requested().load(Ordering::Acquire) {
-        while let Ok(sink) = new_sinks.try_recv() {
-            core.add_sink(sink);
+        while let Ok((canvas, sink)) = new_sinks.try_recv() {
+            core.add_sink(canvas, sink);
         }
         let graph = host.graph();
         let changed = graph.revision != revision;

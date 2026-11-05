@@ -387,7 +387,8 @@ fn install_script(file: &Path, exe: &Path, pid: u32, restart: bool) -> String {
 /// What the last install after exit wrote (see [`install_after_exit`]).
 const INSTALL_LOG: &str = "install.log";
 
-/// Copies the last install's outcome into the log once, then removes it.
+/// Copies the last install's outcome into the log once, then removes it, and deletes
+/// downloads that are no longer needed (see [`clean_downloads`]).
 pub fn report_last_install(dir: &Path) {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
@@ -396,7 +397,49 @@ pub fn report_last_install(dir: &Path) {
             tracing::info!(result = text.trim(), "last update install");
             let _ = std::fs::remove_file(&path);
         }
+        let (count, bytes) = clean_downloads(dir, &current());
+        if count > 0 {
+            tracing::info!(
+                count,
+                mb = bytes / (1024 * 1024),
+                "old update downloads removed"
+            );
+        }
     });
+}
+
+/// Deletes update downloads for `running` or older versions (Windows keeps its own copy of an
+/// installed package) and unfinished `.part` downloads (nothing downloads at startup). Keeps
+/// a newer download that hasn't been installed yet. Returns how many files and bytes went.
+fn clean_downloads(dir: &Path, running: &Version) -> (usize, u64) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return (0, 0);
+    };
+    let (mut count, mut bytes) = (0, 0);
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let stale =
+            name.ends_with(".part") || download_version(name).is_some_and(|v| v <= *running);
+        if stale && entry.file_type().is_ok_and(|t| t.is_file()) {
+            let size = entry.metadata().map_or(0, |m| m.len());
+            if std::fs::remove_file(&path).is_ok() {
+                count += 1;
+                bytes += size;
+            }
+        }
+    }
+    (count, bytes)
+}
+
+/// The version in a download's name: `Clutch-0.4.0-beta.2-x64.msi`,
+/// `Clutch-0.7.0-x86_64.AppImage`.
+fn download_version(name: &str) -> Option<Version> {
+    let stem = Path::new(name).file_stem()?.to_str()?;
+    let (version, _arch) = stem.strip_prefix("Clutch-")?.rsplit_once('-')?;
+    Version::parse(version)
 }
 
 /// Replaces the running AppImage with `file` (the running copy keeps working), then starts the
@@ -479,6 +522,32 @@ mod tests {
                 .unwrap();
             assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "0", "{script}");
         }
+    }
+
+    #[test]
+    fn old_downloads_are_removed_and_a_newer_one_is_kept() {
+        let dir = std::env::temp_dir().join(format!("clutch-updates-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let names = [
+            "Clutch-0.4.0-beta.2-x64.msi",
+            "Clutch-0.7.0-x64.msi",
+            "Clutch-0.7.0-x86_64.AppImage",
+            "Clutch-0.8.0-x64.msi",
+            "Clutch-0.8.0-x64.msi.part",
+            "notes.txt",
+        ];
+        for n in names {
+            std::fs::write(dir.join(n), b"x").unwrap();
+        }
+        let (count, bytes) = clean_downloads(&dir, &v("0.7.0"));
+        let mut left: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!((count, bytes), (4, 4));
+        assert_eq!(left, ["Clutch-0.8.0-x64.msi", "notes.txt"]);
     }
 
     #[test]

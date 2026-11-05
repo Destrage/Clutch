@@ -40,8 +40,8 @@ with YouTube on 1440p.
   canvas that switches together to its scene of the same name, so all streams change at once.
 - **Studio mode in the Live deck.** The deck header gets a "Studio mode" switch. With it on,
   the deck shows Preview and Program side by side, the scene buttons pick the Preview, and
-  large Transition and Cut buttons send it to program. With more than one canvas live, a
-  canvas picker in the deck chooses which canvas the deck shows.
+  large Transition and Cut buttons send it to program. With more than one canvas, a canvas
+  picker in the deck header chooses which canvas the deck shows (live ones are marked).
 - **Sound captured twice gets a warning.** The mixer marks a strip when its sound reaches the
   same mix twice:
   - two Application audio sources capture the same app;
@@ -54,6 +54,10 @@ with YouTube on 1440p.
   in the Go live window gets its own canvas choice, saved to that destination. The "all
   destinations" choice stays as a shortcut that sets every row.
 
+- **Old update downloads are deleted.** At startup Clutch removes downloaded installers for
+  the running or an older version and unfinished downloads. One user's updates folder held
+  0.88 GB of old installers.
+
 ## Impact
 - Affected specs: multi-canvas, studio-mode, video-sources.
 - Affected code: `crates/estream-project/src/model.rs` (canvas follow flag),
@@ -63,7 +67,8 @@ with YouTube on 1440p.
   (mixer strips, studio across canvases, deck studio mode, tab menu toggle),
   `apps/estream/src/golive.rs` and `apps/estream/ui/golive.slint` (per-destination canvas),
   `apps/estream/ui/deck.slint`, `apps/estream/ui/panels.slint`,
-  `crates/estream-capture/src/windows/app_audio.rs` (which processes Desktop Audio carries).
+  `crates/estream-capture/src/windows/app_audio.rs` (which processes Desktop Audio carries),
+  `apps/estream/src/update.rs` (download cleanup).
 - Real-time rules: canvas buses are allocated in `sync`, never in `process`. A source on N
   canvases costs N block additions per track, not N reads.
 - Saved projects gain one field with a default (`follow_scenes: true`); nothing is migrated.

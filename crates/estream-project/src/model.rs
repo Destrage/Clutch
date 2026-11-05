@@ -32,6 +32,9 @@ pub struct Canvas {
     pub background: Rgba8,
     #[serde(default)]
     pub active_scene: Option<SceneId>,
+    /// Switches to its same-named scene when another following canvas switches scenes.
+    #[serde(default = "yes")]
+    pub follow_scenes: bool,
 }
 
 fn default_background() -> Rgba8 {
@@ -48,6 +51,7 @@ impl Canvas {
             fps,
             background: Rgba8::BLACK,
             active_scene: None,
+            follow_scenes: true,
         }
     }
 }

@@ -85,6 +85,8 @@ pub struct CanvasPatch {
     pub fps: Option<Rational>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background: Option<Rgba8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub follow_scenes: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -357,6 +359,9 @@ impl Command {
                 }
                 if let Some(v) = patch.background {
                     old.background = Some(std::mem::replace(&mut c.background, v));
+                }
+                if let Some(v) = patch.follow_scenes {
+                    old.follow_scenes = Some(std::mem::replace(&mut c.follow_scenes, v));
                 }
                 Ok(applied(
                     UpdateCanvas { canvas, patch: old },

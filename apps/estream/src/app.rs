@@ -8,9 +8,9 @@ use crate::settings::{
     GameAudio, InspectorState, PanelLayout, Paths, Settings, ThemeMode, WindowState,
 };
 use crate::ui::{
-    AppWindow, AudioInspect, CanvasBox, CanvasTab, DestinationRow, FilterParamRow, FilterRow,
-    Guide, Inspect, InspectorFolds, LayerRow, LiveRow, MediaInspect, MixerStrip, PaletteEntry,
-    Platform, Preset, PropRow, SceneRow, SettingsForm, SetupLine, SourceType, Theme,
+    AppWindow, AudioInspect, CanvasBox, CanvasTab, DestCanvas, DestinationRow, FilterParamRow,
+    FilterRow, Guide, Inspect, InspectorFolds, LayerRow, LiveRow, MediaInspect, MixerStrip,
+    PaletteEntry, Platform, Preset, PropRow, SceneRow, SettingsForm, SetupLine, SourceType, Theme,
     VideoFilterRow,
 };
 use estream_core::{BlendMode, BoundsMode, CanvasId, ItemId, Rgba8, SceneId, SourceId};
@@ -80,6 +80,9 @@ pub struct App {
     live_active_model: Rc<VecModel<LiveRow>>,
     meter_holds: HashMap<SourceId, [(f32, Instant); 2]>,
     mixer_at: Instant,
+    /// Programs Desktop Audio carries twice (left out, also carried), checked once a second.
+    audio_doubles: Option<(String, Vec<String>)>,
+    audio_doubles_at: Instant,
     hover: Option<ItemId>,
     drag: Option<Drag>,
     /// Interactive browser sources: the page the left button went down on (and its item),
@@ -489,6 +492,38 @@ fn set_voice_preset(filters: &mut Vec<AudioFilterDef>, index: usize) {
 /// Shown on monitored sounds while Desktop Audio can't leave out Clutch's own playback.
 const DOUBLE_AUDIO: &str = "Desktop Audio sends this to the stream a second time while it leaves out the game's sound. Turn off Hear on my speakers, or mute Desktop Audio.";
 
+/// Programs Desktop Audio carries although another source captures them too (see
+/// `desktop_audio_doubles` in the capture crate).
+fn desktop_audio_doubles() -> Option<(String, Vec<String>)> {
+    #[cfg(windows)]
+    {
+        estream_capture::windows::capture_audio::desktop_audio_doubles()
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+/// "Discord" for "Discord.exe".
+fn program_name(exe: &str) -> &str {
+    exe.strip_suffix(".exe")
+        .or_else(|| exe.strip_suffix(".EXE"))
+        .unwrap_or(exe)
+}
+
+/// Shown on Desktop Audio while it also carries programs other sources capture.
+fn desktop_doubles_text(left_out: &str, also: &[String]) -> String {
+    let also: Vec<&str> = also.iter().map(|e| program_name(e)).collect();
+    format!(
+        "Desktop Audio also sends {}, which another source already captures, so it's heard twice. \
+         Windows lets Desktop Audio leave out one program, and it leaves out {}. Mute Desktop \
+         Audio, or remove the other source.",
+        also.join(" and "),
+        program_name(left_out),
+    )
+}
+
 /// Whether Desktop Audio is leaving out a game or app, so it also captures Clutch's own playback.
 fn desktop_audio_busy_leaving_out() -> bool {
     #[cfg(windows)]
@@ -762,6 +797,8 @@ impl App {
             live_active_model: Rc::new(VecModel::default()),
             meter_holds: HashMap::new(),
             mixer_at: Instant::now(),
+            audio_doubles: None,
+            audio_doubles_at: Instant::now(),
             hover: None,
             drag: None,
             web_press: None,
@@ -3874,6 +3911,7 @@ impl App {
                     outputs: outputs.into(),
                     live,
                     feeds_all: self.feeds_all(snapshot, c.id),
+                    follows: c.follow_scenes,
                 }
             })
             .collect();
@@ -3903,12 +3941,13 @@ impl App {
                 .all(|d| on(d.stream.canvas))
     }
 
-    /// A canvas tab's menu: "outputs", "duplicate" (`preset` < 0 keeps the size), "rename"
-    /// or "remove".
+    /// A canvas tab's menu: "outputs", "follow" (switch scenes with other canvases),
+    /// "duplicate" (`preset` < 0 keeps the size), "rename" or "remove".
     pub fn canvas_menu(&mut self, id: &str, action: &str, preset: i32) {
         match action {
             "outputs" => self.canvas_use_for_outputs(id),
             "duplicate" => self.canvas_duplicate(id, usize::try_from(preset).ok()),
+            "follow" => self.canvas_toggle_follow(id),
             "rename" => {
                 if let Some(w) = self.window() {
                     w.set_renaming_canvas(id.into());
@@ -3916,6 +3955,32 @@ impl App {
             }
             "remove" => self.canvas_remove(id),
             _ => {}
+        }
+    }
+
+    /// Turns "Switch scenes with other canvases" on or off for a canvas (undoable).
+    fn canvas_toggle_follow(&mut self, id: &str) {
+        let Some(engine) = &self.engine else { return };
+        let snapshot = engine.snapshot();
+        let Some(canvas) = parse_id(id).map(CanvasId).and_then(|c| snapshot.canvas(c)) else {
+            return;
+        };
+        let (cid, name, follow) = (canvas.id, canvas.name.clone(), !canvas.follow_scenes);
+        if self.exec(Command::UpdateCanvas {
+            canvas: cid,
+            patch: estream_engine::CanvasPatch {
+                follow_scenes: Some(follow),
+                ..Default::default()
+            },
+        }) {
+            self.toast(
+                if follow {
+                    format!("“{name}” switches to the same-named scene with the other canvases")
+                } else {
+                    format!("“{name}” switches scenes on its own")
+                },
+                false,
+            );
         }
     }
 
@@ -4656,12 +4721,55 @@ impl App {
         w.set_details_canvas(self.streamed_canvas().map_or(-1, |c| {
             ids.iter().position(|id| *id == c).map_or(-1, |i| i as i32)
         }));
+        let rows: Vec<DestCanvas> = match self.engine.as_ref() {
+            Some(engine) if ids.len() > 1 => {
+                let snapshot = engine.snapshot();
+                self.settings
+                    .destinations
+                    .iter()
+                    .filter(|d| d.enabled)
+                    .map(|d| DestCanvas {
+                        name: d.name.clone().into(),
+                        canvas: Self::resolve_canvas(&snapshot, d.stream.canvas)
+                            .and_then(|c| ids.iter().position(|id| *id == c))
+                            .map_or(-1, |i| i as i32),
+                    })
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
+        w.set_details_dest_canvases(ModelRc::new(VecModel::from(rows)));
         w.set_details_canvases(ModelRc::new(VecModel::from(if ids.len() > 1 {
             names
         } else {
             Vec::new()
         })));
         w.set_details_open(true);
+    }
+
+    /// The Go live window's per-destination canvas: enabled destination `row` streams canvas
+    /// `index`.
+    pub fn details_dest_canvas(&mut self, row: i32, index: i32) {
+        let (ids, _) = self.canvas_choices();
+        let Some(id) = usize::try_from(index)
+            .ok()
+            .and_then(|i| ids.get(i).copied())
+        else {
+            return;
+        };
+        let Some(d) = usize::try_from(row).ok().and_then(|r| {
+            self.settings
+                .destinations
+                .iter_mut()
+                .filter(|d| d.enabled)
+                .nth(r)
+        }) else {
+            return;
+        };
+        d.stream.canvas = Some(id);
+        self.settings.save(&self.paths.settings());
+        self.show_details();
+        self.refresh();
     }
 
     /// The canvas the enabled destinations stream, when they all stream the same one.
@@ -8974,6 +9082,13 @@ impl App {
         let snapshot = engine.snapshot();
         let infos = engine.source_infos();
         let current = self.current_source(&snapshot);
+        // The mixer shows the edited canvas's mix: what its streams and recordings carry.
+        let canvas = self.canvas_of(&snapshot).map(|c| c.id);
+        let heard = |id: SourceId| canvas.is_none_or(|c| meters.heard_on(id, c));
+        if self.audio_doubles_at.elapsed() >= Duration::from_secs(1) {
+            self.audio_doubles_at = Instant::now();
+            self.audio_doubles = desktop_audio_doubles();
+        }
         let now = Instant::now();
         let holds = &mut self.meter_holds;
         let mut strip = |id: SourceId, reading: estream_engine::audio_engine::MeterReading| {
@@ -9007,9 +9122,26 @@ impl App {
                     .source(*id)
                     .is_some_and(|d| d.kind == "audio_output" && !d.audio.muted)
             });
+        // Application audio sources on the same program in this mix.
+        let app_of = |id: SourceId| {
+            snapshot
+                .source(id)
+                .filter(|d| d.kind == "app_audio" && !d.audio.muted)
+                .and_then(|d| d.settings.get("app")?.as_str())
+                .filter(|a| !a.is_empty())
+                .map(str::to_ascii_lowercase)
+        };
+        let apps: Vec<String> = meters
+            .sources
+            .iter()
+            .filter(|(id, _)| heard(*id))
+            .filter_map(|(id, _)| app_of(*id))
+            .collect();
+        let doubles = self.audio_doubles.clone();
         let strips: Vec<MixerStrip> = meters
             .sources
             .iter()
+            .filter(|(id, _)| heard(*id))
             .filter_map(|(id, meter)| {
                 let def = snapshot.source(*id)?;
                 // A capture with "Capture audio" off has no fader.
@@ -9034,10 +9166,30 @@ impl App {
                 if s.problem.is_empty() && s.monitoring && echo && def.kind != "audio_output" {
                     s.problem = DOUBLE_AUDIO.into();
                 }
+                if s.problem.is_empty()
+                    && let Some(app) = app_of(*id)
+                    && apps.iter().filter(|a| **a == app).count() > 1
+                {
+                    let shown = def.settings["app"].as_str().unwrap_or_default();
+                    s.problem = format!(
+                        "Another Application audio source also captures {}, so it's heard \
+                         twice. Remove one, or use the same source in every scene.",
+                        program_name(shown)
+                    )
+                    .into();
+                }
+                if s.problem.is_empty()
+                    && def.kind == "audio_output"
+                    && !def.audio.muted
+                    && let Some((left_out, also)) = &doubles
+                {
+                    s.problem = desktop_doubles_text(left_out, also).into();
+                }
                 Some(s)
             })
             .collect();
-        let mut master = strip(SourceId(uuid::Uuid::nil()), meters.master.read());
+        let master_meter = canvas.map_or(&meters.master, |c| meters.master_of(c));
+        let mut master = strip(SourceId(uuid::Uuid::nil()), master_meter.read());
         master.name = "Master (track 1)".into();
         w.set_mixer_master(master);
         sync_model(&self.mixer_model, strips);
@@ -10972,6 +11124,8 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     on!(on_details_skip, |a, i| a.details_skip(i));
     on!(on_details_set_ask, |a, v| a.details_set_ask(v));
     on!(on_details_canvas_picked, |a, i| a.details_canvas(i));
+    on!(on_details_dest_canvas_picked, |a, d, c| a
+        .details_dest_canvas(d, c));
     on!(on_details_go, |a| a.details_go());
     on!(on_details_closed, |a| a.details_closed());
     on!(on_recovery_restore, |a| a.recovery(true));

@@ -139,10 +139,14 @@ impl Session {
                 Arc::new(AtomicBool::new(false)),
             )
         };
-        engine.add_track_sink(Box::new(ChannelSink {
-            tx: audio_tx,
-            closed: sink_closed.clone(),
-        }));
+        // The mix of this output's canvas: only what that canvas shows.
+        engine.add_track_sink(
+            canvas.id,
+            Box::new(ChannelSink {
+                tx: audio_tx,
+                closed: sink_closed.clone(),
+            }),
+        );
         let dropped_base = engine
             .canvas_output(canvas.id)
             .map_or(0, |o| o.stats.encoder_dropped.load(Ordering::Relaxed));

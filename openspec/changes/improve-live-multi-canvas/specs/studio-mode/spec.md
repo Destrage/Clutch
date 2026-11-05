@@ -24,8 +24,8 @@ canvas that switches scenes together with it to its scene of the same name.
 ### Requirement: Studio Mode While Live
 The Live deck SHALL have a studio mode switch. With studio mode on, the deck SHALL show the
 Preview and the Program side by side, its scene buttons SHALL pick the Preview, and it SHALL
-offer Transition and Cut. With more than one canvas live, the deck SHALL let the user choose
-which canvas it shows.
+offer Transition and Cut. With more than one canvas, the deck SHALL let the user choose which
+canvas it shows, marking the canvases that are live.
 
 #### Scenario: Prepare a scene during a stream
 - **WHEN** the user is live, turns on studio mode in the Live deck and taps "Be right back"
