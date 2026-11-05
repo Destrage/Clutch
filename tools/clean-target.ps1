@@ -16,15 +16,20 @@
   Keep anything written in the last this-many days. Default 7. Some crates have two live
   builds (e.g. with and without build-script features); a short window rebuilds those more often.
 
+.PARAMETER Incremental
+  Also remove every incremental cache, however new. They only speed up rebuilds of the
+  workspace crates and grow by gigabytes a day; the next build of each crate is a full one.
+
 .PARAMETER WhatIf
   List what would go without deleting.
 
 .EXAMPLE
   pwsh tools\clean-target.ps1
   pwsh tools\clean-target.ps1 -Days 3 -WhatIf
+  pwsh tools\clean-target.ps1 -Incremental
 #>
 [CmdletBinding(SupportsShouldProcess)]
-param([int]$Days = 7)
+param([int]$Days = 7, [switch]$Incremental)
 
 $ErrorActionPreference = 'Stop'
 $target = Join-Path $PSScriptRoot '..\target' | Resolve-Path -ErrorAction SilentlyContinue
@@ -63,7 +68,7 @@ foreach ($profile in 'debug', 'release') {
     $inc = Join-Path $target "$profile\incremental"
     if (Test-Path $inc) {
         Get-ChildItem $inc -Directory |
-            Where-Object { $_.LastWriteTime -lt $cutoff } |
+            Where-Object { $Incremental -or $_.LastWriteTime -lt $cutoff } |
             ForEach-Object { Remove-Stale $_ }
     }
 }
