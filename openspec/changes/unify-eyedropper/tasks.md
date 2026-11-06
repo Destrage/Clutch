@@ -15,5 +15,5 @@
 ## 3. Check
 - [x] 3.1 Test for telling a click on the button from a drag; clippy and the app tests. The hooks
       only see real input, so picking itself is checked by hand (3.2)
-- [ ] 3.2 By hand on Windows: pick from the Preview, from another app, from another monitor;
-      Esc and right click cancel; the other app doesn't get the click
+- [x] 3.2 By hand on Windows (verified by the user): pick from the Preview, from another app,
+      from another monitor; Esc and right click cancel; the other app doesn't get the click
