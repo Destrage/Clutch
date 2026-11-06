@@ -55,9 +55,10 @@ behind the source. Frosted SHALL show a blurred, darkened copy of the same sourc
 to cover the box, without capturing the source a second time.
 
 #### Scenario: Game on a vertical canvas
-- **WHEN** the user adds a Game capture of a 1920 × 1080 game to a 1080 × 1920 canvas
-- **THEN** the game is shown fitted in the middle, and the areas above and below it show a
-  blurred copy of the game that moves with it
+- **WHEN** the user sets the fill of a 1920 × 1080 Game capture fitted in a 1080 × 1920 canvas
+  to Frosted
+- **THEN** the game stays fitted in the middle, and the areas above and below it show a blurred
+  copy of the game that moves with it
 
 #### Scenario: Solid fill
 - **WHEN** the user sets the item's fill to Color and picks dark grey
@@ -68,12 +69,12 @@ to cover the box, without capturing the source a second time.
 - **THEN** its source is captured once, and the blur is computed at reduced resolution
 
 ### Requirement: Default Fill
-New Game, Window and Display capture and camera items SHALL start with Frosted fill. All other
-new items, and every item in a project saved by an earlier version, SHALL start with None.
+Every new item, and every item in a project saved by an earlier version, SHALL start with None
+fill, so the space around a fitted source shows the canvas background.
 
-#### Scenario: New camera item
-- **WHEN** the user adds a camera to a vertical canvas
-- **THEN** its fill is Frosted
+#### Scenario: New game capture
+- **WHEN** the user adds a Game capture of a 16:9 game to a vertical canvas
+- **THEN** its fill is None and the areas above and below the game show the canvas background
 
 #### Scenario: Existing project
 - **WHEN** the user opens a scene collection saved by an earlier version

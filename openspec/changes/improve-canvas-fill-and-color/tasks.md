@@ -60,8 +60,8 @@
 - [ ] 5.4 Color and Gradient fill using the paint textures from 3.2
 - [ ] 5.5 Layout tab: "Fill empty space" panel (Frosted with Blur, Dim and Saturation sliders;
       Color; Gradient; None), shown when the bounds mode is Fit
-- [ ] 5.6 Default Frosted for new Game, Window and Display capture and camera items; existing
-      projects unchanged (test loading an old collection)
+- [ ] 5.6 Every item starts with None; existing projects unchanged (test loading an old
+      collection)
 - [ ] 5.7 Golden-image test: 16:9 source fitted in a 9:16 canvas with Frosted, Color and None
 - [ ] 5.8 Benchmark: Frosted on a 1080 × 1920 at 60 fps canvas adds well under 0.5 ms GPU time
 

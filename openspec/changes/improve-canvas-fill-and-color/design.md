@@ -49,10 +49,9 @@ pub enum ItemFill {
   The small textures are allocated when the fill is set or the bounds change, never per frame.
   At 1080 × 1920 the blur runs on about 135 × 240 pixels, a tiny fraction of the frame.
 - **Paint** fills the bounds box with a solid or gradient texture rendered as above.
-- Defaults: a new Game, Window or Display capture or camera item (these are fitted to the
-  canvas when added) starts with `Frosted { blur: 0.6, dim: 0.25, saturation: 0.9 }`.
-  Media files, images, text, browser sources and existing items start with `None`, so
-  updating Clutch never changes how a saved scene looks.
+- Defaults: every item, new or existing, starts with `None`, so the empty space shows the
+  canvas background (black unless changed) and updating Clutch never changes how a saved scene
+  looks. Choosing Frosted starts from `Frosted { blur: 0.6, dim: 0.25, saturation: 0.9 }`.
 - Copy to canvas and Duplicate canvas copy `fill` with the item.
 
 ## Canvas background and settings

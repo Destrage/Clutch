@@ -37,9 +37,8 @@ A user setting up a vertical stream ran into five gaps:
 - **Fill around fitted items.** A scene item that fits its source inside its bounds gets a
   "Fill empty space" setting in the Layout tab: Frosted (a blurred, enlarged and slightly
   darkened copy of the same source), Color, Gradient, or None. It fills the item's bounds box
-  behind the source and needs no second capture. New Game, Window and Display capture and
-  camera items, which are fitted to the canvas when added, start with Frosted. Existing items
-  keep None.
+  behind the source and needs no second capture. Every item starts with None, so the space
+  stays black until the user picks a fill.
 - **Canvas background.** Each canvas's background becomes editable: a solid color or a gradient.
 - **Canvas settings.** The canvas tab menu gets "Canvas settings…": name, size (presets or a
   custom width × height), frame rate and background. Size and frame rate are locked while a
