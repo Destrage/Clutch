@@ -28,7 +28,8 @@ export global ColorPicking {
     callback request(string, color, length, length);
     callback changed(color);
     callback closed();
-    callback pick-screen();
+    /// The eyedropper button (starts picking, or cancels it).
+    callback eyedropper();
     /// A Preview click while picking, as a fraction of the canvas (0..1 each way).
     callback preview-picked(float, float);
     pure callback hex(color) -> string;
@@ -299,48 +300,38 @@ export component ColorPickerPanel inherits Rectangle {
                     }
                 }
             }
-            IconButton {
-                icon: Icons.pipette;
-                tooltip: "Pick a color from the Preview";
-                toggled: ColorPicking.from-preview;
-                clicked => { ColorPicking.from-preview = !ColorPicking.from-preview; }
-            }
-            // Press here and drag anywhere on screen; the color under the pointer is taken on
-            // release. The window keeps the mouse while the button is held, so nothing
-            // underneath is clicked.
-            if ColorPicking.screen: Rectangle {
+            // The eyedropper: click it, then click anywhere (or press it and drag, then let
+            // go over a color). Starts on press so the drag works; clicking it again cancels.
+            Rectangle {
                 width: 28px;
                 height: 28px;
                 border-radius: Theme.radius-s;
-                background: screen-ta.pressed ? Theme.accent-soft : screen-ta.has-hover ? Theme.hover : transparent;
+                background: ColorPicking.from-preview ? Theme.accent-soft : drop-ta.has-hover ? Theme.hover : transparent;
                 accessible-role: button;
-                accessible-label: "Pick a color from the screen: drag from here";
+                accessible-label: ColorPicking.screen ? "Pick a color from anywhere on screen" : "Pick a color from the Preview";
+                accessible-action-default => { ColorPicking.eyedropper(); }
                 Image {
                     x: (parent.width - 16px) / 2;
                     y: (parent.height - 16px) / 2;
                     width: 16px;
                     height: 16px;
-                    source: Icons.monitor;
-                    colorize: screen-ta.pressed ? Theme.accent : Theme.text-muted;
+                    source: Icons.pipette;
+                    colorize: ColorPicking.from-preview ? Theme.accent : Theme.text-muted;
                 }
-                screen-ta := TouchArea {
+                drop-ta := TouchArea {
                     mouse-cursor: MouseCursor.crosshair;
                     pointer-event(e) => {
                         if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
-                            ColorPicking.pick-screen();
+                            ColorPicking.eyedropper();
                         }
                     }
                 }
             }
         }
-        if ColorPicking.screen && !ColorPicking.from-preview: Text {
-            text: "Pipette: click the Preview. Screen: drag from the screen button and let go over any color.";
-            color: Theme.text-faint;
-            font-size: Theme.font-xs;
-            wrap: word-wrap;
-        }
         if ColorPicking.from-preview: Text {
-            text: "Click the Preview to pick its color. Esc cancels.";
+            text: ColorPicking.screen
+                ? "Click anywhere to pick a color. Esc or a right click cancels."
+                : "Click the Preview to pick its color. Esc cancels.";
             color: Theme.accent;
             font-size: Theme.font-xs;
             wrap: word-wrap;
