@@ -745,10 +745,14 @@ mod audio {
         );
         let blocks = Arc::new(AtomicU64::new(0));
         let last_peak = Arc::new(Mutex::new(0.0));
-        engine.add_track_sink(Box::new(Probe {
-            blocks: blocks.clone(),
-            last_peak: last_peak.clone(),
-        }));
+        let canvas = engine.snapshot().canvases[0].id;
+        engine.add_track_sink(
+            canvas,
+            Box::new(Probe {
+                blocks: blocks.clone(),
+                last_peak: last_peak.clone(),
+            }),
+        );
         (engine, source, blocks, last_peak)
     }
 

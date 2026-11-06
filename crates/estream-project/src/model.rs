@@ -37,6 +37,9 @@ pub struct Canvas {
     pub background_paint: Option<estream_core::Paint>,
     #[serde(default)]
     pub active_scene: Option<SceneId>,
+    /// Switches to its same-named scene when another following canvas switches scenes.
+    #[serde(default = "yes")]
+    pub follow_scenes: bool,
 }
 
 fn default_background() -> Rgba8 {
@@ -54,6 +57,7 @@ impl Canvas {
             background: Rgba8::BLACK,
             background_paint: None,
             active_scene: None,
+            follow_scenes: true,
         }
     }
 }

@@ -294,6 +294,35 @@ fn plain_scene_change_cuts_a_running_transition() {
 }
 
 #[test]
+fn a_copied_canvas_switches_with_its_original_in_one_undo_step() {
+    let (mut project, a, b) = red_and_blue();
+    let main = project.canvases[0].id;
+    let mut copy = estream_project::Canvas::new("Copy", W * 2, H * 2, Rational::fps(30));
+    let copy_a = Scene::new(project.scene(a).unwrap().name.clone(), copy.id);
+    let copy_b = Scene::new("B", copy.id);
+    copy.active_scene = Some(copy_a.id);
+    let (cid, ca, cb) = (copy.id, copy_a.id, copy_b.id);
+    project.canvases.push(copy);
+    project.scenes.extend([copy_a, copy_b]);
+    let engine = engine_with(project);
+
+    let fade = Transition {
+        kind: TransitionKind::Fade,
+        duration_ms: 5_000,
+    };
+    engine.transition_to(main, b, Some(fade)).unwrap();
+    let snap = engine.snapshot();
+    assert_eq!(snap.canvas(main).unwrap().active_scene, Some(b));
+    assert_eq!(snap.canvas(cid).unwrap().active_scene, Some(cb));
+    assert!(engine.is_transitioning(main) && engine.is_transitioning(cid));
+
+    engine.undo().unwrap();
+    let snap = engine.snapshot();
+    assert_eq!(snap.canvas(main).unwrap().active_scene, Some(a));
+    assert_eq!(snap.canvas(cid).unwrap().active_scene, Some(ca));
+}
+
+#[test]
 fn cut_transition_is_instant_and_preview_follows_requests() {
     let (project, _a, b) = red_and_blue();
     let canvas = project.canvases[0].id;

@@ -19,7 +19,7 @@ import { LiveDeck } from "deck.slint";
 import { Sidebar } from "sidebar.slint";
 import { SceneStrip } from "stage.slint";
 import { ChatPanel, ChatTabRow, ChatLive, ChatLine, ChatStateRow, SignInDialog } from "chat.slint";
-import { GoLiveDialog, StreamDetailsDialog, DetailsSection } from "golive.slint";
+import { GoLiveDialog, StreamDetailsDialog, DetailsSection, DestCanvas } from "golive.slint";
 import { ColorPicking, ColorPickerPanel } from "color.slint";
 
 export { Theme, Platform, ColorPicking }
@@ -280,6 +280,8 @@ export component AppWindow inherits Window {
     in property <[string]> details-canvases;
     in property <int> details-canvas: -1;
     callback details-canvas-picked(int);
+    in property <[DestCanvas]> details-dest-canvases;
+    callback details-dest-canvas-picked(int, int);
     callback details-text(int, string, string);
     callback details-flag(int, string, bool);
     callback details-choose(int, string, int);
@@ -735,6 +737,13 @@ export component AppWindow inherits Window {
             toggle-record => { root.action("record.toggle"); main-keys.focus(); }
             end-stream => { root.action("stream.toggle"); main-keys.focus(); }
             edit-layout => { root.deck-edit = true; main-keys.focus(); }
+            studio-mode: root.studio-mode;
+            preview: root.preview-frame;
+            transition-label: root.transition-label;
+            toggle-studio => { root.action("studio.toggle"); main-keys.focus(); }
+            go(mode) => { root.studio-go(mode); main-keys.focus(); }
+            canvas-tabs: root.canvas-tabs;
+            canvas-select(id) => { root.canvas-select(id); main-keys.focus(); }
             folds <=> root.inspector-folds;
             audio: root.audio-inspect;
             open-sound(id) => { root.mixer-select(id); main-keys.focus(); }
@@ -954,6 +963,8 @@ export component AppWindow inherits Window {
         canvases: root.details-canvases;
         canvas: root.details-canvas;
         pick-canvas(i) => { root.details-canvas-picked(i); }
+        dest-canvases: root.details-dest-canvases;
+        pick-dest-canvas(d, c) => { root.details-dest-canvas-picked(d, c); }
         text(i, field, value) => { root.details-text(i, field, value); }
         flag(i, field, value) => { root.details-flag(i, field, value); }
         choose(i, field, value) => { root.details-choose(i, field, value); }

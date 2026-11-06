@@ -131,7 +131,7 @@ impl RenderGraph {
                     .map(|t| {
                         let overlay = stinger_source(canvas.id, t).map(|(def, point)| {
                             let id = def.id;
-                            helpers.push(def);
+                            helpers.push((def, canvas.id));
                             (id, point)
                         });
                         TransitionGraph {
@@ -159,19 +159,23 @@ impl RenderGraph {
             })
             .collect();
         let mut audio = audio_graph(project, view, now);
-        audio.nodes.extend(helpers.iter().map(|s| AudioNode {
-            source: s.id,
-            kind: s.kind.clone(),
-            settings: runtime_settings(s),
-            config: s.audio.clone(),
-        }));
+        // A stinger is heard on its own canvas only.
+        audio
+            .nodes
+            .extend(helpers.iter().map(|(s, canvas)| AudioNode {
+                source: s.id,
+                kind: s.kind.clone(),
+                settings: runtime_settings(s),
+                config: s.audio.clone(),
+                canvases: vec![*canvas],
+            }));
         Self {
             revision,
             canvases,
             sources: project
                 .sources
                 .iter()
-                .chain(&helpers)
+                .chain(helpers.iter().map(|(s, _)| s))
                 .map(|s| SourceDef {
                     settings: runtime_settings(s),
                     ..s.clone()
@@ -180,6 +184,45 @@ impl RenderGraph {
             audio,
         }
     }
+}
+
+/// The program changes a switch of `canvas` to `scene` makes: that canvas (unless it already
+/// shows the scene), then, if it follows scene switches, every other following canvas with a
+/// scene of the same name that it isn't showing yet.
+pub fn scene_switch_targets(
+    project: &Project,
+    canvas: CanvasId,
+    scene: SceneId,
+) -> Vec<(CanvasId, SceneId)> {
+    let Some(c) = project.canvas(canvas) else {
+        return Vec::new();
+    };
+    let mut targets = Vec::new();
+    if c.active_scene != Some(scene) {
+        targets.push((canvas, scene));
+    }
+    let Some(name) = project
+        .scene(scene)
+        .filter(|s| s.canvas == canvas)
+        .map(|s| s.name.as_str())
+    else {
+        return targets;
+    };
+    if !c.follow_scenes {
+        return targets;
+    }
+    for other in project
+        .canvases
+        .iter()
+        .filter(|o| o.id != canvas && o.follow_scenes)
+    {
+        if let Some(s) = project.scenes_of(other.id).find(|s| s.name == name)
+            && other.active_scene != Some(s.id)
+        {
+            targets.push((other.id, s.id));
+        }
+    }
+    targets
 }
 
 /// The helper media source playing a stinger, and the switch point (ns after the start).
@@ -200,15 +243,17 @@ fn stinger_source(canvas: CanvasId, t: &ActiveTransition) -> Option<(SourceDef, 
     Some((def, *point_ms as u64 * 1_000_000))
 }
 
-/// Global audio sources, then sources visible in the first canvas's active scene (and in the
-/// scene being left while a transition runs).
+/// Global audio sources (heard on every canvas), then the sources visible in each canvas's
+/// active scene (and in the scene being left while a transition runs), each listed once with
+/// the canvases whose mix it belongs to.
 fn audio_graph(project: &Project, view: &ViewState, now: Timestamp) -> AudioGraph {
-    let mut ids: Vec<SourceId> = project
+    let mut heard: Vec<(SourceId, Vec<CanvasId>)> = project
         .sources
         .iter()
         .filter(|s| s.audio.global)
-        .map(|s| s.id)
+        .map(|s| (s.id, Vec::new()))
         .collect();
+    let globals = heard.len();
     fn visible(items: &[SceneItem], out: &mut Vec<SourceId>) {
         for item in items.iter().filter(|i| i.visible) {
             match &item.content {
@@ -221,31 +266,41 @@ fn audio_graph(project: &Project, view: &ViewState, now: Timestamp) -> AudioGrap
             }
         }
     }
-    // Every canvas's program (a source on several canvases is mixed once).
+    let mut on_canvas = Vec::new();
     for canvas in &project.canvases {
         let leaving = view
             .transitions
             .get(&canvas.id)
             .filter(|t| t.end() > now)
             .and_then(|t| t.from);
+        on_canvas.clear();
         for id in [canvas.active_scene, leaving].into_iter().flatten() {
             if let Some(scene) = project.scene(id) {
-                visible(&scene.items, &mut ids);
+                visible(&scene.items, &mut on_canvas);
+            }
+        }
+        for source in &on_canvas {
+            match heard.iter().position(|(id, _)| id == source) {
+                Some(i) if i < globals => {} // already on every canvas
+                Some(i) => heard[i].1.push(canvas.id),
+                None => heard.push((*source, vec![canvas.id])),
             }
         }
     }
     AudioGraph {
-        nodes: ids
+        nodes: heard
             .into_iter()
-            .filter_map(|id| project.source(id))
-            .map(|s| AudioNode {
+            .filter_map(|(id, canvases)| project.source(id).map(|s| (s, canvases)))
+            .map(|(s, canvases)| AudioNode {
                 source: s.id,
                 kind: s.kind.clone(),
                 settings: runtime_settings(s),
                 config: s.audio.clone(),
+                canvases,
             })
             .collect(),
         monitor_device: project.audio.monitor_device.clone(),
+        canvases: project.canvases.iter().map(|c| c.id).collect(),
     }
 }
 
@@ -319,6 +374,63 @@ mod tests {
         assert_eq!(origin.transform_point2(Vec2::ZERO), Vec2::new(110.0, 50.0));
     }
 
+    /// Main (Gameplay, BRB) and a 1440p copy (Gameplay, BRB) plus a vertical canvas with only
+    /// "Vertical gameplay"; every canvas on its first scene.
+    fn three_canvases() -> (Project, [CanvasId; 3], [SceneId; 5]) {
+        use estream_project::{Canvas, Scene};
+        let mut p = Project::new_default(1920, 1080, Rational::fps(60));
+        let main = p.canvases[0].id;
+        p.scenes[0].name = "Gameplay".into();
+        let gameplay = p.scenes[0].id;
+        let brb = Scene::new("BRB", main);
+        let mut big = Canvas::new("1440p", 2560, 1440, Rational::fps(60));
+        let big_gameplay = Scene::new("Gameplay", big.id);
+        let big_brb = Scene::new("BRB", big.id);
+        big.active_scene = Some(big_gameplay.id);
+        let mut vertical = Canvas::new("Vertical", 1080, 1920, Rational::fps(30));
+        let v_scene = Scene::new("Vertical gameplay", vertical.id);
+        vertical.active_scene = Some(v_scene.id);
+        let ids = [main, big.id, vertical.id];
+        let scenes = [gameplay, brb.id, big_gameplay.id, big_brb.id, v_scene.id];
+        p.canvases.extend([big, vertical]);
+        p.scenes.extend([brb, big_gameplay, big_brb, v_scene]);
+        (p, ids, scenes)
+    }
+
+    #[test]
+    fn same_named_scenes_switch_together() {
+        let (p, [main, big, _], [_, brb, _, big_brb, _]) = three_canvases();
+        assert_eq!(
+            scene_switch_targets(&p, main, brb),
+            vec![(main, brb), (big, big_brb)],
+            "the vertical canvas has no BRB and stays"
+        );
+        // From the copy, the original follows too.
+        assert_eq!(
+            scene_switch_targets(&p, big, big_brb),
+            vec![(big, big_brb), (main, brb)]
+        );
+    }
+
+    #[test]
+    fn a_canvas_already_there_still_brings_the_others() {
+        let (mut p, [main, big, _], [gameplay, _, _, big_brb, _]) = three_canvases();
+        p.canvas_mut(big).unwrap().active_scene = Some(big_brb);
+        let big_gameplay = p.scenes_of(big).find(|s| s.name == "Gameplay").unwrap().id;
+        assert_eq!(
+            scene_switch_targets(&p, main, gameplay),
+            vec![(big, big_gameplay)]
+        );
+    }
+
+    #[test]
+    fn canvases_that_dont_follow_switch_alone() {
+        let (mut p, [main, big, _], [_, brb, _, big_brb, _]) = three_canvases();
+        p.canvas_mut(big).unwrap().follow_scenes = false;
+        assert_eq!(scene_switch_targets(&p, main, brb), vec![(main, brb)]);
+        assert_eq!(scene_switch_targets(&p, big, big_brb), vec![(big, big_brb)]);
+    }
+
     #[test]
     fn audio_follows_every_canvas_and_mixes_shared_sources_once() {
         use estream_project::{Canvas, Scene};
@@ -334,13 +446,28 @@ mod tests {
         p.scenes.push(v_scene);
         p.sources = vec![cam.clone(), music.clone()];
 
+        let mut mic = SourceDef::new("Mic", "audio_test_tone", serde_json::Value::Null);
+        mic.audio.global = true;
+        p.sources.push(mic.clone());
+        let (main, vertical) = (p.canvases[0].id, p.canvases[1].id);
+
         let g = RenderGraph::build(&p, 1);
-        let ids: Vec<SourceId> = g.audio.nodes.iter().map(|n| n.source).collect();
+        let heard: Vec<(SourceId, Vec<CanvasId>)> = g
+            .audio
+            .nodes
+            .iter()
+            .map(|n| (n.source, n.canvases.clone()))
+            .collect();
         assert_eq!(
-            ids,
-            vec![cam.id, music.id],
-            "camera once, music from the vertical canvas"
+            heard,
+            vec![
+                (mic.id, vec![]),
+                (cam.id, vec![main, vertical]),
+                (music.id, vec![vertical]),
+            ],
+            "global mic everywhere, camera listed once for both, music only on the vertical"
         );
+        assert_eq!(g.audio.canvases, vec![main, vertical]);
         assert_eq!(g.canvases.len(), 2);
         assert_eq!(g.canvases[1].items.len(), 2);
     }

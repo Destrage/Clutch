@@ -6,6 +6,14 @@ import { Icons } from "icons.slint";
 import { Button, Icon, TextField, TextArea, Toggle, Select } from "widgets.slint";
 import { Modal } from "overlays.slint";
 
+/// A destination's canvas in the Go live window.
+export struct DestCanvas {
+    /// The destination's name.
+    name: string,
+    /// Index into the window's canvases (-1 unknown).
+    canvas: int,
+}
+
 /// One platform's section of the Go live window.
 export struct DetailsSection {
     /// "youtube" | "twitch" | "kick"
@@ -63,6 +71,9 @@ export component StreamDetailsDialog inherits Modal {
     in property <[string]> canvases;
     in property <int> canvas: -1;
     callback pick-canvas(int);
+    /// The canvas of each enabled destination (shown with more than one destination).
+    in property <[DestCanvas]> dest-canvases;
+    callback pick-dest-canvas(int, int);
     callback text(int, string, string);
     callback flag(int, string, bool);
     callback choose(int, string, int);
@@ -109,25 +120,47 @@ export component StreamDetailsDialog inherits Modal {
             }
         }
 
-        if root.canvases.length > 1 && !root.live: HorizontalLayout {
-            spacing: 10px;
-            VerticalLayout {
-                alignment: center;
-                Text { text: "Canvas"; color: Theme.text; font-size: Theme.font-m; font-weight: 600; }
+        if root.canvases.length > 1 && !root.live: VerticalLayout {
+            spacing: 6px;
+            HorizontalLayout {
+                spacing: 10px;
+                VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: root.dest-canvases.length > 1 ? "Canvas for all" : "Canvas";
+                        color: Theme.text;
+                        font-size: Theme.font-m;
+                        font-weight: 600;
+                    }
+                }
+                Select {
+                    width: 280px;
+                    label: root.canvas < 0 ? "Each destination has its own" : "Canvas to stream";
+                    options: root.canvases;
+                    current-index: root.canvas;
+                    selected(i) => { root.pick-canvas(i); }
+                }
+                Rectangle { horizontal-stretch: 1; }
             }
-            Select {
-                horizontal-stretch: 1;
-                label: "Canvas to stream";
-                options: root.canvases;
-                current-index: root.canvas;
-                selected(i) => { root.pick-canvas(i); }
+            if root.dest-canvases.length > 1: VerticalLayout {
+                spacing: 4px;
+                for d[i] in root.dest-canvases: HorizontalLayout {
+                    spacing: 10px;
+                    padding-left: 12px;
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 1;
+                        Text { text: d.name; color: Theme.text-muted; font-size: Theme.font-s; overflow: elide; }
+                    }
+                    Select {
+                        width: 280px;
+                        label: "Canvas for " + d.name;
+                        options: root.canvases;
+                        current-index: d.canvas;
+                        selected(c) => { root.pick-dest-canvas(i, c); }
+                    }
+                }
             }
-        }
-        if root.canvases.length > 1 && !root.live && root.canvas < 0: Text {
-            text: "Your destinations stream different canvases. Pick one to stream it everywhere.";
-            color: Theme.text-faint;
-            font-size: Theme.font-xs;
-            wrap: word-wrap;
         }
 
         scroller := Flickable {

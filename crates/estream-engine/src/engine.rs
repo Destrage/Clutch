@@ -5,7 +5,7 @@ use crate::audio::{self, AudioHost};
 use crate::command::{Change, Command, CommandError};
 use crate::feed::{VideoConsumer, VideoFrame};
 use crate::gpu_export::GpuExport;
-use crate::graph::{ActiveTransition, RenderGraph, ViewState};
+use crate::graph::{ActiveTransition, RenderGraph, ViewState, scene_switch_targets};
 use crate::history::History;
 use crate::source::{SourceRegistry, SourceStatus};
 use crate::video::{self, CanvasOutput, SourceInfo, VideoCore, VideoSink};
@@ -325,7 +325,7 @@ pub struct Engine {
     video: Option<JoinHandle<()>>,
     video_progress: Option<Arc<VideoProgress>>,
     audio: Option<JoinHandle<()>>,
-    track_sinks: Option<crossbeam_channel::Sender<Box<dyn TrackSink>>>,
+    track_sinks: Option<crossbeam_channel::Sender<crate::audio::CanvasSink>>,
 }
 
 impl Engine {
@@ -420,7 +420,7 @@ impl Engine {
             view: ViewState::default(),
             clock,
             generation: 0,
-            starting: None,
+            starting: Vec::new(),
         };
         let control = std::thread::Builder::new()
             .name("estream-engine".into())
@@ -641,10 +641,10 @@ impl Engine {
         self.shared.audio_meters.load_full()
     }
 
-    /// Receives every mixed audio block (all six tracks). Used by outputs.
-    pub fn add_track_sink(&self, sink: Box<dyn TrackSink>) {
+    /// Receives every mixed audio block (all six tracks) of `canvas`'s mix. Used by outputs.
+    pub fn add_track_sink(&self, canvas: CanvasId, sink: Box<dyn TrackSink>) {
         if let Some(tx) = &self.track_sinks {
-            let _ = tx.send(sink);
+            let _ = tx.send((Some(canvas), sink));
         }
     }
 
@@ -707,8 +707,8 @@ struct Control {
     clock: EngineClock,
     /// Render graph generation (bumped on project and view changes).
     generation: u64,
-    /// Canvas whose transition `transition_to` is starting right now.
-    starting: Option<CanvasId>,
+    /// Canvases whose transitions `transition_to` is starting right now.
+    starting: Vec<CanvasId>,
 }
 
 impl Control {
@@ -846,44 +846,59 @@ impl Control {
         }
     }
 
-    /// Switches the program scene, recording a transition the video thread renders.
+    /// Switches the program scene, recording a transition the video thread renders. Canvases
+    /// that follow scene switches go to their same-named scene with the same transition, all
+    /// in one undo step.
     fn transition_to(
         &mut self,
         canvas: CanvasId,
         scene: SceneId,
         transition: Option<Transition>,
     ) -> Result<u64, EngineError> {
-        let from = self
-            .project
+        self.project
             .canvas(canvas)
-            .ok_or(CommandError::NoCanvas(canvas))?
-            .active_scene;
-        if from == Some(scene) {
+            .ok_or(CommandError::NoCanvas(canvas))?;
+        let targets = scene_switch_targets(&self.project, canvas, scene);
+        if targets.is_empty() {
             return Ok(self.shared.revision.load(Ordering::Acquire));
         }
         let transition = transition.unwrap_or_else(|| self.project.transition.clone());
-        let previous = self.view.transitions.remove(&canvas);
-        if !transition.is_instant() {
-            self.view.transitions.insert(
-                canvas,
-                ActiveTransition {
-                    from,
-                    transition,
-                    start: self.clock.now(),
-                },
-            );
+        let start = self.clock.now();
+        let mut previous = Vec::with_capacity(targets.len());
+        let mut commands = Vec::with_capacity(targets.len());
+        for &(c, s) in &targets {
+            let from = self.project.canvas(c).and_then(|c| c.active_scene);
+            previous.push((c, self.view.transitions.remove(&c)));
+            if !transition.is_instant() {
+                self.view.transitions.insert(
+                    c,
+                    ActiveTransition {
+                        from,
+                        transition: transition.clone(),
+                        start,
+                    },
+                );
+            }
+            commands.push(Command::SetActiveScene {
+                canvas: c,
+                scene: Some(s),
+            });
         }
-        self.starting = Some(canvas);
-        let result = self.execute(Command::SetActiveScene {
-            canvas,
-            scene: Some(scene),
-        });
-        self.starting = None;
+        let command = if commands.len() == 1 {
+            commands.remove(0)
+        } else {
+            Command::Batch { commands }
+        };
+        self.starting = targets.iter().map(|(c, _)| *c).collect();
+        let result = self.execute(command);
+        self.starting.clear();
         if result.is_err() {
             // Nothing changed: restore the previous view state.
-            self.view.transitions.remove(&canvas);
-            if let Some(previous) = previous {
-                self.view.transitions.insert(canvas, previous);
+            for (c, p) in previous {
+                self.view.transitions.remove(&c);
+                if let Some(p) = p {
+                    self.view.transitions.insert(c, p);
+                }
             }
         }
         result
@@ -937,7 +952,7 @@ impl Control {
         // is a cut: drop any transition running on that canvas.
         for change in &changes {
             if let Change::ActiveSceneChanged { canvas, .. } = change
-                && self.starting != Some(*canvas)
+                && !self.starting.contains(canvas)
             {
                 self.view.transitions.remove(canvas);
             }

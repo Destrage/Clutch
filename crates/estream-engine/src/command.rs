@@ -88,6 +88,8 @@ pub struct CanvasPatch {
     pub fps: Option<Rational>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background: Option<Rgba8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub follow_scenes: Option<bool>,
     /// A gradient background, or a solid one (which clears the gradient). Also sets
     /// `Canvas::background` to the solid color or first stop.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -364,6 +366,9 @@ impl Command {
                 }
                 if let Some(v) = patch.background {
                     old.background = Some(std::mem::replace(&mut c.background, v));
+                }
+                if let Some(v) = patch.follow_scenes {
+                    old.follow_scenes = Some(std::mem::replace(&mut c.follow_scenes, v));
                 }
                 if let Some(p) = patch.background_paint {
                     let p = p.normalized();

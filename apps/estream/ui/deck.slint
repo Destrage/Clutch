@@ -4,7 +4,7 @@
 
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
-import { SceneRow, MixerStrip, LiveRow, AudioInspect, InspectorFolds } from "types.slint";
+import { SceneRow, MixerStrip, LiveRow, AudioInspect, InspectorFolds, CanvasTab } from "types.slint";
 import { Button, Icon, IconButton, Hint } from "widgets.slint";
 import { ProgramView } from "panels.slint";
 import { ChatPanel, ChatTabRow, ChatLive, ChatLine, ChatStateRow } from "chat.slint";
@@ -35,10 +35,31 @@ component PlatformChip inherits Rectangle {
     }
 }
 
+// A small label on a picture ("Preview", "Live").
+component ViewTag inherits Rectangle {
+    in property <string> text;
+    in property <color> tint;
+    width: tag.preferred-width + 16px;
+    height: 22px;
+    border-radius: 6px;
+    background: root.tint;
+    tag := Text {
+        text: root.text;
+        color: Theme.on-accent;
+        font-size: Theme.font-xs;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
 // A big scene button.
 component SceneButton inherits Rectangle {
     in property <SceneRow> scene;
     in property <string> key-label;
+    /// Studio mode: `active` is the Preview scene and `live` the program one.
+    in property <bool> studio;
     callback clicked;
     // Equal widths whatever the names.
     min-width: 0px;
@@ -47,10 +68,10 @@ component SceneButton inherits Rectangle {
     height: 76px;
     border-radius: 14px;
     border-width: 2px;
-    border-color: scene.live || scene.active ? Theme.accent : ta.has-hover ? Theme.border-strong : Theme.border;
-    background: scene.live || scene.active ? Theme.accent-soft : ta.pressed ? Theme.pressed : Theme.surface;
+    border-color: root.studio && scene.live ? Theme.live : scene.live || scene.active ? Theme.accent : ta.has-hover ? Theme.border-strong : Theme.border;
+    background: root.studio && scene.live && !scene.active ? Theme.surface : scene.live || scene.active ? Theme.accent-soft : ta.pressed ? Theme.pressed : Theme.surface;
     accessible-role: button;
-    accessible-label: "Switch to " + scene.name;
+    accessible-label: root.studio ? "Prepare " + scene.name + " in the Preview" : "Switch to " + scene.name;
     VerticalLayout {
         padding: 12px;
         Text {
@@ -104,6 +125,16 @@ export component LiveDeck inherits Rectangle {
     callback toggle-record();
     callback end-stream();
     callback edit-layout();
+    /// Studio mode: the Preview render next to the program (`frame`).
+    in property <bool> studio-mode;
+    in property <image> preview;
+    callback toggle-studio();
+    /// Studio mode: send the Preview to program ("go" = chosen transition, "cut").
+    callback go(string);
+    in property <string> transition-label;
+    /// Canvas tabs: the deck shows the active one (a picker with more than one).
+    in property <[CanvasTab]> canvas-tabs;
+    callback canvas-select(string);
     // A sound's settings over the deck (opened by clicking its name under the knob).
     in property <AudioInspect> audio;
     /// The window's folded sound panels, shared with the inspector.
@@ -220,6 +251,58 @@ export component LiveDeck inherits Rectangle {
                     vertical-alignment: center;
                 }
             }
+            // Which canvas the deck shows (switching scenes still moves every following canvas).
+            if root.canvas-tabs.length > 1: VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    height: 32px;
+                    width: tabs.preferred-width;
+                    border-radius: 8px;
+                    background: Theme.surface-2;
+                    tabs := HorizontalLayout {
+                        padding: 2px;
+                        spacing: 2px;
+                        for tab in root.canvas-tabs: Rectangle {
+                            width: tab-text.preferred-width + 20px;
+                            border-radius: 6px;
+                            background: tab.active ? Theme.surface-3 : tab-ta.has-hover ? Theme.hover : transparent;
+                            accessible-role: button;
+                            accessible-label: "Show " + tab.name;
+                            HorizontalLayout {
+                                padding-left: 10px;
+                                padding-right: 10px;
+                                spacing: 6px;
+                                if tab.live: VerticalLayout {
+                                    alignment: center;
+                                    Rectangle { width: 6px; height: 6px; border-radius: 3px; background: Theme.live; }
+                                }
+                                tab-text := Text {
+                                    text: tab.name;
+                                    color: tab.active ? Theme.text : Theme.text-muted;
+                                    font-size: Theme.font-s;
+                                    font-weight: tab.active ? 600 : 400;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            tab-ta := TouchArea {
+                                mouse-cursor: MouseCursor.pointer;
+                                clicked => { root.canvas-select(tab.id); }
+                            }
+                        }
+                    }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                Button {
+                    text: "Studio mode";
+                    has-icon: true;
+                    icon: Icons.layout-dashboard;
+                    kind: root.studio-mode ? "primary" : "default";
+                    tooltip: root.studio-mode ? "Leave studio mode (Ctrl+Shift+T)" : "Prepare the next scene off-air, then send it live (Ctrl+Shift+T)";
+                    clicked => { root.toggle-studio(); }
+                }
+            }
             VerticalLayout {
                 alignment: center;
                 Button {
@@ -261,12 +344,30 @@ export component LiveDeck inherits Rectangle {
             VerticalLayout {
                 horizontal-stretch: 1;
                 spacing: 12px;
-                // What viewers see.
-                Rectangle {
-                    vertical-stretch: 1;
+                // What viewers see (and in studio mode, the Preview beside it).
+                HorizontalLayout {
+                vertical-stretch: 1;
+                spacing: 12px;
+                if root.studio-mode: Rectangle {
+                    horizontal-stretch: 1;
                     border-radius: Theme.radius-l;
-                    border-width: 1px;
-                    border-color: Theme.border;
+                    border-width: 2px;
+                    border-color: Theme.accent;
+                    clip: true;
+                    ProgramView {
+                        width: parent.width;
+                        height: parent.height;
+                        frame: root.preview;
+                        canvas-w: root.canvas-w;
+                        canvas-h: root.canvas-h;
+                    }
+                    ViewTag { x: 12px; y: 12px; text: "Preview"; tint: Theme.accent; }
+                }
+                Rectangle {
+                    horizontal-stretch: 1;
+                    border-radius: Theme.radius-l;
+                    border-width: root.studio-mode ? 2px : 1px;
+                    border-color: root.studio-mode ? Theme.live : Theme.border;
                     clip: true;
                     ProgramView {
                         width: parent.width;
@@ -275,6 +376,7 @@ export component LiveDeck inherits Rectangle {
                         canvas-w: root.canvas-w;
                         canvas-h: root.canvas-h;
                     }
+                    if root.studio-mode: ViewTag { x: 12px; y: 12px; text: "Live"; tint: Theme.live; }
                     Button {
                         x: parent.width - self.width - 16px;
                         y: parent.height - self.height - 16px;
@@ -288,13 +390,33 @@ export component LiveDeck inherits Rectangle {
                         clicked => { root.clip-now(); }
                     }
                 }
-                // Scenes.
+                }
+                // Scenes (in studio mode they pick the Preview), then Transition and Cut.
                 HorizontalLayout {
                     spacing: 10px;
                     for scene[i] in root.scenes: SceneButton {
                         scene: scene;
+                        studio: root.studio-mode;
                         key-label: root.key-label(i);
                         clicked => { root.scene(scene.id); }
+                    }
+                    if root.studio-mode: VerticalLayout {
+                        width: 170px;
+                        spacing: 6px;
+                        Button {
+                            vertical-stretch: 1;
+                            text: "Transition";
+                            kind: "primary";
+                            has-icon: true;
+                            icon: Icons.play;
+                            tooltip: "Send the Preview live with " + root.transition-label + " on every canvas that switches together";
+                            clicked => { root.go("go"); }
+                        }
+                        Button {
+                            text: "Cut";
+                            tooltip: "Send the Preview live at once";
+                            clicked => { root.go("cut"); }
+                        }
                     }
                 }
                 // Sound and recording.

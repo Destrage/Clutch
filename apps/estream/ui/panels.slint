@@ -1284,6 +1284,11 @@ export component CanvasTabs inherits HorizontalLayout {
                         enabled: !ct.feeds-all;
                         clicked => { root.menu(ct.id, "outputs", -1); }
                     }
+                    if root.tabs.length > 1: MenuRow {
+                        label: "Switch scenes with other canvases";
+                        icon: ct.follows ? Icons.check : @image-url("");
+                        clicked => { root.menu(ct.id, "follow", -1); }
+                    }
                     Rectangle { height: 1px; background: Theme.border; }
                     MenuRow {
                         label: "Duplicate";

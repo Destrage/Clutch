@@ -332,6 +332,33 @@ pub fn desktop_audio_busy_leaving_out() -> bool {
     matches!(claims::desktop_exclusion(), Some(Some(_)))
 }
 
+/// Programs Desktop Audio carries although another source captures them too: Windows lets it
+/// leave out one program only. Returns `(left out, also carried)` as executable names, or
+/// `None` when nothing is captured twice. Takes a process snapshot: call it now and then, not
+/// on every block.
+pub fn desktop_audio_doubles() -> Option<(String, Vec<String>)> {
+    let Some(Some(left_out)) = claims::desktop_exclusion() else {
+        return None;
+    };
+    let others: Vec<u32> = claims::claimed()
+        .into_iter()
+        .filter(|p| *p != left_out)
+        .collect();
+    if others.is_empty() {
+        return None;
+    }
+    let procs = super::app_audio::processes();
+    let exe = |pid: u32| {
+        procs
+            .iter()
+            .find(|(p, _, _)| *p == pid)
+            .map(|(_, _, e)| e.clone())
+    };
+    let mut also: Vec<String> = others.into_iter().filter_map(exe).collect();
+    also.dedup();
+    Some((exe(left_out)?, also)).filter(|(_, a)| !a.is_empty())
+}
+
 /// Desktop audio with the same settings and UI as `plain`, the built-in type.
 pub fn desktop_type(plain: SourceType) -> SourceType {
     let (schema, validation) = (plain.clone(), plain.clone());

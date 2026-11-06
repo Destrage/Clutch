@@ -270,7 +270,6 @@ impl WgcCapture {
     ) -> Result<Self, CaptureError> {
         // SAFETY: COM/WinRT initialization and factory calls with valid handles.
         unsafe {
-            tracing::debug!("wgc: start");
             let _ = RoInitialize(RO_INIT_MULTITHREADED);
             let interop_factory =
                 windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()?;
@@ -280,7 +279,6 @@ impl WgcCapture {
             };
             let dxgi: IDXGIDevice = interop.device.cast()?;
             let device: IDirect3DDevice = CreateDirect3D11DeviceFromDXGIDevice(&dxgi)?.cast()?;
-            tracing::debug!("wgc: item created");
             let size = item.Size()?;
             let pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
                 &device,
@@ -298,7 +296,6 @@ impl WgcCapture {
                 pool.FrameArrived(
                     &TypedEventHandler::<Direct3D11CaptureFramePool, IInspectable>::new(
                         move |pool, _| {
-                            tracing::trace!("wgc: frame arrived");
                             let Ok(pool) = pool.ok() else { return Ok(()) };
                             let frame = pool.TryGetNextFrame()?;
                             let content = frame.ContentSize()?;
@@ -346,9 +343,7 @@ impl WgcCapture {
             let _ = session.SetIsCursorCaptureEnabled(cursor);
             // Hide the yellow capture border where the OS allows it (Windows 11).
             let _ = session.SetIsBorderRequired(false);
-            tracing::debug!("wgc: starting session");
             session.StartCapture()?;
-            tracing::debug!("wgc: session started");
             Ok(Self {
                 session,
                 pool,

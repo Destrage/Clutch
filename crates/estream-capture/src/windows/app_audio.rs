@@ -44,7 +44,7 @@ impl IActivateAudioInterfaceCompletionHandler_Impl for Completion_Impl {
 }
 
 /// `(pid, parent pid, exe)` for every running process.
-fn processes() -> Vec<(u32, u32, String)> {
+pub(crate) fn processes() -> Vec<(u32, u32, String)> {
     let mut out = Vec::new();
     // SAFETY: standard ToolHelp iteration; the snapshot handle is closed.
     unsafe {
@@ -291,6 +291,23 @@ pub(crate) mod claims {
                 .map(|(p, _, _)| *p)
         };
         Some(fresh(By::Capture).or_else(|| fresh(By::App)))
+    }
+
+    /// Every process a source claims right now (each once).
+    pub fn claimed() -> Vec<u32> {
+        let now = Instant::now();
+        let mut pids: Vec<u32> = CLAIMS.lock().map_or_else(
+            |_| Vec::new(),
+            |list| {
+                list.iter()
+                    .filter(|(_, _, at)| now.duration_since(*at) < FRESH)
+                    .map(|(p, _, _)| *p)
+                    .collect()
+            },
+        );
+        pids.sort_unstable();
+        pids.dedup();
+        pids
     }
 
     #[cfg(test)]
