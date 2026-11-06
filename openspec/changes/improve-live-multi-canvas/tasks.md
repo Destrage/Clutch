@@ -40,8 +40,9 @@
 
 ## 7. Check
 - [x] 7.1 Build, clippy, tests
-- [ ] 7.2 In-app check: two canvases, Discord only in Gameplay; switch to Be right back and
-      check both canvases switch and the 1440p recording has no Discord audio
+- [x] 7.2 In-app check: two canvases (1080p, 1440p), a 440 Hz tone standing in for Discord
+      only in Gameplay; switching to Be right back on the 1080p canvas switched both, and the
+      1440p recording went from -12 dB (the tone) to -91 dB (silence) at the switch
 - [ ] 7.3 In-app check: Apex game capture with audio, Discord source, Desktop Audio on; the
       Desktop Audio strip shows the warning
 - [ ] 7.4 In-app check by the user: live on Kick and Twitch (1080p) and YouTube (1440p);

@@ -22,8 +22,9 @@
 - [x] 2.6 Encoder-open error hint for canvases taller than 2304: "Try HEVC or AV1, or a
       1440 × 2560 canvas"
 - [x] 2.7 Check: recorded a 2160 × 3840 at 60 fps canvas with NVENC H.264 on an RTX 4070 Ti
-      SUPER (ffprobe: h264 2160 × 3840, 60/1, 370 frames in 6.2 s). HEVC and streaming at that
-      size not tried
+      SUPER (ffprobe: h264 2160 × 3840, 60/1, 370 frames in 6.2 s). Later (2026-11-07):
+      streamed it to a local RTMP receiver with NVENC H.264 (59.98 fps for 55 s) and HEVC
+      (60 fps for 53 s, nothing dropped), and recorded it with HEVC (60 fps)
 
 ## 3. Paint and gradients
 - [x] 3.1 `estream-core`: `Paint`, `GradientStop`; validation (2 to 8 stops, sorted, clamped);
