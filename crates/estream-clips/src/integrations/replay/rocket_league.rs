@@ -209,25 +209,4 @@ mod tests {
             Err(ReplayError::NotReady | ReplayError::Unsupported(_))
         ));
     }
-
-    /// Prints the header of every replay in `ESTREAM_RL_REPLAYS` (a folder), with what `parse`
-    /// makes of it. Run with `--ignored --nocapture`.
-    #[test]
-    #[ignore]
-    fn dump_sample_replays() {
-        let dir = PathBuf::from(std::env::var("ESTREAM_RL_REPLAYS").unwrap());
-        for entry in std::fs::read_dir(dir).unwrap().flatten() {
-            let data = std::fs::read(entry.path()).unwrap();
-            let replay = boxcars::ParserBuilder::new(&data)
-                .never_parse_network_data()
-                .never_check_crc()
-                .parse()
-                .unwrap();
-            println!("== {}", entry.path().display());
-            for (k, v) in &replay.properties {
-                println!("  {k}: {v:?}");
-            }
-            println!("  -> {:?}", parse(&data, SystemTime::now()).unwrap().events);
-        }
-    }
 }

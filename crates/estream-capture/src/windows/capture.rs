@@ -29,12 +29,10 @@ pub fn interop(gpu: &GpuContext) -> Result<D3D11Interop, String> {
     let entry = match cache.iter().position(|(d, _)| *d == gpu.device) {
         Some(i) => &cache[i].1,
         None => {
-            tracing::debug!("capture: creating D3D11 interop");
             cache.push((
                 gpu.device.clone(),
                 D3D11Interop::new(gpu).map_err(|e| e.to_string()),
             ));
-            tracing::debug!("capture: interop created");
             &cache[cache.len() - 1].1
         }
     };
