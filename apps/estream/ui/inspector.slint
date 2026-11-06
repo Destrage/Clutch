@@ -211,6 +211,7 @@ export component InspectorPanel inherits Panel {
     callback filter-toggle(string, bool);
     callback filter-param(string, string, float);
     callback filter-move(string, bool);
+    callback audio-remove();
     in property <[VideoFilterRow]> video-filters;
     in property <MediaInspect> media;
     callback media-control(string);
@@ -697,6 +698,7 @@ export component InspectorPanel inherits Panel {
                 filter-param(id, k, v) => { root.filter-param(id, k, v); }
                 filter-move(id, up) => { root.filter-move(id, up); }
                 commit => { root.commit(); }
+                remove-source => { root.audio-remove(); }
             }
         }
     }

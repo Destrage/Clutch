@@ -121,8 +121,9 @@ its hint gains "Try HEVC or AV1, or a 1440 × 2560 canvas" when the canvas is ta
     Both are left to their platform branches. Until they land, the screen option is hidden there.
 
 ## Removing sounds from the mixer
-- Mixer strip: right-click menu and a menu button with "Remove". Sound settings panel: a
-  "Remove source" button at the bottom.
+- Sound knobs (Stage and Live deck): a right-click menu with Settings, Mute and Remove. Full
+  mixer rows: a Remove button next to Mute. Sound settings panel: "Remove source" (or "Remove
+  from scene") at the bottom. Delete also removes a sound picked in the mixer.
 - A source heard in all scenes: `RemoveSource` (it has no scene items). A source in the current
   scene: the same logic as `remove_selected` (remove the item; remove the source too when it was
   the last use). Toast: "Removed Desktop Audio — Ctrl+Z to undo".

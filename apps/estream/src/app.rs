@@ -581,6 +581,18 @@ fn id_str(id: impl std::fmt::Display) -> SharedString {
     id.to_string().into()
 }
 
+/// Deletes an item from a scene. Removing the last use of a source removes the source too
+/// (undoable as one step).
+fn remove_item_command(snapshot: &Project, scene: SceneId, item: &SceneItem) -> Command {
+    match item.source_id() {
+        Some(source) if snapshot.items_using(source).len() == 1 => Command::RemoveSource { source },
+        _ => Command::RemoveItem {
+            scene,
+            item: item.id,
+        },
+    }
+}
+
 fn parse_id(s: &str) -> Option<uuid::Uuid> {
     s.parse().ok()
 }
@@ -9869,25 +9881,85 @@ impl App {
 
     fn remove_selected(&mut self) {
         let Some((scene, item)) = self.selected() else {
+            // A sound picked in the mixer that isn't placed in the edited scene.
+            if self.selection.is_none()
+                && let Some(source) = self.selected_source
+            {
+                self.remove_sound(source);
+            }
             return;
         };
         let Some((snapshot, _, _)) = self.canvas_and_scene() else {
             return;
         };
-        // Removing the last use of a source removes the source too (undoable as one step).
-        let command = match item.source_id() {
-            Some(source) if snapshot.items_using(source).len() == 1 => {
-                Command::RemoveSource { source }
-            }
-            _ => Command::RemoveItem {
-                scene,
-                item: item.id,
-            },
-        };
-        if self.exec(command) {
+        if self.exec(remove_item_command(&snapshot, scene, &item)) {
             self.selection = None;
             self.refresh();
             self.toast("Deleted — Ctrl+Z to undo".into(), false);
+        }
+    }
+
+    /// Remove on a mixer strip or knob.
+    pub fn mixer_remove(&mut self, id: &str) {
+        if let Some(source) = parse_id(id).map(SourceId) {
+            self.remove_sound(source);
+        }
+    }
+
+    /// "Remove source" in the sound settings panel.
+    pub fn audio_remove(&mut self) {
+        let Some((snapshot, _, _)) = self.canvas_and_scene() else {
+            return;
+        };
+        if let Some(source) = self.current_source(&snapshot) {
+            self.remove_sound(source);
+        }
+    }
+
+    /// Takes a sound out of the edited canvas's mix (undoable). A source heard in all scenes is
+    /// removed; one placed in a scene leaves the edited scene (or, failing that, the canvas's
+    /// program scene), the same as deleting it in the source list.
+    fn remove_sound(&mut self, source: SourceId) {
+        let Some((snapshot, canvas, edit)) = self.canvas_and_scene() else {
+            return;
+        };
+        let Some(def) = snapshot.source(source) else {
+            return;
+        };
+        let name = def.name.clone();
+        let command = if def.audio.global {
+            Command::RemoveSource { source }
+        } else {
+            let program = snapshot.canvas(canvas).and_then(|c| c.active_scene);
+            let placed = [edit, program].into_iter().flatten().find_map(|id| {
+                let scene = snapshot.scene(id)?;
+                let mut found = None;
+                scene.walk(&mut |i| {
+                    if found.is_none() && i.source_id() == Some(source) {
+                        found = Some(i.clone());
+                    }
+                });
+                Some((id, found?))
+            });
+            match placed {
+                Some((scene, item)) => remove_item_command(&snapshot, scene, &item),
+                None => return,
+            }
+        };
+        let removed: Vec<ItemId> = snapshot
+            .items_using(source)
+            .into_iter()
+            .map(|(_, item)| item)
+            .collect();
+        if self.exec(command) {
+            if self.selected_source == Some(source) {
+                self.selected_source = None;
+            }
+            if self.selection.is_some_and(|s| removed.contains(&s)) {
+                self.selection = None;
+            }
+            self.refresh();
+            self.toast(format!("Removed {name} — Ctrl+Z to undo"), false);
         }
     }
 
@@ -10993,6 +11065,8 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     on!(on_mixer_select, |a, id| a.mixer_select(&id));
     on!(on_mixer_fader, |a, id, v| a.mixer_fader(&id, v));
     on!(on_mixer_mute, |a, id| a.mixer_mute(&id));
+    on!(on_mixer_remove, |a, id| a.mixer_remove(&id));
+    on!(on_audio_remove, |a| a.audio_remove());
     on!(on_settings_set, |a, k, v| a.settings_set(&k, v));
     on!(on_automation_edit, |a, f, i, v| a.automation_edit(&f, i, v));
     on!(on_automation_text, |a, f, i, s| a

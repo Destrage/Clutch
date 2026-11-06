@@ -903,6 +903,39 @@ mod tests {
     }
 
     #[test]
+    fn removing_sound_heard_in_all_scenes_and_undo_restores_its_settings() {
+        let (mut p, _) = project();
+        add_source(&mut p);
+        let mut desktop = SourceDef::new("Desktop Audio", "audio_output", serde_json::json!({}));
+        desktop.audio.global = true;
+        desktop.audio.volume_db = -12.5;
+        desktop.audio.muted = true;
+        desktop.audio.filters = vec![estream_project::FilterDef {
+            id: "gate".into(),
+            kind: "noise_gate".into(),
+            enabled: true,
+            settings: serde_json::json!({ "threshold_db": -40.0 }),
+        }];
+        let id = desktop.id;
+        Command::AddSource {
+            source: desktop,
+            index: 0,
+        }
+        .apply(&mut p)
+        .unwrap();
+        let before = p.clone();
+
+        let applied = Command::RemoveSource { source: id }.apply(&mut p).unwrap();
+        assert!(p.source(id).is_none());
+
+        applied.inverse.apply(&mut p).unwrap();
+        assert_eq!(
+            p, before,
+            "volume, mute, filters and list position come back"
+        );
+    }
+
+    #[test]
     fn removing_active_scene_picks_fallback_and_undo_restores() {
         let (mut p, scene_a) = project();
         let canvas = p.canvases[0].id;

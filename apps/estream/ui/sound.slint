@@ -4,12 +4,14 @@
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
 import { MixerStrip, AudioInspect, InspectorFolds } from "types.slint";
-import { Icon, IconButton, Toggle, Select, Hint, ValueSlider, FoldPanel, Segmented, FieldRow, ParamEditor } from "widgets.slint";
+import { Button, Icon, IconButton, Toggle, Select, Hint, ValueSlider, FoldPanel, Segmented, FieldRow, ParamEditor } from "widgets.slint";
+import { MenuRow } from "panels.slint";
 
 // A source's sound as a knob. The ring shows the volume (-60 dB to 0 dB) and the live level glows
 // inside. Double-click mutes, dragging up/down or scrolling sets the volume, Ctrl+click goes back
 // to 0 dB, and the name opens the sound's settings. A single click does nothing, so grabbing the
 // knob to change the volume never mutes it by accident.
+// Right-click opens a menu: settings, mute, remove.
 export component SoundKnob inherits Rectangle {
     in property <MixerStrip> strip;
     in property <length> size: 52px;
@@ -17,6 +19,7 @@ export component SoundKnob inherits Rectangle {
     callback commit();
     callback toggle-mute();
     callback open-settings();
+    callback remove();
 
     property <float> level: root.strip.muted ? 0 : max(root.strip.level-l, root.strip.level-r);
     // Dragging: where it started, and whether the pointer moved far enough to count.
@@ -116,6 +119,9 @@ export component SoundKnob inherits Rectangle {
                             root.dragging = false;
                             root.drag-ended = false;
                             root.ctrl-press = e.modifiers.control;
+                        } else if (e.kind == PointerEventKind.down && e.button == PointerEventButton.right) {
+                            Hint.text = "";
+                            menu.show();
                         } else if (e.kind == PointerEventKind.up && root.dragging) {
                             root.dragging = false;
                             root.drag-ended = true;
@@ -181,6 +187,35 @@ export component SoundKnob inherits Rectangle {
             name-ta := TouchArea {
                 mouse-cursor: MouseCursor.pointer;
                 clicked => { root.open-settings(); }
+                pointer-event(e) => {
+                    if (e.kind == PointerEventKind.down && e.button == PointerEventButton.right) {
+                        menu.show();
+                    }
+                }
+            }
+        }
+    }
+
+    menu := PopupWindow {
+        x: (root.width - 180px) / 2;
+        y: -100px;
+        width: 180px;
+        Rectangle {
+            background: Theme.surface-3;
+            border-radius: Theme.radius-m;
+            border-width: 1px;
+            border-color: Theme.border-strong;
+            drop-shadow-blur: 16px;
+            drop-shadow-color: #00000060;
+            VerticalLayout {
+                padding: 4px;
+                MenuRow { label: "Settings…"; icon: Icons.sliders-horizontal; clicked => { root.open-settings(); } }
+                MenuRow {
+                    label: root.strip.muted ? "Unmute" : "Mute";
+                    icon: root.strip.muted ? Icons.volume : Icons.volume-x;
+                    clicked => { root.toggle-mute(); }
+                }
+                MenuRow { label: "Remove"; icon: Icons.trash; danger: true; clicked => { root.remove(); } }
             }
         }
     }
@@ -209,6 +244,8 @@ export component AudioSettings inherits VerticalLayout {
     callback filter-param(string, string, float);
     callback filter-move(string, bool);
     callback commit();
+    /// Removes the source (heard in all scenes) or takes it out of the edited scene.
+    callback remove-source();
 
     property <[string]> voices: ["Off", "Deeper", "Higher", "Robot", "Radio", "Cave", "Echo"];
     property <[string]> hearing: ["Stream only", "Stream + me", "Only me"];
@@ -432,6 +469,19 @@ export component AudioSettings inherits VerticalLayout {
                     clicked => { root.audio-set("tracks", on ? root.audio.tracks - pow(2, t) : root.audio.tracks + pow(2, t)); }
                 }
             }
+        }
+    }
+
+    HorizontalLayout {
+        alignment: start;
+        padding-top: 4px;
+        Button {
+            text: root.audio.global ? "Remove source" : "Remove from scene";
+            kind: "danger";
+            has-icon: true;
+            icon: Icons.trash;
+            tooltip: root.audio.global ? "Removes this sound from every scene (Ctrl+Z undoes it)" : "Takes this sound out of the scene (Ctrl+Z undoes it)";
+            clicked => { root.remove-source(); }
         }
     }
 }

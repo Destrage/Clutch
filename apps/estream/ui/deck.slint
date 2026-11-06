@@ -111,6 +111,8 @@ export component LiveDeck inherits Rectangle {
     in-out property <bool> sound-open;
     callback open-sound(string);
     callback close-sound();
+    callback remove-sound(string);
+    callback audio-remove();
     callback audio-set(string, float);
     callback filter-add(int);
     callback filter-remove(string);
@@ -317,6 +319,7 @@ export component LiveDeck inherits Rectangle {
                                     root.open-sound(strip.id);
                                     root.sound-open = true;
                                 }
+                                remove => { root.remove-sound(strip.id); }
                             }
                         }
                         Rectangle { horizontal-stretch: 1; }
@@ -460,6 +463,10 @@ export component LiveDeck inherits Rectangle {
                         filter-param(id, k, v) => { root.filter-param(id, k, v); }
                         filter-move(id, up) => { root.filter-move(id, up); }
                         commit => { root.commit(); }
+                        remove-source => {
+                            root.audio-remove();
+                            root.sound-open = false;
+                        }
                     }
                 }
             }

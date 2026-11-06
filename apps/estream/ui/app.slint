@@ -338,6 +338,8 @@ export component AppWindow inherits Window {
     callback mixer-select(string);
     callback mixer-fader(string, float);
     callback mixer-mute(string);
+    callback mixer-remove(string);
+    callback audio-remove();
     callback palette-query-changed(string);
     callback palette-run(string);
     callback add-source-pick(string);
@@ -580,6 +582,7 @@ export component AppWindow inherits Window {
                             filter-toggle(id, v) => { root.filter-toggle(id, v); }
                             filter-param(id, k, v) => { root.filter-param(id, k, v); }
                             filter-move(id, up) => { root.filter-move(id, up); }
+                            audio-remove => { root.audio-remove(); }
                             video-filters: root.video-filters;
                             media: root.media-inspect;
                             media-control(c) => { root.media-control(c); }
@@ -617,6 +620,7 @@ export component AppWindow inherits Window {
                             fader(id, v) => { root.mixer-fader(id, v); }
                             commit => { root.inspect-commit(); }
                             toggle-mute(id) => { root.mixer-mute(id); }
+                            remove(id) => { root.mixer-remove(id); }
                             add => { root.action("source.add"); }
                         }
                     }
@@ -645,6 +649,7 @@ export component AppWindow inherits Window {
                     fader(id, v) => { root.mixer-fader(id, v); }
                     commit => { root.inspect-commit(); }
                     open-settings(id) => { root.mixer-select(id); main-keys.focus(); }
+                    remove-sound(id) => { root.mixer-remove(id); }
                     transition-set(k, v) => { root.transition-set(k, v); }
                     edit-shader => { root.action("transition.shader"); }
                 }
@@ -696,6 +701,8 @@ export component AppWindow inherits Window {
             folds <=> root.inspector-folds;
             audio: root.audio-inspect;
             open-sound(id) => { root.mixer-select(id); main-keys.focus(); }
+            remove-sound(id) => { root.mixer-remove(id); }
+            audio-remove => { root.audio-remove(); main-keys.focus(); }
             close-sound => { root.action("selection.clear"); main-keys.focus(); }
             audio-set(k, v) => { root.audio-set(k, v); }
             filter-add(i) => { root.filter-add(i); }

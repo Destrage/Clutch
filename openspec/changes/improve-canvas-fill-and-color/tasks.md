@@ -1,12 +1,12 @@
 # Tasks: improve-canvas-fill-and-color
 
 ## 1. Removing sounds from the mixer
-- [ ] 1.1 Mixer strip: right-click menu and menu button with Remove; sound settings panel:
-      "Remove source" button
-- [ ] 1.2 App: `mixer_remove(id)`: `RemoveSource` for a source heard in all scenes; for one in
+- [x] 1.1 Sound knobs: right-click menu (Settings, Mute, Remove); full mixer rows: Remove
+      button; sound settings panel: "Remove source" / "Remove from scene" button
+- [x] 1.2 App: `mixer_remove(id)`: `RemoveSource` for a source heard in all scenes; for one in
       the current scene, the `remove_selected` logic (item, or source when last use); toast
       with Ctrl+Z hint
-- [ ] 1.3 Test: removing a global source and undoing restores its volume and filters
+- [x] 1.3 Test: removing a global source and undoing restores its volume and filters
 
 ## 2. Presets and canvas settings
 - [ ] 2.1 Append the new presets to `PRESETS` (vertical 1080 × 1920 60, 1440 × 2560 60,
