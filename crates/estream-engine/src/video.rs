@@ -247,6 +247,8 @@ struct CanvasSlot {
     inputs: [ConvertInput; OUTPUT_RING],
     sequence: u64,
     background: wgpu::Color,
+    /// The gradient background, drawn under every item (`None` when solid).
+    paint: Option<CanvasPaint>,
     /// NV12 readback for CPU encoders (only while one is attached).
     readback: Option<ReadbackRing>,
     /// NV12 planes kept on the GPU for hardware encoders (only while one is attached).
@@ -333,6 +335,28 @@ fn source_frame<'a>(
 
 /// Reuses a cleared `Vec<DrawItem>` allocation with a new lifetime (in-place collect
 /// keeps capacity, so steady-state frames don't allocate).
+/// A canvas's gradient background, drawn once whenever it or the canvas size changes.
+struct CanvasPaint {
+    paint: estream_core::Paint,
+    size: (u32, u32),
+    _texture: estream_gpu::PaintTexture,
+    binding: wgpu::BindGroup,
+}
+
+impl CanvasPaint {
+    /// The gradient stretched over the whole canvas.
+    fn item(&self, size: Vec2) -> DrawItem<'_> {
+        DrawItem {
+            binding: &self.binding,
+            matrix: glam::Affine2::from_scale(size),
+            uv_min: Vec2::ZERO,
+            uv_max: Vec2::ONE,
+            opacity: 1.0,
+            blend: estream_core::BlendMode::Normal,
+        }
+    }
+}
+
 fn reuse<'a>(scratch: &mut Vec<DrawItem<'static>>) -> Vec<DrawItem<'a>> {
     std::mem::take(scratch)
         .into_iter()
@@ -398,6 +422,7 @@ pub struct VideoCore {
     gpu: GpuContext,
     compositor: Arc<Compositor>,
     converter: Arc<OutputConverter>,
+    gradients: estream_gpu::GradientRenderer,
     registry: SourceRegistry,
     sources: HashMap<SourceId, SourceSlot>,
     canvases: Vec<CanvasSlot>,
@@ -421,6 +446,7 @@ impl VideoCore {
             filters: Filters::new(&gpu, compositor.clone()),
             compositor,
             converter: OutputConverter::new(&gpu),
+            gradients: estream_gpu::GradientRenderer::new(&gpu),
             transitions: TransitionRenderer::new(&gpu),
             gpu,
             registry,
@@ -492,6 +518,7 @@ impl VideoCore {
             let ctx = SourceContext {
                 gpu: &self.gpu,
                 compositor: &self.compositor,
+                gradients: &self.gradients,
                 source: def.id,
             };
             // Audio-only types (microphones…) have no video part.
@@ -561,6 +588,7 @@ impl VideoCore {
                 None => self.create_canvas(cg, now),
             };
             let mut slot = slot;
+            slot.paint = self.canvas_paint(cg, slot.paint.take());
             match (&cg.preview, &slot.preview) {
                 (Some(_), None) => slot.preview = Some(self.create_preview(cg)),
                 (None, Some(_)) => slot.preview = None,
@@ -576,6 +604,25 @@ impl VideoCore {
         }
         self.filters.sync(&self.gpu, &graph.sources);
         self.graph = graph;
+    }
+
+    /// Keeps `current` when it still matches the canvas's gradient and size, else draws it anew.
+    fn canvas_paint(&self, cg: &CanvasGraph, current: Option<CanvasPaint>) -> Option<CanvasPaint> {
+        let paint = cg.background_paint.as_ref().filter(|p| p.is_gradient())?;
+        let size = (cg.width, cg.height);
+        if let Some(c) = current.filter(|c| c.paint == *paint && c.size == size) {
+            return Some(c);
+        }
+        let texture = self.gradients.render(&self.gpu, paint, cg.width, cg.height);
+        let binding = self
+            .compositor
+            .create_source_binding(&self.gpu, &texture.view);
+        Some(CanvasPaint {
+            paint: paint.clone(),
+            size,
+            _texture: texture,
+            binding,
+        })
     }
 
     fn create_preview(&self, cg: &CanvasGraph) -> StudioPreview {
@@ -614,6 +661,7 @@ impl VideoCore {
             inputs,
             sequence: 0,
             background: background(cg),
+            paint: None,
             readback: None,
             gpu_ring: None,
             from_renderer: None,
@@ -636,6 +684,7 @@ impl VideoCore {
                 let ctx = SourceContext {
                     gpu: &self.gpu,
                     compositor: &self.compositor,
+                    gradients: &self.gradients,
                     source: *id,
                 };
                 instance.tick(&ctx, encoder, now);
@@ -691,6 +740,9 @@ impl VideoCore {
         let slot = ((canvas.sequence + 1) % OUTPUT_RING as u64) as usize;
 
         let mut items = reuse(scratch);
+        if let Some(p) = &canvas.paint {
+            items.push(p.item(size));
+        }
         let running = cg
             .transition
             .as_ref()
@@ -734,6 +786,9 @@ impl VideoCore {
                     .from_renderer
                     .get_or_insert_with(|| CanvasRenderer::new(gpu, compositor.clone()));
                 let mut from = reuse(scratch_extra);
+                if let Some(p) = &canvas.paint {
+                    from.push(p.item(size));
+                }
                 push_items(sources, filters, &t.from, &mut from);
                 from_renderer.render(
                     gpu,
@@ -782,6 +837,9 @@ impl VideoCore {
         if preview_wanted && let (Some(preview), Some(flats)) = (&mut canvas.preview, &cg.preview) {
             let pslot = ((preview.sequence + 1) % OUTPUT_RING as u64) as usize;
             let mut items = reuse(scratch_extra);
+            if let Some(p) = &canvas.paint {
+                items.push(p.item(size));
+            }
             push_items(sources, filters, flats, &mut items);
             preview.renderer.render(
                 gpu,

@@ -9,9 +9,9 @@ use crate::settings::{
 };
 use crate::ui::{
     AppWindow, AudioInspect, CanvasBox, CanvasForm, CanvasSize, CanvasTab, DestinationRow,
-    FilterParamRow, FilterRow, Guide, Inspect, InspectorFolds, LayerRow, LiveRow, MediaInspect,
-    MixerStrip, PaletteEntry, Platform, Preset, PropRow, SceneRow, SettingsForm, SetupLine,
-    SourceType, Theme, VideoFilterRow,
+    FilterParamRow, FilterRow, GradientStopRow, Guide, Inspect, InspectorFolds, LayerRow, LiveRow,
+    MediaInspect, MixerStrip, PaletteEntry, Platform, Preset, PropRow, SceneRow, SettingsForm,
+    SetupLine, SourceType, Theme, VideoFilterRow,
 };
 use estream_core::{BlendMode, BoundsMode, CanvasId, ItemId, Rational, Rgba8, SceneId, SourceId};
 use estream_engine::{
@@ -68,6 +68,11 @@ pub struct App {
     /// Cache key and schema behind the current property rows.
     props: Option<((SourceId, String, u64), estream_engine::PropertySchema)>,
     props_generation: u64,
+    /// The selected color of a gradient being edited in the inspector.
+    gradient_stop: usize,
+    /// Canvas settings: the background being edited, and its selected gradient color.
+    canvas_bg: estream_core::Paint,
+    canvas_bg_stop: usize,
 
     geoms: Vec<ItemGeom>,
     selection: Option<ItemId>,
@@ -831,6 +836,9 @@ impl App {
             props_model: Rc::new(VecModel::default()),
             props: None,
             props_generation: 0,
+            gradient_stop: 0,
+            canvas_bg: estream_core::Paint::default(),
+            canvas_bg_stop: 0,
             geoms: Vec::new(),
             selection: None,
             selected_source: None,
@@ -4016,11 +4024,15 @@ impl App {
                 .map(|(label, _)| SharedString::from(*label))
                 .collect::<Vec<_>>(),
         )));
-        let background = Rgba8 {
-            a: 255,
-            ..canvas.background
-        };
-        w.set_canvas_form(CanvasForm {
+        self.canvas_bg = canvas
+            .background_paint
+            .clone()
+            .unwrap_or(estream_core::Paint::solid(Rgba8 {
+                a: 255,
+                ..canvas.background
+            }));
+        self.canvas_bg_stop = 0;
+        let mut form = CanvasForm {
             id: id_str(canvas.id),
             name: canvas.name.clone().into(),
             width: canvas.width as i32,
@@ -4031,12 +4043,43 @@ impl App {
                 .iter()
                 .position(|(_, r)| *r == canvas.fps)
                 .map_or(-1, |i| i as i32),
-            background: to_color(background),
-            background_hex: hex(background).into(),
             scale_items: true,
             locked: self.canvas_on_air(&snapshot, canvas.id),
-        });
+            ..Default::default()
+        };
+        self.canvas_bg_into(&mut form);
+        w.set_canvas_form(form);
         self.canvas_size_changed();
+    }
+
+    /// Shows the draft background (`self.canvas_bg`) in the Canvas settings form.
+    fn canvas_bg_into(&self, form: &mut CanvasForm) {
+        use estream_core::Paint;
+        let paint = &self.canvas_bg;
+        form.background_style = match paint {
+            Paint::Solid { .. } => 0,
+            Paint::Linear { .. } => 1,
+            Paint::Radial { .. } => 2,
+        };
+        let c = paint.first_color();
+        form.background = to_color(c);
+        form.background_hex = hex(c).into();
+        let mut row = PropRow {
+            key: "background".into(),
+            label: "Gradient".into(),
+            kind: "gradient".into(),
+            stop: self.canvas_bg_stop as i32,
+            ..Default::default()
+        };
+        fill_gradient_row(&mut row, paint);
+        form.background_gradient = row;
+    }
+
+    fn canvas_bg_changed(&mut self) {
+        let Some(w) = self.window() else { return };
+        let mut form = w.get_canvas_form();
+        self.canvas_bg_into(&mut form);
+        w.set_canvas_form(form);
     }
 
     /// Keeps the Size dropdown on the preset matching the typed size, or on Custom.
@@ -4052,32 +4095,62 @@ impl App {
     }
 
     pub fn canvas_background_color(&mut self, color: slint::Color) {
-        let Some(w) = self.window() else { return };
-        let c = Rgba8 {
+        self.canvas_bg = estream_core::Paint::solid(Rgba8 {
             a: 255,
             ..from_color(color)
-        };
-        let mut form = w.get_canvas_form();
-        form.background = to_color(c);
-        form.background_hex = hex(c).into();
-        w.set_canvas_form(form);
+        });
+        self.canvas_bg_changed();
     }
 
     pub fn canvas_background_text(&mut self, text: &str) {
-        let Some(w) = self.window() else { return };
-        let mut form = w.get_canvas_form();
         match parse_hex_color(text) {
-            Some(c) => {
-                let c = Rgba8 { a: 255, ..c };
-                form.background = to_color(c);
-                form.background_hex = hex(c).into();
-            }
+            Some(c) => self.canvas_background_color(to_color(c)),
             None => {
-                form.background_hex = hex(from_color(form.background)).into();
                 self.toast("Type a color as #rrggbb".into(), true);
+                self.canvas_bg_changed();
             }
         }
-        w.set_canvas_form(form);
+    }
+
+    /// Solid color (0), linear (1) or radial (2) gradient. A gradient made from a solid color
+    /// starts from it.
+    pub fn canvas_background_style(&mut self, style: i32) {
+        use estream_core::Paint;
+        let c = self.canvas_bg.first_color();
+        let gradient = if self.canvas_bg.is_gradient() {
+            self.canvas_bg.clone()
+        } else {
+            let accent = Rgba8::new(108, 140, 255, 255);
+            Paint::linear(c, if c == accent { Rgba8::BLACK } else { accent })
+        };
+        self.canvas_bg = match style {
+            1 => gradient.to_linear(),
+            2 => gradient.to_radial(),
+            _ => Paint::solid(c),
+        };
+        self.canvas_bg_stop = 0;
+        self.canvas_bg_changed();
+    }
+
+    pub fn canvas_background_gradient(&mut self, action: &str, index: i32, value: f32) {
+        let mut stop = self.canvas_bg_stop;
+        match edit_gradient(&mut self.canvas_bg, &mut stop, action, index, value) {
+            Ok(_) => self.canvas_bg_stop = stop,
+            Err(e) => self.toast(e, true),
+        }
+        self.canvas_bg_changed();
+    }
+
+    pub fn canvas_background_gradient_color(&mut self, index: i32, color: slint::Color) {
+        self.canvas_bg_stop = set_stop_color(&mut self.canvas_bg, index, from_color(color));
+        self.canvas_bg_changed();
+    }
+
+    pub fn canvas_background_gradient_text(&mut self, index: i32, text: &str) {
+        match parse_hex_color(text) {
+            Some(c) => self.canvas_background_gradient_color(index, to_color(c)),
+            None => self.toast("Use a color like #ff8800 or #ff880080".into(), true),
+        }
     }
 
     pub fn canvas_settings_cancel(&mut self) {
@@ -4091,7 +4164,7 @@ impl App {
         let Some(w) = self.window() else { return };
         let Some(engine) = &self.engine else { return };
         let snapshot = engine.snapshot();
-        let mut form = w.get_canvas_form();
+        let form = w.get_canvas_form();
         let Some(canvas) = parse_id(&form.id)
             .map(CanvasId)
             .and_then(|c| snapshot.canvas(c))
@@ -4099,9 +4172,11 @@ impl App {
             self.canvas_settings_cancel();
             return;
         };
-        // Typed hex that wasn't confirmed with Enter still counts.
-        if let Some(c) = parse_hex_color(&form.background_hex) {
-            form.background = to_color(Rgba8 { a: 255, ..c });
+        // A typed solid color that wasn't confirmed with Enter still counts.
+        if !self.canvas_bg.is_gradient()
+            && let Some(c) = parse_hex_color(&form.background_hex)
+        {
+            self.canvas_bg = estream_core::Paint::solid(Rgba8 { a: 255, ..c });
         }
         let locked = self.canvas_on_air(&snapshot, canvas.id);
         let (width, height, fps) = if locked {
@@ -4115,13 +4190,18 @@ impl App {
             (even(form.width), even(form.height), fps)
         };
         let name = form.name.trim().to_owned();
-        let background = from_color(form.background);
+        let current = canvas
+            .background_paint
+            .clone()
+            .unwrap_or(estream_core::Paint::solid(canvas.background));
+        let background = self.canvas_bg.normalized();
         let patch = estream_engine::CanvasPatch {
             name: (!name.is_empty() && name != canvas.name).then_some(name),
             width: (width != canvas.width).then_some(width),
             height: (height != canvas.height).then_some(height),
             fps: (fps != canvas.fps).then_some(fps),
-            background: (background != canvas.background).then_some(background),
+            background: None,
+            background_paint: (background != current).then_some(background),
         };
         let mut commands = Vec::new();
         if patch != estream_engine::CanvasPatch::default() {
@@ -9343,6 +9423,9 @@ impl App {
         if self.props.as_ref().is_some_and(|p| p.0 == key) {
             return;
         }
+        if self.props.as_ref().is_none_or(|p| p.0.0 != source.id) {
+            self.gradient_stop = 0;
+        }
         let Some(schema) = self.engine.as_ref().and_then(|e| {
             e.registry()
                 .get(&source.kind)
@@ -9356,7 +9439,11 @@ impl App {
         let rows = schema
             .properties
             .iter()
-            .map(|p| prop_row(p, &settings[&p.key]))
+            .map(|p| {
+                let mut row = prop_row(p, &settings[&p.key]);
+                row.stop = self.gradient_stop as i32;
+                row
+            })
             .collect();
         sync_model(&self.props_model, rows);
         self.props = Some((key, schema));
@@ -9399,6 +9486,59 @@ impl App {
             key,
             serde_json::to_value(from_color(color)).unwrap_or_default(),
         );
+    }
+
+    /// The current source's value for `key`, with the schema's default when it isn't set.
+    fn prop_value(&self, key: &str) -> Option<serde_json::Value> {
+        let (snapshot, _, _) = self.canvas_and_scene()?;
+        let def = snapshot.source(self.current_source(&snapshot)?)?;
+        let schema = &self.props.as_ref()?.1;
+        Some(schema.with_defaults(&def.settings)[key].clone())
+    }
+
+    /// The gradient being edited in `key`.
+    fn prop_paint(&self, key: &str) -> Option<estream_core::Paint> {
+        if !matches!(self.prop(key)?.kind, PropKind::Gradient) {
+            return None;
+        }
+        serde_json::from_value::<estream_core::Paint>(self.prop_value(key)?)
+            .ok()
+            .map(|p| p.normalized())
+    }
+
+    /// Gradient edits from the inspector (see [`edit_gradient`]).
+    pub fn prop_gradient(&mut self, key: &str, action: &str, index: i32, value: f32) {
+        let Some(mut paint) = self.prop_paint(key) else {
+            return;
+        };
+        let mut stop = self.gradient_stop;
+        match edit_gradient(&mut paint, &mut stop, action, index, value) {
+            Ok(changed) => {
+                self.gradient_stop = stop;
+                if changed {
+                    self.set_setting(key, serde_json::to_value(&paint).unwrap_or_default());
+                } else {
+                    self.props_generation += 1;
+                    self.refresh();
+                }
+            }
+            Err(e) => self.toast(e, true),
+        }
+    }
+
+    pub fn prop_gradient_color(&mut self, key: &str, index: i32, color: slint::Color) {
+        let Some(mut paint) = self.prop_paint(key) else {
+            return;
+        };
+        self.gradient_stop = set_stop_color(&mut paint, index, from_color(color));
+        self.set_setting(key, serde_json::to_value(&paint).unwrap_or_default());
+    }
+
+    pub fn prop_gradient_text(&mut self, key: &str, index: i32, text: &str) {
+        match parse_hex_color(text) {
+            Some(c) => self.prop_gradient_color(key, index, to_color(c)),
+            None => self.toast("Use a color like #ff8800 or #ff880080".into(), true),
+        }
     }
 
     pub fn prop_index(&mut self, key: &str, index: i32) {
@@ -11071,6 +11211,109 @@ fn db_to_fader(db: f32) -> f32 {
     }
 }
 
+/// Applies a gradient edit to `paint`: "select", "move", "add" or "remove" a color (`index`),
+/// or set the "angle", center ("cx", "cy") or "radius" (`value`). `selected` follows the edited
+/// color. `Ok(true)` when the paint changed, `Ok(false)` when only the selection did, and an
+/// error message when the edit isn't possible.
+fn edit_gradient(
+    paint: &mut estream_core::Paint,
+    selected: &mut usize,
+    action: &str,
+    index: i32,
+    value: f32,
+) -> Result<bool, String> {
+    use estream_core::{GradientStop, Paint, paint::MAX_STOPS};
+    let i = usize::try_from(index).unwrap_or(0);
+    let count = paint.stops().len();
+    let at = value.clamp(0.0, 1.0);
+    let color_there = paint.color_at(at);
+    match (action, &mut *paint) {
+        ("select", _) => {
+            *selected = i.min(count.saturating_sub(1));
+            return Ok(false);
+        }
+        (_, Paint::Solid { .. }) => return Ok(false),
+        ("add", Paint::Linear { stops, .. } | Paint::Radial { stops, .. }) => {
+            if count >= MAX_STOPS {
+                return Err(format!("A gradient has at most {MAX_STOPS} colors"));
+            }
+            // After every color at or before it.
+            let pos = stops.iter().filter(|s| s.at <= at).count();
+            stops.insert(pos, GradientStop::new(color_there, at));
+            *selected = pos;
+        }
+        ("remove", Paint::Linear { stops, .. } | Paint::Radial { stops, .. }) => {
+            if count <= 2 {
+                return Err("A gradient needs at least 2 colors".into());
+            }
+            if i < stops.len() {
+                stops.remove(i);
+            }
+        }
+        // A color moves only between its neighbours, so the order (and the handle being
+        // dragged) stays the same.
+        ("move", Paint::Linear { stops, .. } | Paint::Radial { stops, .. }) => {
+            if i < stops.len() {
+                let lo = if i > 0 { stops[i - 1].at } else { 0.0 };
+                let hi = stops.get(i + 1).map_or(1.0, |s| s.at);
+                stops[i].at = value.clamp(lo, hi);
+            }
+        }
+        ("angle", Paint::Linear { angle, .. }) => *angle = value.round(),
+        ("cx" | "cy", Paint::Radial { center, .. }) => {
+            center[usize::from(action == "cy")] = value.clamp(0.0, 1.0);
+        }
+        ("radius", Paint::Radial { radius, .. }) => *radius = value.clamp(0.05, 3.0),
+        _ => return Ok(false),
+    }
+    *paint = paint.normalized();
+    *selected = (*selected).min(paint.stops().len().saturating_sub(1));
+    Ok(true)
+}
+
+/// Sets the color of stop `index` and returns it as the selected stop.
+fn set_stop_color(paint: &mut estream_core::Paint, index: i32, color: Rgba8) -> usize {
+    use estream_core::Paint;
+    let i = usize::try_from(index).unwrap_or(0);
+    if let Paint::Linear { stops, .. } | Paint::Radial { stops, .. } = paint
+        && let Some(s) = stops.get_mut(i)
+    {
+        s.color = color;
+    }
+    *paint = paint.normalized();
+    i.min(paint.stops().len().saturating_sub(1))
+}
+
+/// Fills a "gradient" row: its stops, shape and a preview strip (stops left to right).
+fn fill_gradient_row(row: &mut PropRow, paint: &estream_core::Paint) {
+    use estream_core::Paint;
+    let stops: Vec<GradientStopRow> = paint
+        .stops()
+        .iter()
+        .map(|s| GradientStopRow {
+            at: s.at,
+            color: to_color(s.color),
+            hex: hex(s.color).into(),
+        })
+        .collect();
+    row.stops = ModelRc::new(VecModel::from(stops));
+    match paint {
+        Paint::Linear { angle, .. } => row.angle = *angle,
+        Paint::Radial { center, radius, .. } => {
+            row.radial = true;
+            (row.center_x, row.center_y, row.radius) = (center[0], center[1], *radius);
+        }
+        Paint::Solid { .. } => {}
+    }
+    const WIDTH: u32 = 256;
+    let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(WIDTH, 1);
+    for (x, px) in buffer.make_mut_slice().iter_mut().enumerate() {
+        let c = paint.color_at((x as f32 + 0.5) / WIDTH as f32);
+        *px = slint::Rgba8Pixel::new(c.r, c.g, c.b, c.a);
+    }
+    row.preview = slint::Image::from_rgba8(buffer);
+}
+
 /// Builds a property row for the inspector from a schema property and its current value.
 fn prop_row(p: &estream_engine::Property, value: &serde_json::Value) -> PropRow {
     let mut row = PropRow {
@@ -11116,6 +11359,13 @@ fn prop_row(p: &estream_engine::Property, value: &serde_json::Value) -> PropRow 
             let c = serde_json::from_value::<Rgba8>(value.clone()).unwrap_or(Rgba8::WHITE);
             row.color = to_color(c);
             row.text = hex(c).into();
+        }
+        PropKind::Gradient => {
+            row.kind = "gradient".into();
+            let paint = serde_json::from_value::<estream_core::Paint>(value.clone())
+                .unwrap_or_default()
+                .normalized();
+            fill_gradient_row(&mut row, &paint);
         }
         PropKind::Select { options } => {
             row.kind = "select".into();
@@ -11321,6 +11571,12 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     on!(on_prop_number, |a, k, v| a.prop_number(&k, v));
     on!(on_prop_text, |a, k, v| a.prop_text(&k, &v));
     on!(on_prop_color, |a, k, v| a.prop_color(&k, v));
+    on!(on_prop_gradient, |a, k, act, i, v| a
+        .prop_gradient(&k, &act, i, v));
+    on!(on_prop_gradient_color, |a, k, i, c| a
+        .prop_gradient_color(&k, i, c));
+    on!(on_prop_gradient_text, |a, k, i, t| a
+        .prop_gradient_text(&k, i, &t));
     on!(on_prop_index, |a, k, i| a.prop_index(&k, i));
     on!(on_prop_browse, |a, k| a.prop_browse(&k));
     on!(on_prop_refresh, |a| a.prop_refresh());
@@ -11340,6 +11596,14 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
         .canvas_background_color(c));
     on!(on_canvas_background_text, |a, t| a
         .canvas_background_text(&t));
+    on!(on_canvas_background_style, |a, s| a
+        .canvas_background_style(s));
+    on!(on_canvas_background_gradient, |a, act, i, v| a
+        .canvas_background_gradient(&act, i, v));
+    on!(on_canvas_background_gradient_color, |a, i, c| a
+        .canvas_background_gradient_color(i, c));
+    on!(on_canvas_background_gradient_text, |a, i, t| a
+        .canvas_background_gradient_text(i, &t));
     on!(on_canvas_settings_apply, |a| a.canvas_settings_apply());
     on!(on_canvas_settings_cancel, |a| a.canvas_settings_cancel());
     on!(on_settings_set, |a, k, v| a.settings_set(&k, v));
@@ -11479,6 +11743,57 @@ mod tests {
 
         applied.inverse.apply(&mut p).unwrap();
         assert_eq!(p, before);
+    }
+
+    #[test]
+    fn gradient_edits_keep_order_and_limits() {
+        use estream_core::Paint;
+        let red = Rgba8::new(255, 0, 0, 255);
+        let blue = Rgba8::new(0, 0, 255, 255);
+        let mut paint = Paint::linear(red, blue);
+        let mut stop = 0;
+
+        // Adding takes the color already there and selects the new stop.
+        assert_eq!(
+            edit_gradient(&mut paint, &mut stop, "add", -1, 0.5),
+            Ok(true)
+        );
+        assert_eq!(stop, 1);
+        assert_eq!(paint.stops()[1].color, Rgba8::new(188, 0, 188, 255));
+
+        // A dragged stop can't pass its neighbours.
+        edit_gradient(&mut paint, &mut stop, "move", 1, 0.95).unwrap();
+        edit_gradient(&mut paint, &mut stop, "move", 1, 2.0).unwrap();
+        assert_eq!(paint.stops()[1].at, 1.0);
+        edit_gradient(&mut paint, &mut stop, "move", 1, -1.0).unwrap();
+        assert_eq!(paint.stops()[1].at, 0.0);
+
+        // Never fewer than 2 or more than 8 colors.
+        edit_gradient(&mut paint, &mut stop, "remove", 1, 0.0).unwrap();
+        assert!(edit_gradient(&mut paint, &mut stop, "remove", 0, 0.0).is_err());
+        for _ in 0..6 {
+            edit_gradient(&mut paint, &mut stop, "add", -1, 0.3).unwrap();
+        }
+        assert_eq!(paint.stops().len(), 8);
+        assert!(edit_gradient(&mut paint, &mut stop, "add", -1, 0.3).is_err());
+
+        // Shape settings only apply to the matching kind.
+        edit_gradient(&mut paint, &mut stop, "angle", -1, 179.6).unwrap();
+        assert!(matches!(paint, Paint::Linear { angle: 180.0, .. }));
+        assert_eq!(
+            edit_gradient(&mut paint, &mut stop, "radius", -1, 2.0),
+            Ok(false)
+        );
+
+        // Selecting changes nothing else.
+        let copy = paint.clone();
+        assert_eq!(
+            edit_gradient(&mut paint, &mut stop, "select", 3, 0.0),
+            Ok(false)
+        );
+        assert_eq!((stop, &paint), (3, &copy));
+        assert_eq!(set_stop_color(&mut paint, 2, red), 2);
+        assert_eq!(paint.stops()[2].color, red);
     }
 
     #[test]

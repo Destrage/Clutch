@@ -64,6 +64,10 @@ export component AppWindow inherits Window {
     callback canvas-size-changed();
     callback canvas-background-color(color);
     callback canvas-background-text(string);
+    callback canvas-background-style(int);
+    callback canvas-background-gradient(string, int, float);
+    callback canvas-background-gradient-color(int, color);
+    callback canvas-background-gradient-text(int, string);
     callback canvas-settings-apply();
     callback canvas-settings-cancel();
     callback canvas-rename(string, string);
@@ -337,6 +341,9 @@ export component AppWindow inherits Window {
     callback prop-number(string, float);
     callback prop-text(string, string);
     callback prop-color(string, color);
+    callback prop-gradient(string, string, int, float);
+    callback prop-gradient-color(string, int, color);
+    callback prop-gradient-text(string, int, string);
     callback prop-index(string, int);
     callback prop-browse(string);
     callback prop-refresh();
@@ -583,6 +590,9 @@ export component AppWindow inherits Window {
                             prop-number(k, v) => { root.prop-number(k, v); }
                             prop-text(k, v) => { root.prop-text(k, v); }
                             prop-color(k, v) => { root.prop-color(k, v); }
+                            prop-gradient(k, a, i, v) => { root.prop-gradient(k, a, i, v); }
+                            prop-gradient-color(k, i, c) => { root.prop-gradient-color(k, i, c); }
+                            prop-gradient-text(k, i, t) => { root.prop-gradient-text(k, i, t); }
                             prop-index(k, i) => { root.prop-index(k, i); }
                             prop-browse(k) => { root.prop-browse(k); }
                             prop-refresh => { root.prop-refresh(); }
@@ -989,6 +999,10 @@ export component AppWindow inherits Window {
         size-changed => { root.canvas-size-changed(); }
         background-color(c) => { root.canvas-background-color(c); }
         background-text(t) => { root.canvas-background-text(t); }
+        background-style(i) => { root.canvas-background-style(i); }
+        background-gradient(a, i, v) => { root.canvas-background-gradient(a, i, v); }
+        background-gradient-color(i, c) => { root.canvas-background-gradient-color(i, c); }
+        background-gradient-text(i, t) => { root.canvas-background-gradient-text(i, t); }
         apply => {
             root.canvas-settings-apply();
             if (root.canvas-form.id == "") { main-keys.focus(); }

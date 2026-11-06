@@ -4,21 +4,24 @@
 `estream-core` gets one paint type, used by the Color source, item fill and canvas background:
 
 ```rust
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Paint {
-    Solid(Rgba8),
-    Linear { angle_deg: f32, stops: Vec<GradientStop> },
-    Radial { center: [f32; 2], radius: f32, stops: Vec<GradientStop> },
+    Solid { color: Rgba8 },
+    Linear { angle: f32, stops: Vec<GradientStop> },          // CSS angle: 90 = left to right
+    Radial { center: [f32; 2], radius: f32, stops: Vec<GradientStop> }, // radius 1 = farthest corner
 }
 pub struct GradientStop { pub color: Rgba8, pub at: f32 } // at in 0..=1
 ```
 
-- 2 to 8 stops, sorted by `at`. Validation clamps and sorts; fewer than 2 stops reads as solid.
-- Interpolation is in linear light, which avoids the grey band between complementary colors that
-  sRGB interpolation gives.
-- Gradients are rendered once, when settings change, never per frame. A small WGSL pass draws
-  the gradient into an `Rgba8UnormSrgb` texture at the target's size (long side capped at 4096)
-  with a baked ordered dither, so the 8-bit encode doesn't band. Solid paint keeps today's 1×1
-  texture.
+- 2 to 8 stops, sorted by `at`. `normalized()` clamps and sorts; fewer than 2 stops is solid.
+- Interpolation is in linear light (premultiplied), which avoids the grey band between
+  complementary colors that sRGB interpolation gives. `Paint::color_at` is the CPU reference;
+  the GPU output is tested against it.
+- Gradients are rendered once, when settings change, never per frame, by one shared
+  `GradientRenderer` (in `SourceContext` and the video thread). A small WGSL pass sRGB-encodes
+  each pixel, adds +-half a level of interleaved gradient noise, and writes an `Rgba8Unorm`
+  texture (long side capped at 4096) that is sampled through an `Rgba8UnormSrgb` view. The
+  dither is even in brightness, so the 8-bit encode doesn't band. Solid paint is one texel.
 - Property system: a new `PropKind::Gradient` whose value is the serialized `Paint`. The Color
   source keeps its `color` key and gains `style` (`solid` | `linear` | `radial`) and `gradient`.
   With `style` missing or `solid`, it renders `color` exactly as today.

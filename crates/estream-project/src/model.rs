@@ -28,8 +28,13 @@ pub struct Canvas {
     pub width: u32,
     pub height: u32,
     pub fps: Rational,
+    /// The solid background, or the first color of `background_paint` (what older versions
+    /// show).
     #[serde(default = "default_background")]
     pub background: Rgba8,
+    /// A gradient background, drawn under every item.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_paint: Option<estream_core::Paint>,
     #[serde(default)]
     pub active_scene: Option<SceneId>,
 }
@@ -47,6 +52,7 @@ impl Canvas {
             height,
             fps,
             background: Rgba8::BLACK,
+            background_paint: None,
             active_scene: None,
         }
     }

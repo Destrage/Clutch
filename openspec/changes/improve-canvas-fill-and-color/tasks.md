@@ -24,17 +24,20 @@
 - [ ] 2.7 Check: stream and record a 2160 × 3840 at 60 fps canvas with NVENC H.264 and HEVC
 
 ## 3. Paint and gradients
-- [ ] 3.1 `estream-core`: `Paint`, `GradientStop`; validation (2 to 8 stops, sorted, clamped);
+- [x] 3.1 `estream-core`: `Paint`, `GradientStop`; validation (2 to 8 stops, sorted, clamped);
       serde tests
-- [ ] 3.2 `estream-gpu`: gradient pass (linear and radial, linear-light blend, baked ordered
-      dither) rendering into a texture; golden-image test
-- [ ] 3.3 `PropKind::Gradient` in the property system, with validation
-- [ ] 3.4 Color source: `style` and `gradient` settings; render once on update; old settings
-      render the solid color unchanged (test)
-- [ ] 3.5 `Canvas::background_paint` in the model (serde default `None`) and
+- [x] 3.2 `estream-gpu`: gradient pass (linear and radial, linear-light blend, baked
+      interleaved-gradient-noise dither) rendering into a texture; pixel tests against the
+      CPU reference (`Paint::color_at`) and a banding test
+- [x] 3.3 `PropKind::Gradient` in the property system, with validation, and its inspector
+      editor (see 4.4)
+- [x] 3.4 Color source: `style` and `gradient` settings; render once on update; old settings
+      render the solid color unchanged (tests, plus an end-to-end render)
+- [x] 3.5 `Canvas::background_paint` in the model (serde default `None`) and
       `CanvasPatch::background_paint` (applied and inverted by `UpdateCanvas`, tested);
       `background` written as the solid color or first stop; renderer draws a cached gradient
-      texture first; Canvas settings gets Color / Gradient
+      texture first in program, transition and Preview passes (end-to-end test); Canvas
+      settings gets Solid color / Linear gradient / Radial gradient
 
 ## 4. Color picker
 - [ ] 4.1 Picker popup widget: hue ring image (Rust, once per size), saturation/brightness
@@ -42,8 +45,11 @@
 - [ ] 4.2 Recent colors (last 12) in settings
 - [ ] 4.3 Every `color` property, the canvas background and item fill open the picker; live
       edits coalesce; `History::seal` on close (test: one undo step per session)
-- [ ] 4.4 Gradient editor: stop bar (click adds a stop with the color at that point, drag off or
-      Delete removes), angle dial, radial center
+- [x] 4.4 Gradient editor: preview bar with a handle per color (click the bar to add a color
+      with the color at that point, drag a handle between its neighbours), Remove button,
+      selected color's hex and swatches, Angle slider (linear), Center X/Y and Size sliders
+      (radial); shared by the inspector and Canvas settings. Its color controls switch to the
+      picker in 4.3
 - [ ] 4.5 Eyedropper from the Preview: crosshair and loupe; engine 1 × 1 readback into a reused
       staging buffer, reply on the event channel; no cost when not picking
 - [ ] 4.6 Screen color picking trait (`pick_screen_color`); Windows: frozen screenshot in

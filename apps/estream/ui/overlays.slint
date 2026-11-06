@@ -3,6 +3,7 @@ import { Icons } from "icons.slint";
 import { PaletteEntry, Preset, SetupLine, SourceType, SettingsForm, DestinationRow, LiveRow, CanvasForm, CanvasSize } from "types.slint";
 import { Button, IconButton, Icon, Badge, TextField, TextArea, NumberField, Select, Slider, Toggle, SectionTitle } from "widgets.slint";
 import { KindIcon } from "panels.slint";
+import { PropEditor } from "inspector.slint";
 
 // Full-window scrim with a centered card. Clicking the scrim calls `dismiss`.
 export component Modal inherits Rectangle {
@@ -1855,6 +1856,10 @@ export component CanvasSettingsDialog inherits Modal {
     callback size-changed();
     callback background-color(color);
     callback background-text(string);
+    callback background-style(int);
+    callback background-gradient(string, int, float);
+    callback background-gradient-color(int, color);
+    callback background-gradient-text(int, string);
     callback apply();
     callback cancel();
 
@@ -1941,6 +1946,17 @@ export component CanvasSettingsDialog inherits Modal {
         HorizontalLayout {
             spacing: 8px;
             Text { text: "Background"; width: 84px; color: Theme.text-muted; font-size: Theme.font-m; vertical-alignment: center; }
+            Select {
+                horizontal-stretch: 1;
+                label: "Background";
+                options: ["Solid color", "Linear gradient", "Radial gradient"];
+                current-index: root.form.background-style;
+                selected(i) => { root.background-style(i); }
+            }
+        }
+        if root.form.background-style == 0: HorizontalLayout {
+            spacing: 8px;
+            Rectangle { width: 84px; }
             Rectangle {
                 width: 28px;
                 height: 28px;
@@ -1957,7 +1973,18 @@ export component CanvasSettingsDialog inherits Modal {
                 edited(t) => { root.form.background-hex = t; }
             }
         }
-        HorizontalLayout {
+        if root.form.background-style != 0: HorizontalLayout {
+            spacing: 8px;
+            Rectangle { width: 84px; }
+            PropEditor {
+                horizontal-stretch: 1;
+                prop: root.form.background-gradient;
+                gradient(a, i, v) => { root.background-gradient(a, i, v); }
+                gradient-color(i, c) => { root.background-gradient-color(i, c); }
+                gradient-text(i, t) => { root.background-gradient-text(i, t); }
+            }
+        }
+        if root.form.background-style == 0: HorizontalLayout {
             spacing: 6px;
             Rectangle { width: 84px; }
             for swatch in [#000000, #ffffff, #14161c, #6c8cff, #f0435a, #3dd68c, #f2b84b, #b06cff]: Rectangle {

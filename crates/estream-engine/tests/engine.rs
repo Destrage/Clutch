@@ -415,6 +415,53 @@ fn engine_rejects_invalid_commands_without_changes() {
     assert!(!engine.undo().unwrap(), "nothing recorded");
 }
 
+fn render_once(project: &Project) -> Vec<u8> {
+    let gpu = gpu();
+    let mut core = VideoCore::new(gpu.clone(), SourceRegistry::with_builtins());
+    core.sync(Arc::new(RenderGraph::build(project, 1)), Timestamp::ZERO);
+    let outputs = core.render_now(Timestamp::ZERO);
+    let frame = outputs[0].latest().unwrap();
+    readback::read_texture(&gpu, frame.preview).unwrap()
+}
+
+/// Checks a row of rendered pixels against the gradient's own colors at each pixel center
+/// (the dither and the trip through the canvas allow a few levels).
+fn assert_row_matches(pixels: &[u8], width: u32, paint: &estream_core::Paint) {
+    for x in (0..width).step_by(7).chain([width - 1]) {
+        let i = ((8 * width + x) * 4) as usize;
+        let got = &pixels[i..i + 4];
+        let want = paint.color_at((x as f32 + 0.5) / width as f32).to_array();
+        assert!(
+            got.iter().zip(want).all(|(a, b)| a.abs_diff(b) <= 4),
+            "x {x}: {got:?} vs {want:?}"
+        );
+    }
+}
+
+#[test]
+fn gradient_canvas_background_shows_where_no_item_covers() {
+    let mut project = Project::new_default(256, 16, Rational::fps(30));
+    let paint = estream_core::Paint::linear(Rgba8::new(255, 0, 0, 255), Rgba8::new(0, 0, 255, 255));
+    project.canvases[0].background_paint = Some(paint.clone());
+    assert_row_matches(&render_once(&project), 256, &paint);
+}
+
+#[test]
+fn gradient_color_source_renders_its_gradient() {
+    let mut project = Project::new_default(128, 16, Rational::fps(30));
+    let paint = estream_core::Paint::linear(Rgba8::WHITE, Rgba8::BLACK);
+    let source = SourceDef::new(
+        "Fade",
+        "color",
+        serde_json::json!({ "width": 128, "height": 16, "style": "linear", "gradient": paint }),
+    );
+    let mut item = SceneItem::source(source.id);
+    item.transform = fill(128.0, 16.0);
+    project.scenes[0].items = vec![item];
+    project.sources = vec![source];
+    assert_row_matches(&render_once(&project), 128, &paint);
+}
+
 /// Golden image of a fixed composite scene rendered headless at t = 0.
 /// Set `ESTREAM_BLESS=1` to (re)generate the reference image.
 #[test]

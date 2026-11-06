@@ -85,6 +85,10 @@ pub struct CanvasPatch {
     pub fps: Option<Rational>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background: Option<Rgba8>,
+    /// A gradient background, or a solid one (which clears the gradient). Also sets
+    /// `Canvas::background` to the solid color or first stop.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background_paint: Option<estream_core::Paint>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -357,6 +361,17 @@ impl Command {
                 }
                 if let Some(v) = patch.background {
                     old.background = Some(std::mem::replace(&mut c.background, v));
+                }
+                if let Some(p) = patch.background_paint {
+                    let p = p.normalized();
+                    old.background_paint = Some(
+                        c.background_paint
+                            .clone()
+                            .unwrap_or(estream_core::Paint::solid(c.background)),
+                    );
+                    old.background.get_or_insert(c.background);
+                    c.background = p.first_color();
+                    c.background_paint = p.is_gradient().then_some(p);
                 }
                 Ok(applied(
                     UpdateCanvas { canvas, patch: old },
@@ -900,6 +915,49 @@ mod tests {
 
         applied.inverse.apply(&mut p).unwrap();
         assert_eq!(p, before, "source, items, ids and order fully restored");
+    }
+
+    #[test]
+    fn canvas_background_gradient_applies_and_undoes() {
+        let (mut p, _) = project();
+        let canvas = p.canvases[0].id;
+        let before = p.clone();
+        let red = Rgba8::new(255, 0, 0, 255);
+        let gradient = estream_core::Paint::linear(red, Rgba8::WHITE);
+        let applied = Command::UpdateCanvas {
+            canvas,
+            patch: CanvasPatch {
+                background_paint: Some(gradient.clone()),
+                ..Default::default()
+            },
+        }
+        .apply(&mut p)
+        .unwrap();
+        assert_eq!(p.canvases[0].background_paint, Some(gradient));
+        assert_eq!(
+            p.canvases[0].background, red,
+            "older versions see the first color"
+        );
+        let gradient_state = p.clone();
+
+        // A solid paint clears the gradient.
+        let blue = Rgba8::new(0, 0, 255, 255);
+        let solid = Command::UpdateCanvas {
+            canvas,
+            patch: CanvasPatch {
+                background_paint: Some(estream_core::Paint::solid(blue)),
+                ..Default::default()
+            },
+        }
+        .apply(&mut p)
+        .unwrap();
+        assert_eq!(p.canvases[0].background_paint, None);
+        assert_eq!(p.canvases[0].background, blue);
+
+        solid.inverse.apply(&mut p).unwrap();
+        assert_eq!(p, gradient_state);
+        applied.inverse.apply(&mut p).unwrap();
+        assert_eq!(p, before);
     }
 
     #[test]

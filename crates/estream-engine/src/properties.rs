@@ -39,6 +39,8 @@ pub enum PropKind {
     },
     /// `Rgba8` object (`{"r":..,"g":..,"b":..,"a":..}`).
     Color,
+    /// A `Paint` object: a solid color or a linear or radial gradient.
+    Gradient,
     /// File path with extension filters (e.g. `["png", "jpg"]`).
     Path {
         filters: Vec<String>,
@@ -147,6 +149,9 @@ impl Property {
             PropKind::Color => serde_json::from_value::<estream_core::Rgba8>(value.clone())
                 .map(|_| ())
                 .map_err(|_| format!("{label} must be a color")),
+            PropKind::Gradient => serde_json::from_value::<estream_core::Paint>(value.clone())
+                .map(|_| ())
+                .map_err(|_| format!("{label} must be a color or gradient")),
             // Options are dynamic (devices come and go), so any value of a known
             // option type is accepted; sources report unavailability at runtime.
             PropKind::Select { options } => {
@@ -235,6 +240,29 @@ mod tests {
         );
         assert!(schema().validate(&json!({ "cursor": "yes" })).is_err());
         assert!(schema().validate(&json!({ "color": {"r": 0} })).is_err());
+    }
+
+    #[test]
+    fn gradients_must_be_paints() {
+        let schema = PropertySchema::new(vec![Property::new(
+            "gradient",
+            "Gradient",
+            PropKind::Gradient,
+            json!({ "kind": "solid", "color": {"r":0,"g":0,"b":0,"a":255} }),
+        )]);
+        let red = json!({"r":255,"g":0,"b":0,"a":255});
+        let linear = json!({
+            "kind": "linear",
+            "angle": 90.0,
+            "stops": [{ "color": red, "at": 0.0 }, { "color": red, "at": 1.0 }],
+        });
+        assert!(schema.validate(&json!({ "gradient": linear })).is_ok());
+        assert!(
+            schema
+                .validate(&json!({ "gradient": { "kind": "conic" } }))
+                .is_err()
+        );
+        assert!(schema.validate(&json!({ "gradient": "red" })).is_err());
     }
 
     #[test]

@@ -55,6 +55,8 @@ pub struct CanvasGraph {
     pub height: u32,
     pub fps: Rational,
     pub background: Rgba8,
+    /// A gradient background (`None` for a solid one).
+    pub background_paint: Option<estream_core::Paint>,
     /// Visible items of the active (program) scene, bottom first.
     pub items: Vec<FlatItem>,
     /// A running transition into `items`.
@@ -142,6 +144,7 @@ impl RenderGraph {
                     height: canvas.height,
                     fps: canvas.fps,
                     background: canvas.background,
+                    background_paint: canvas.background_paint.clone(),
                     items: scene_items(canvas.active_scene),
                     transition,
                     preview: view

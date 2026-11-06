@@ -7,6 +7,7 @@ pub mod compositor;
 pub mod context;
 pub mod convert;
 pub mod filter;
+pub mod gradient;
 pub mod pool;
 pub mod readback;
 pub mod transition;
@@ -25,6 +26,7 @@ pub use filter::{
     parse_cube, validate_custom_filter,
 };
 pub use glam;
+pub use gradient::{GradientRenderer, MAX_GRADIENT_SIDE, PAINT_FORMAT, PaintTexture, paint_size};
 pub use pool::TexturePool;
 pub use transition::{
     BuiltinKind, EXAMPLE_CUSTOM_TRANSITION, TransitionParams, TransitionRenderer, TransitionShader,
