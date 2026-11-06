@@ -4547,9 +4547,18 @@ impl App {
     }
 
     /// Some hardware H.264 encoders refuse frames taller than 2304 pixels (for example a
-    /// 2160 × 3840 vertical canvas). When an output that failed to start uses such a canvas,
-    /// this is the advice to add to its error.
-    fn tall_canvas_hint(&self, wanted: &[Option<CanvasId>]) -> &'static str {
+    /// 2160 × 3840 vertical canvas). When an output's encoder failed to start on such a canvas,
+    /// this is the advice to add to its error. Other problems (a missing stream key, a bad
+    /// server) get no hint.
+    fn tall_canvas_hint(
+        &self,
+        error: &estream_media::MediaError,
+        wanted: &[Option<CanvasId>],
+    ) -> &'static str {
+        use estream_media::MediaError;
+        if !matches!(error, MediaError::NoEncoder(_) | MediaError::Ffmpeg(_)) {
+            return "";
+        }
         let Some(engine) = &self.engine else {
             return "";
         };
@@ -4567,7 +4576,7 @@ impl App {
     }
 
     /// [`Self::tall_canvas_hint`] for the recording and replay buffer.
-    fn recording_canvas_hint(&self) -> &'static str {
+    fn recording_canvas_hint(&self, error: &estream_media::MediaError) -> &'static str {
         let rec = &self.settings.recording;
         if rec.all_canvases {
             let Some(engine) = &self.engine else {
@@ -4579,9 +4588,9 @@ impl App {
                 .iter()
                 .map(|c| Some(c.id))
                 .collect();
-            self.tall_canvas_hint(&all)
+            self.tall_canvas_hint(error, &all)
         } else {
-            self.tall_canvas_hint(&[rec.canvas])
+            self.tall_canvas_hint(error, &[rec.canvas])
         }
     }
 
@@ -5146,7 +5155,7 @@ impl App {
             }
             Err(e) => {
                 let wanted: Vec<_> = dests.iter().map(|d| d.settings.canvas).collect();
-                let hint = self.tall_canvas_hint(&wanted);
+                let hint = self.tall_canvas_hint(&e, &wanted);
                 self.toast(format!("Couldn't go live: {e}{hint}"), true);
                 self.open_stream_settings();
             }
@@ -5499,7 +5508,7 @@ impl App {
                         self.stream_dests = vec![LiveDest::new(config)];
                     }
                     Err(e) => {
-                        let hint = self.tall_canvas_hint(&[dest.settings.canvas]);
+                        let hint = self.tall_canvas_hint(&e, &[dest.settings.canvas]);
                         self.toast(format!("Couldn't go live: {e}{hint}"), true);
                         return;
                     }
@@ -5590,7 +5599,7 @@ impl App {
                     self.toast("Recording started".into(), false);
                 }
                 Err(e) => {
-                    let hint = self.recording_canvas_hint();
+                    let hint = self.recording_canvas_hint(&e);
                     self.toast(format!("Couldn't start recording: {e}{hint}"), true)
                 }
             }
@@ -5616,7 +5625,7 @@ impl App {
                     );
                 }
                 Err(e) => {
-                    let hint = self.recording_canvas_hint();
+                    let hint = self.recording_canvas_hint(&e);
                     self.toast(format!("Couldn't start the replay buffer: {e}{hint}"), true)
                 }
             }
