@@ -5,12 +5,12 @@ import "fonts/Figtree.ttf";
 import "fonts/Jost.ttf";
 import { Theme, Platform } from "theme.slint";
 import { Icons } from "icons.slint";
-import { CanvasTab, SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SetupLine, SourceType, PropRow, MixerStrip, AudioInspect, SettingsForm, LiveRow, DestinationRow, VideoFilterRow, MediaInspect, AutomationForm, MacroRow, TriggerRow, StepRow, ClipsForm, ClipRow, ClipPlayerState, MontageForm, StatsForm, StatTile, StatRow, AlertRow, InspectorFolds } from "types.slint";
+import { CanvasTab, SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SetupLine, SourceType, PropRow, MixerStrip, AudioInspect, SettingsForm, LiveRow, DestinationRow, VideoFilterRow, MediaInspect, AutomationForm, MacroRow, TriggerRow, StepRow, ClipsForm, ClipRow, ClipPlayerState, MontageForm, StatsForm, StatTile, StatRow, AlertRow, InspectorFolds, CanvasForm, CanvasSize } from "types.slint";
 import { VSplitter, HSplitter, TooltipLayer, Hint } from "widgets.slint";
 import { Preview } from "preview.slint";
 import { InspectorPanel } from "inspector.slint";
 import { TopBar, ScenesPanel, SourcesPanel, MixerPanel, StatusBar, TransitionColumn, ProgramView, CanvasTabs } from "panels.slint";
-import { CommandPalette, AddSourceDialog, SetupWizard, SetupDialog, RecoveryPrompt, GameAudioPrompt, Toast, SettingsDialog, LivePanel, ShaderDialog } from "overlays.slint";
+import { CommandPalette, AddSourceDialog, SetupWizard, SetupDialog, RecoveryPrompt, GameAudioPrompt, Toast, SettingsDialog, LivePanel, ShaderDialog, CanvasSettingsDialog } from "overlays.slint";
 import { AutomationDialog } from "automation.slint";
 import { StatsDialog } from "stats.slint";
 import { ClipsDialog } from "clips.slint";
@@ -20,8 +20,9 @@ import { Sidebar } from "sidebar.slint";
 import { SceneStrip } from "stage.slint";
 import { ChatPanel, ChatTabRow, ChatLive, ChatLine, ChatStateRow, SignInDialog } from "chat.slint";
 import { GoLiveDialog, StreamDetailsDialog, DetailsSection } from "golive.slint";
+import { ColorPicking, ColorPickerPanel } from "color.slint";
 
-export { Theme, Platform }
+export { Theme, Platform, ColorPicking }
 
 export component AppWindow inherits Window {
     in property <string> window-title: "Clutch";
@@ -55,6 +56,21 @@ export component AppWindow inherits Window {
     callback canvas-menu(string, string, int);
     /// Canvas presets to duplicate a canvas as.
     in property <[string]> canvas-sizes;
+    // Canvas settings (open while `canvas-form.id` is set).
+    in-out property <CanvasForm> canvas-form;
+    in property <[CanvasSize]> canvas-size-choices;
+    in property <[string]> canvas-size-labels;
+    in property <[string]> canvas-rates;
+    in property <int> canvas-size-index;
+    callback canvas-size-changed();
+    callback canvas-background-color(color);
+    callback canvas-background-text(string);
+    callback canvas-background-style(int);
+    callback canvas-background-gradient(string, int, float);
+    callback canvas-background-gradient-color(int, color);
+    callback canvas-background-gradient-text(int, string);
+    callback canvas-settings-apply();
+    callback canvas-settings-cancel();
     callback canvas-rename(string, string);
     in property <image> program-frame;
     in property <int> transition-kind;
@@ -319,6 +335,9 @@ export component AppWindow inherits Window {
     callback inspect-edit(string, float);
     callback inspect-text(string, string);
     callback inspect-color(color);
+    callback fill-gradient(string, int, float);
+    callback fill-gradient-color(int, color);
+    callback fill-gradient-text(int, string);
     callback inspect-option(string, int);
     callback inspect-toggle(string, bool);
     callback inspect-commit();
@@ -326,6 +345,9 @@ export component AppWindow inherits Window {
     callback prop-number(string, float);
     callback prop-text(string, string);
     callback prop-color(string, color);
+    callback prop-gradient(string, string, int, float);
+    callback prop-gradient-color(string, int, color);
+    callback prop-gradient-text(string, int, string);
     callback prop-index(string, int);
     callback prop-browse(string);
     callback prop-refresh();
@@ -338,6 +360,8 @@ export component AppWindow inherits Window {
     callback mixer-select(string);
     callback mixer-fader(string, float);
     callback mixer-mute(string);
+    callback mixer-remove(string);
+    callback audio-remove();
     callback palette-query-changed(string);
     callback palette-run(string);
     callback add-source-pick(string);
@@ -372,6 +396,15 @@ export component AppWindow inherits Window {
         height: 100%;
         init => { self.focus(); }
         key-pressed(e) => {
+            // Esc stops picking from the Preview, then closes the color picker.
+            if (ColorPicking.open && e.text == Key.Escape) {
+                if (ColorPicking.from-preview) {
+                    ColorPicking.from-preview = false;
+                } else {
+                    ColorPicking.closed();
+                }
+                return EventResult.accept;
+            }
             // On the Live deck, F1 to F9 switch scenes (except the clip hotkey).
             if (root.deck-visible) {
                 let i = root.fkey-index(e.text);
@@ -561,6 +594,9 @@ export component AppWindow inherits Window {
                             edit(field, v) => { root.inspect-edit(field, v); }
                             edit-text(field, v) => { root.inspect-text(field, v); }
                             edit-color(c) => { root.inspect-color(c); }
+                            fill-gradient(a, i, v) => { root.fill-gradient(a, i, v); }
+                            fill-gradient-color(i, c) => { root.fill-gradient-color(i, c); }
+                            fill-gradient-text(i, t) => { root.fill-gradient-text(i, t); }
                             select-option(field, i) => { root.inspect-option(field, i); }
                             toggle(field, v) => { root.inspect-toggle(field, v); }
                             commit => { root.inspect-commit(); }
@@ -570,6 +606,9 @@ export component AppWindow inherits Window {
                             prop-number(k, v) => { root.prop-number(k, v); }
                             prop-text(k, v) => { root.prop-text(k, v); }
                             prop-color(k, v) => { root.prop-color(k, v); }
+                            prop-gradient(k, a, i, v) => { root.prop-gradient(k, a, i, v); }
+                            prop-gradient-color(k, i, c) => { root.prop-gradient-color(k, i, c); }
+                            prop-gradient-text(k, i, t) => { root.prop-gradient-text(k, i, t); }
                             prop-index(k, i) => { root.prop-index(k, i); }
                             prop-browse(k) => { root.prop-browse(k); }
                             prop-refresh => { root.prop-refresh(); }
@@ -580,6 +619,7 @@ export component AppWindow inherits Window {
                             filter-toggle(id, v) => { root.filter-toggle(id, v); }
                             filter-param(id, k, v) => { root.filter-param(id, k, v); }
                             filter-move(id, up) => { root.filter-move(id, up); }
+                            audio-remove => { root.audio-remove(); }
                             video-filters: root.video-filters;
                             media: root.media-inspect;
                             media-control(c) => { root.media-control(c); }
@@ -617,6 +657,7 @@ export component AppWindow inherits Window {
                             fader(id, v) => { root.mixer-fader(id, v); }
                             commit => { root.inspect-commit(); }
                             toggle-mute(id) => { root.mixer-mute(id); }
+                            remove(id) => { root.mixer-remove(id); }
                             add => { root.action("source.add"); }
                         }
                     }
@@ -645,6 +686,7 @@ export component AppWindow inherits Window {
                     fader(id, v) => { root.mixer-fader(id, v); }
                     commit => { root.inspect-commit(); }
                     open-settings(id) => { root.mixer-select(id); main-keys.focus(); }
+                    remove-sound(id) => { root.mixer-remove(id); }
                     transition-set(k, v) => { root.transition-set(k, v); }
                     edit-shader => { root.action("transition.shader"); }
                 }
@@ -696,6 +738,8 @@ export component AppWindow inherits Window {
             folds <=> root.inspector-folds;
             audio: root.audio-inspect;
             open-sound(id) => { root.mixer-select(id); main-keys.focus(); }
+            remove-sound(id) => { root.mixer-remove(id); }
+            audio-remove => { root.audio-remove(); main-keys.focus(); }
             close-sound => { root.action("selection.clear"); main-keys.focus(); }
             audio-set(k, v) => { root.audio-set(k, v); }
             filter-add(i) => { root.filter-add(i); }
@@ -962,9 +1006,39 @@ export component AppWindow inherits Window {
         cancel => { root.setup-cancel(); main-keys.focus(); }
     }
 
+    if root.canvas-form.id != "": CanvasSettingsDialog {
+        form <=> root.canvas-form;
+        sizes: root.canvas-size-choices;
+        size-labels: root.canvas-size-labels;
+        rates: root.canvas-rates;
+        size-index: root.canvas-size-index;
+        size-changed => { root.canvas-size-changed(); }
+        background-color(c) => { root.canvas-background-color(c); }
+        background-text(t) => { root.canvas-background-text(t); }
+        background-style(i) => { root.canvas-background-style(i); }
+        background-gradient(a, i, v) => { root.canvas-background-gradient(a, i, v); }
+        background-gradient-color(i, c) => { root.canvas-background-gradient-color(i, c); }
+        background-gradient-text(i, t) => { root.canvas-background-gradient-text(i, t); }
+        apply => {
+            root.canvas-settings-apply();
+            if (root.canvas-form.id == "") { main-keys.focus(); }
+        }
+        cancel => { root.canvas-settings-cancel(); main-keys.focus(); }
+    }
+
     if root.startup == "recovery": RecoveryPrompt {
         restore => { root.recovery-restore(); }
         discard => { root.recovery-discard(); }
+    }
+
+    // The color picker, over everything but toasts. A click outside closes it, except while
+    // picking from the Preview.
+    if ColorPicking.open && !ColorPicking.from-preview: TouchArea {
+        clicked => { ColorPicking.closed(); main-keys.focus(); }
+    }
+    if ColorPicking.open: ColorPickerPanel {
+        x: clamp(ColorPicking.x, 8px, max(8px, root.width - self.width - 8px));
+        y: clamp(ColorPicking.y, 8px, max(8px, root.height - self.height - 8px));
     }
 
     if root.toast-text != "": Toast {

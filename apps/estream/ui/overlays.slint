@@ -1,8 +1,10 @@
 import { Theme, Platform } from "theme.slint";
 import { Icons } from "icons.slint";
-import { PaletteEntry, Preset, SetupLine, SourceType, SettingsForm, DestinationRow, LiveRow } from "types.slint";
+import { PaletteEntry, Preset, SetupLine, SourceType, SettingsForm, DestinationRow, LiveRow, CanvasForm, CanvasSize } from "types.slint";
 import { Button, IconButton, Icon, Badge, TextField, TextArea, NumberField, Select, Slider, Toggle, SectionTitle } from "widgets.slint";
 import { KindIcon } from "panels.slint";
+import { PropEditor } from "inspector.slint";
+import { ColorSwatch } from "color.slint";
 
 // Full-window scrim with a centered card. Clicking the scrim calls `dismiss`.
 export component Modal inherits Rectangle {
@@ -1838,6 +1840,154 @@ export component LivePanel inherits Rectangle {
                     }
                 }
             }
+        }
+    }
+}
+
+/// A canvas's name, size, frame rate and background. Size and frame rate are locked while the
+/// canvas is on air.
+export component CanvasSettingsDialog inherits Modal {
+    in-out property <CanvasForm> form;
+    in property <[CanvasSize]> sizes;
+    /// The sizes' labels, then "Custom".
+    in property <[string]> size-labels;
+    in property <[string]> rates;
+    /// The entry in `sizes` matching the form's size, or "Custom" (Rust keeps it up to date).
+    in property <int> size-index;
+    callback size-changed();
+    callback background-color(color);
+    callback background-text(string);
+    callback background-style(int);
+    callback background-gradient(string, int, float);
+    callback background-gradient-color(int, color);
+    callback background-gradient-text(int, string);
+    callback apply();
+    callback cancel();
+
+    property <bool> resized: root.form.width != root.form.old-width || root.form.height != root.form.old-height;
+
+    card-width: 460px;
+    dismiss => { root.cancel(); }
+    VerticalLayout {
+        padding: 22px;
+        spacing: 12px;
+        Text { text: "Canvas settings"; color: Theme.text; font-size: Theme.font-l; font-weight: 700; }
+        TextField {
+            label: "Name";
+            text: root.form.name;
+            edited(t) => { root.form.name = t; }
+            accepted => { root.apply(); }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            Text { text: "Size"; width: 84px; color: Theme.text-muted; font-size: Theme.font-m; vertical-alignment: center; }
+            Select {
+                horizontal-stretch: 1;
+                label: "Size";
+                enabled: !root.form.locked;
+                options: root.size-labels;
+                current-index: root.size-index;
+                selected(i) => {
+                    if (i < root.sizes.length) {
+                        root.form.width = root.sizes[i].width;
+                        root.form.height = root.sizes[i].height;
+                        root.size-changed();
+                    }
+                }
+            }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            Rectangle { width: 84px; }
+            NumberField {
+                label: "W";
+                value: root.form.width;
+                minimum: 128;
+                maximum: 4096;
+                step: 2;
+                suffix: " px";
+                enabled: !root.form.locked;
+                changed(v) => { root.form.width = round(v / 2) * 2; root.size-changed(); }
+            }
+            Text { text: "×"; color: Theme.text-muted; vertical-alignment: center; }
+            NumberField {
+                label: "H";
+                value: root.form.height;
+                minimum: 128;
+                maximum: 4096;
+                step: 2;
+                suffix: " px";
+                enabled: !root.form.locked;
+                changed(v) => { root.form.height = round(v / 2) * 2; root.size-changed(); }
+            }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            Text { text: "Frame rate"; width: 84px; color: Theme.text-muted; font-size: Theme.font-m; vertical-alignment: center; }
+            Select {
+                horizontal-stretch: 1;
+                label: "Frame rate";
+                enabled: !root.form.locked;
+                options: root.rates;
+                current-index: root.form.fps-index;
+                selected(i) => { root.form.fps-index = i; }
+            }
+        }
+        if root.form.locked: Text {
+            text: "Stop the stream, recording, replay buffer and virtual camera on this canvas to change its size or frame rate.";
+            color: Theme.warn;
+            font-size: Theme.font-s;
+            wrap: word-wrap;
+        }
+        if root.resized: Toggle {
+            label: "Scale items to the new size";
+            checked: root.form.scale-items;
+            toggled(v) => { root.form.scale-items = v; }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            Text { text: "Background"; width: 84px; color: Theme.text-muted; font-size: Theme.font-m; vertical-alignment: center; }
+            Select {
+                horizontal-stretch: 1;
+                label: "Background";
+                options: ["Solid color", "Linear gradient", "Radial gradient"];
+                current-index: root.form.background-style;
+                selected(i) => { root.background-style(i); }
+            }
+        }
+        if root.form.background-style == 0: HorizontalLayout {
+            spacing: 8px;
+            Rectangle { width: 84px; }
+            ColorSwatch {
+                value: root.form.background;
+                target: "canvas-bg";
+                label: "Background color";
+                alpha: false;
+            }
+            TextField {
+                label: "Background color";
+                text: root.form.background-hex;
+                placeholder: "#rrggbb";
+                accepted(t) => { root.background-text(t); }
+                edited(t) => { root.form.background-hex = t; }
+            }
+        }
+        if root.form.background-style != 0: HorizontalLayout {
+            spacing: 8px;
+            Rectangle { width: 84px; }
+            PropEditor {
+                horizontal-stretch: 1;
+                prop: root.form.background-gradient;
+                gradient(a, i, v) => { root.background-gradient(a, i, v); }
+                gradient-color(i, c) => { root.background-gradient-color(i, c); }
+                gradient-text(i, t) => { root.background-gradient-text(i, t); }
+            }
+        }
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+            Button { text: "Cancel"; kind: "ghost"; clicked => { root.cancel(); } }
+            Button { text: "Apply"; kind: "primary"; clicked => { root.apply(); } }
         }
     }
 }

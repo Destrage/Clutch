@@ -242,6 +242,7 @@ enum Request {
     Undo(Reply<bool>),
     Redo(Reply<bool>),
     Seal,
+    Hold,
     TransitionTo {
         canvas: CanvasId,
         scene: SceneId,
@@ -490,6 +491,12 @@ impl Engine {
     /// Ends the current undo coalescing run (call when a drag gesture ends).
     pub fn seal_history(&self) {
         let _ = self.requests.send(Request::Seal);
+    }
+
+    /// Keeps coalescing matching edits into one undo step, however long the pauses between
+    /// them, until [`Engine::seal_history`] (used while a color picker is open).
+    pub fn hold_history(&self) {
+        let _ = self.requests.send(Request::Hold);
     }
 
     /// Makes `scene` the program scene of `canvas` with a transition (the project's
@@ -764,6 +771,7 @@ impl Control {
                     let _ = reply.send(self.finish_history(result, Origin::Redo));
                 }
                 Request::Seal => self.history.seal(),
+                Request::Hold => self.history.hold(),
                 Request::TransitionTo {
                     canvas,
                     scene,

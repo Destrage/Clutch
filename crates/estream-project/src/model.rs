@@ -28,8 +28,13 @@ pub struct Canvas {
     pub width: u32,
     pub height: u32,
     pub fps: Rational,
+    /// The solid background, or the first color of `background_paint` (what older versions
+    /// show).
     #[serde(default = "default_background")]
     pub background: Rgba8,
+    /// A gradient background, drawn under every item.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_paint: Option<estream_core::Paint>,
     #[serde(default)]
     pub active_scene: Option<SceneId>,
 }
@@ -47,6 +52,7 @@ impl Canvas {
             height,
             fps,
             background: Rgba8::BLACK,
+            background_paint: None,
             active_scene: None,
         }
     }
@@ -180,6 +186,41 @@ pub struct SceneItem {
     pub opacity: f32,
     #[serde(default)]
     pub blend: BlendMode,
+    /// What fills the rest of the bounding box when the source is fitted inside it.
+    #[serde(default, skip_serializing_if = "ItemFill::is_none")]
+    pub fill: ItemFill,
+}
+
+/// Fills the part of an item's bounding box that a fitted source leaves empty (the bars above
+/// and below a 16:9 game on a vertical canvas). Only drawn with [`BoundsMode::Fit`].
+///
+/// [`BoundsMode::Fit`]: estream_core::BoundsMode::Fit
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ItemFill {
+    #[default]
+    None,
+    /// A blurred, enlarged and dimmed copy of the same source frame (each value 0..1).
+    Frosted {
+        blur: f32,
+        dim: f32,
+        saturation: f32,
+    },
+    /// A solid color or a gradient.
+    Paint { paint: estream_core::Paint },
+}
+
+impl ItemFill {
+    /// What choosing Frosted starts from.
+    pub const FROSTED: Self = Self::Frosted {
+        blur: 0.6,
+        dim: 0.25,
+        saturation: 0.9,
+    };
+
+    pub fn is_none(&self) -> bool {
+        matches!(self, Self::None)
+    }
 }
 
 fn yes() -> bool {
@@ -213,6 +254,7 @@ impl SceneItem {
             locked: false,
             opacity: 1.0,
             blend: BlendMode::Normal,
+            fill: ItemFill::None,
         }
     }
 
@@ -405,6 +447,22 @@ impl Project {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn items_from_older_versions_have_no_fill() {
+        let item = SceneItem::source(SourceId::new());
+        let mut json = serde_json::to_value(&item).unwrap();
+        assert!(json.get("fill").is_none(), "no fill isn't written");
+        json.as_object_mut().unwrap().remove("fill");
+        let back: SceneItem = serde_json::from_value(json).unwrap();
+        assert_eq!(back.fill, ItemFill::None);
+
+        let mut frosted = item.clone();
+        frosted.fill = ItemFill::FROSTED;
+        let json = serde_json::to_value(&frosted).unwrap();
+        assert_eq!(json["fill"]["kind"], "frosted");
+        assert_eq!(serde_json::from_value::<SceneItem>(json).unwrap(), frosted);
+    }
 
     #[test]
     fn nested_lookup_and_location() {

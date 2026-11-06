@@ -51,6 +51,8 @@ pub struct ItemPatch {
     pub opacity: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blend: Option<BlendMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fill: Option<estream_project::ItemFill>,
 }
 
 impl ItemPatch {
@@ -64,6 +66,7 @@ impl ItemPatch {
             self.locked.is_some(),
             self.opacity.is_some(),
             self.blend.is_some(),
+            self.fill.is_some(),
         ]
         .iter()
         .enumerate()
@@ -85,6 +88,10 @@ pub struct CanvasPatch {
     pub fps: Option<Rational>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background: Option<Rgba8>,
+    /// A gradient background, or a solid one (which clears the gradient). Also sets
+    /// `Canvas::background` to the solid color or first stop.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background_paint: Option<estream_core::Paint>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -357,6 +364,17 @@ impl Command {
                 }
                 if let Some(v) = patch.background {
                     old.background = Some(std::mem::replace(&mut c.background, v));
+                }
+                if let Some(p) = patch.background_paint {
+                    let p = p.normalized();
+                    old.background_paint = Some(
+                        c.background_paint
+                            .clone()
+                            .unwrap_or(estream_core::Paint::solid(c.background)),
+                    );
+                    old.background.get_or_insert(c.background);
+                    c.background = p.first_color();
+                    c.background_paint = p.is_gradient().then_some(p);
                 }
                 Ok(applied(
                     UpdateCanvas { canvas, patch: old },
@@ -696,6 +714,9 @@ impl Command {
                 if let Some(v) = patch.blend {
                     old.blend = Some(std::mem::replace(&mut it.blend, v));
                 }
+                if let Some(v) = patch.fill {
+                    old.fill = Some(std::mem::replace(&mut it.fill, v));
+                }
                 Ok(applied(
                     UpdateItem {
                         scene,
@@ -900,6 +921,115 @@ mod tests {
 
         applied.inverse.apply(&mut p).unwrap();
         assert_eq!(p, before, "source, items, ids and order fully restored");
+    }
+
+    #[test]
+    fn item_fill_applies_and_undoes() {
+        let (mut p, scene) = project();
+        let src = add_source(&mut p);
+        let item = SceneItem::source(src);
+        let id = item.id;
+        Command::AddItem {
+            scene,
+            parent: None,
+            index: 0,
+            item,
+        }
+        .apply(&mut p)
+        .unwrap();
+        let before = p.clone();
+        let applied = Command::UpdateItem {
+            scene,
+            item: id,
+            patch: ItemPatch {
+                fill: Some(estream_project::ItemFill::FROSTED),
+                ..Default::default()
+            },
+        }
+        .apply(&mut p)
+        .unwrap();
+        assert_eq!(
+            p.scenes[0].find_item(id).unwrap().fill,
+            estream_project::ItemFill::FROSTED
+        );
+        applied.inverse.apply(&mut p).unwrap();
+        assert_eq!(p, before);
+    }
+
+    #[test]
+    fn canvas_background_gradient_applies_and_undoes() {
+        let (mut p, _) = project();
+        let canvas = p.canvases[0].id;
+        let before = p.clone();
+        let red = Rgba8::new(255, 0, 0, 255);
+        let gradient = estream_core::Paint::linear(red, Rgba8::WHITE);
+        let applied = Command::UpdateCanvas {
+            canvas,
+            patch: CanvasPatch {
+                background_paint: Some(gradient.clone()),
+                ..Default::default()
+            },
+        }
+        .apply(&mut p)
+        .unwrap();
+        assert_eq!(p.canvases[0].background_paint, Some(gradient));
+        assert_eq!(
+            p.canvases[0].background, red,
+            "older versions see the first color"
+        );
+        let gradient_state = p.clone();
+
+        // A solid paint clears the gradient.
+        let blue = Rgba8::new(0, 0, 255, 255);
+        let solid = Command::UpdateCanvas {
+            canvas,
+            patch: CanvasPatch {
+                background_paint: Some(estream_core::Paint::solid(blue)),
+                ..Default::default()
+            },
+        }
+        .apply(&mut p)
+        .unwrap();
+        assert_eq!(p.canvases[0].background_paint, None);
+        assert_eq!(p.canvases[0].background, blue);
+
+        solid.inverse.apply(&mut p).unwrap();
+        assert_eq!(p, gradient_state);
+        applied.inverse.apply(&mut p).unwrap();
+        assert_eq!(p, before);
+    }
+
+    #[test]
+    fn removing_sound_heard_in_all_scenes_and_undo_restores_its_settings() {
+        let (mut p, _) = project();
+        add_source(&mut p);
+        let mut desktop = SourceDef::new("Desktop Audio", "audio_output", serde_json::json!({}));
+        desktop.audio.global = true;
+        desktop.audio.volume_db = -12.5;
+        desktop.audio.muted = true;
+        desktop.audio.filters = vec![estream_project::FilterDef {
+            id: "gate".into(),
+            kind: "noise_gate".into(),
+            enabled: true,
+            settings: serde_json::json!({ "threshold_db": -40.0 }),
+        }];
+        let id = desktop.id;
+        Command::AddSource {
+            source: desktop,
+            index: 0,
+        }
+        .apply(&mut p)
+        .unwrap();
+        let before = p.clone();
+
+        let applied = Command::RemoveSource { source: id }.apply(&mut p).unwrap();
+        assert!(p.source(id).is_none());
+
+        applied.inverse.apply(&mut p).unwrap();
+        assert_eq!(
+            p, before,
+            "volume, mute, filters and list position come back"
+        );
     }
 
     #[test]

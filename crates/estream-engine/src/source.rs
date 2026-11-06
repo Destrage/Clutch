@@ -3,7 +3,7 @@
 
 use crate::properties::{PropKind, Property, PropertySchema, SelectOption};
 use estream_audio::AudioSource;
-use estream_core::{Rgba8, Size, SourceId, Timestamp};
+use estream_core::{Paint, Rgba8, Size, SourceId, Timestamp};
 use estream_gpu::{Compositor, GpuContext, wgpu};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -29,6 +29,8 @@ pub const NOT_ON_THIS_SYSTEM: &str = "Not available on this system";
 pub struct SourceContext<'a> {
     pub gpu: &'a GpuContext,
     pub compositor: &'a Compositor,
+    /// Draws solid colors and gradients into textures (shared, compiled once).
+    pub gradients: &'a estream_gpu::GradientRenderer,
     /// Stable across restarts: sources key per-machine state by it (e.g. screen-share grants).
     pub source: SourceId,
 }
@@ -236,21 +238,41 @@ impl SourceRegistry {
         r.register(SourceType::new(
             "color",
             "Color",
-            "A solid color block — backgrounds, frames, overlays",
-            |_| {
-                PropertySchema::new(vec![
+            "A color or gradient block — backgrounds, frames, overlays",
+            |settings| {
+                let s: ColorSettings = parse(settings).unwrap_or_default();
+                let mut props = vec![
                     Property::int("width", "Width", 1, 16384, 1920),
                     Property::int("height", "Height", 1, 16384, 1080),
-                    Property::new(
+                    Property::select(
+                        "style",
+                        "Style",
+                        vec![
+                            SelectOption::new("solid", "Solid"),
+                            SelectOption::new("linear", "Linear gradient"),
+                            SelectOption::new("radial", "Radial gradient"),
+                        ],
+                        "solid",
+                    ),
+                ];
+                props.push(match s.style {
+                    ColorStyle::Solid => Property::new(
                         "color",
                         "Color",
                         PropKind::Color,
                         serde_json::to_value(Rgba8::WHITE).unwrap_or_default(),
                     ),
-                ])
+                    _ => Property::new(
+                        "gradient",
+                        "Gradient",
+                        PropKind::Gradient,
+                        serde_json::to_value(s.paint()).unwrap_or_default(),
+                    ),
+                });
+                PropertySchema::new(props)
             },
             |ctx, s| {
-                let mut src = ColorSource::new(ctx);
+                let mut src = ColorSource::new();
                 src.update(ctx, s)?;
                 Ok(Box::new(src))
             },
@@ -350,12 +372,26 @@ pub fn check_size(width: u32, height: u32) -> Result<(), SourceError> {
 
 // ---------------------------------------------------------------- color
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ColorStyle {
+    #[default]
+    Solid,
+    Linear,
+    Radial,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ColorSettings {
     pub width: u32,
     pub height: u32,
+    /// The solid color (Solid style). Settings saved before gradients only have this.
     pub color: Rgba8,
+    pub style: ColorStyle,
+    /// The gradient (Linear and Radial styles). Missing until the user edits it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gradient: Option<Paint>,
 }
 
 impl Default for ColorSettings {
@@ -364,33 +400,49 @@ impl Default for ColorSettings {
             width: 1920,
             height: 1080,
             color: Rgba8::WHITE,
+            style: ColorStyle::Solid,
+            gradient: None,
         }
     }
 }
 
-/// A solid color. Backed by a 1×1 texture stretched to the configured size.
+impl ColorSettings {
+    /// What the source shows. A gradient style without a saved gradient starts from the solid
+    /// color, fading to the accent blue (or black when the color already is that blue).
+    pub fn paint(&self) -> Paint {
+        let gradient = || {
+            self.gradient.clone().unwrap_or_else(|| {
+                let accent = Rgba8::new(108, 140, 255, 255);
+                let end = if self.color == accent {
+                    Rgba8::BLACK
+                } else {
+                    accent
+                };
+                Paint::linear(self.color, end)
+            })
+        };
+        match self.style {
+            ColorStyle::Solid => Paint::solid(self.color),
+            ColorStyle::Linear => gradient().to_linear(),
+            ColorStyle::Radial => gradient().to_radial(),
+        }
+        .normalized()
+    }
+}
+
+/// A solid color or a gradient. A solid color is a 1×1 texture stretched to the configured
+/// size; a gradient is drawn once at that size whenever the settings change.
+#[derive(Default)]
 pub struct ColorSource {
-    texture: wgpu::Texture,
-    binding: wgpu::BindGroup,
+    /// What is drawn, at which texture size; skips redrawing when only the name changed.
+    drawn: Option<(Paint, (u32, u32))>,
+    texture: Option<(estream_gpu::PaintTexture, wgpu::BindGroup)>,
     size: Size,
 }
 
 impl ColorSource {
-    fn new(ctx: &SourceContext<'_>) -> Self {
-        let texture = ctx.gpu.create_render_texture(
-            "color source",
-            1,
-            1,
-            wgpu::TextureFormat::Rgba8UnormSrgb,
-        );
-        let binding = ctx
-            .compositor
-            .create_source_binding(ctx.gpu, &texture.create_view(&Default::default()));
-        Self {
-            texture,
-            binding,
-            size: Size::default(),
-        }
+    fn new() -> Self {
+        Self::default()
     }
 }
 
@@ -398,16 +450,15 @@ impl VideoSource for ColorSource {
     fn update(&mut self, ctx: &SourceContext<'_>, settings: &Value) -> Result<(), SourceError> {
         let s: ColorSettings = parse(settings)?;
         check_size(s.width, s.height)?;
-        ctx.gpu.queue.write_texture(
-            self.texture.as_image_copy(),
-            &s.color.to_array(),
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4),
-                rows_per_image: Some(1),
-            },
-            self.texture.size(),
-        );
+        let paint = s.paint();
+        let size = estream_gpu::paint_size(&paint, s.width, s.height);
+        let key = (paint, size);
+        if self.drawn.as_ref() != Some(&key) {
+            let texture = ctx.gradients.render(ctx.gpu, &key.0, s.width, s.height);
+            let binding = ctx.compositor.create_source_binding(ctx.gpu, &texture.view);
+            self.texture = Some((texture, binding));
+            self.drawn = Some(key);
+        }
         self.size = Size::new(s.width as f32, s.height as f32);
         Ok(())
     }
@@ -415,8 +466,8 @@ impl VideoSource for ColorSource {
     fn tick(&mut self, _: &SourceContext<'_>, _: &mut wgpu::CommandEncoder, _: Timestamp) {}
 
     fn frame(&self) -> Option<SourceFrame<'_>> {
-        Some(SourceFrame {
-            binding: &self.binding,
+        self.texture.as_ref().map(|(_, binding)| SourceFrame {
+            binding,
             size: self.size,
         })
     }
@@ -656,4 +707,60 @@ fn audio_types() -> Vec<SourceType> {
             },
         ),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    const RED: Rgba8 = Rgba8::new(255, 0, 0, 255);
+
+    fn settings(v: Value) -> ColorSettings {
+        parse(&v).unwrap()
+    }
+
+    #[test]
+    fn old_color_settings_stay_solid() {
+        let s = settings(json!({ "width": 10, "height": 10, "color": RED }));
+        assert_eq!(s.style, ColorStyle::Solid);
+        assert_eq!(s.paint(), Paint::solid(RED));
+    }
+
+    #[test]
+    fn a_gradient_style_starts_from_the_solid_color() {
+        let s = settings(json!({ "color": RED, "style": "linear" }));
+        let paint = s.paint();
+        assert!(matches!(paint, Paint::Linear { .. }));
+        assert_eq!(paint.first_color(), RED);
+        let radial = settings(json!({ "color": RED, "style": "radial" })).paint();
+        assert!(matches!(radial, Paint::Radial { .. }));
+    }
+
+    #[test]
+    fn style_decides_between_color_and_saved_gradient() {
+        let gradient = Paint::linear(Rgba8::BLACK, Rgba8::WHITE);
+        let solid = settings(json!({ "color": RED, "style": "solid", "gradient": gradient }));
+        assert_eq!(solid.paint(), Paint::solid(RED));
+        let radial = settings(json!({ "color": RED, "style": "radial", "gradient": gradient }));
+        assert_eq!(radial.paint().stops(), gradient.stops());
+    }
+
+    #[test]
+    fn schema_shows_the_field_for_the_style() {
+        let registry = SourceRegistry::with_builtins();
+        let color = registry.get("color").unwrap();
+        let keys = |v: Value| -> Vec<String> {
+            color
+                .schema(&v)
+                .properties
+                .into_iter()
+                .map(|p| p.key)
+                .collect()
+        };
+        assert!(keys(json!({})).contains(&"color".to_owned()));
+        let linear = keys(json!({ "style": "linear" }));
+        assert!(linear.contains(&"gradient".to_owned()));
+        assert!(!linear.contains(&"color".to_owned()));
+    }
 }

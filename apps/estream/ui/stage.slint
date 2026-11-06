@@ -182,6 +182,7 @@ export component SceneStrip inherits Rectangle {
     callback commit();
     /// Show a sound's settings (its name was clicked).
     callback open-settings(string);
+    callback remove-sound(string);
     callback toggle-mixer();
     callback transition-set(string, float);
     callback edit-shader();
@@ -289,6 +290,7 @@ export component SceneStrip inherits Rectangle {
                 fader(v) => { root.fader(strip.id, v); }
                 commit => { root.commit(); }
                 open-settings => { root.open-settings(strip.id); }
+                remove => { root.remove-sound(strip.id); }
             }
             VerticalLayout {
                 alignment: start;

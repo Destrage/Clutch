@@ -58,6 +58,38 @@ export struct Guide {
     pos: float,
 }
 
+/// One color of a gradient in the inspector.
+export struct GradientStopRow {
+    at: float,
+    color: color,
+    hex: string,
+}
+export struct PropRow {
+    key: string,
+    label: string,
+    hint: string,
+    // "bool" | "int" | "float" | "text" | "multiline" | "color" | "gradient" | "path" | "select" | "button"
+    kind: string,
+    flag: bool,
+    number: float,
+    minimum: float,
+    maximum: float,
+    step: float,
+    decimals: int,
+    text: string,
+    color: color,
+    options: [string],
+    index: int,
+    // "gradient": the stops, the selected one, and its shape.
+    stops: [GradientStopRow],
+    stop: int,
+    radial: bool,
+    angle: float,
+    center-x: float,
+    center-y: float,
+    radius: float,
+    preview: image,
+}
 export struct Inspect {
     has: bool,
     id: string,
@@ -84,6 +116,14 @@ export struct Inspect {
     locked: bool,
     // Audio-only sources (no transform/crop/appearance).
     no-video: bool,
+    // Fill empty space (Fit only): 0 none, 1 frosted, 2 color, 3 gradient.
+    fill-kind: int,
+    fill-blur: float,
+    fill-dim: float,
+    fill-saturation: float,
+    fill-color: color,
+    fill-hex: string,
+    fill-gradient: PropRow,
 }
 
 /// Which inspector panels are folded (true = folded). Kept on the window so it survives the
@@ -95,6 +135,7 @@ export struct InspectorFolds {
     place: bool,
     position: bool,
     crop: bool,
+    fill: bool,
     appearance: bool,
     effects: bool,
     volume: bool,
@@ -131,23 +172,6 @@ export struct SourceType {
 }
 
 // One editable source setting, rendered generically by the inspector.
-export struct PropRow {
-    key: string,
-    label: string,
-    hint: string,
-    // "bool" | "int" | "float" | "text" | "multiline" | "color" | "path" | "select" | "button"
-    kind: string,
-    flag: bool,
-    number: float,
-    minimum: float,
-    maximum: float,
-    step: float,
-    decimals: int,
-    text: string,
-    color: color,
-    options: [string],
-    index: int,
-}
 export struct MixerStrip {
     id: string,
     name: string,
@@ -708,4 +732,33 @@ export struct StatsForm {
     alerts: [AlertRow],
     /// CPU time per video-thread stage: average, p95, share of the frame.
     stages: [StatRow],
+}
+
+/// A size offered in Canvas settings.
+export struct CanvasSize {
+    label: string,
+    width: int,
+    height: int,
+}
+
+/// Canvas settings being edited.
+export struct CanvasForm {
+    id: string,
+    name: string,
+    width: int,
+    height: int,
+    /// The size when the dialog opened (decides whether "Scale items" applies).
+    old-width: int,
+    old-height: int,
+    /// Index into the frame rate choices.
+    fps-index: int,
+    background: color,
+    background-hex: string,
+    /// 0 solid color, 1 linear gradient, 2 radial gradient.
+    background-style: int,
+    /// The gradient editor's row (styles 1 and 2).
+    background-gradient: PropRow,
+    scale-items: bool,
+    /// A stream, recording, replay buffer or virtual camera uses the canvas.
+    locked: bool,
 }
