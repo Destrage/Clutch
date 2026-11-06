@@ -97,6 +97,7 @@ fn wait_for(mut cond: impl FnMut() -> bool, timeout: Duration) -> bool {
 
 #[test]
 fn engine_renders_live_frames_and_applies_edits() {
+    let _turn = gpu_turn();
     let engine =
         Engine::start(Project::new_default(320, 180, Rational::fps(60)), config()).unwrap();
     let canvas = engine.snapshot().canvases[0].id;
@@ -145,6 +146,7 @@ fn engine_renders_live_frames_and_applies_edits() {
 
 #[test]
 fn two_canvases_render_at_their_own_size_and_rate() {
+    let _turn = gpu_turn();
     let mut project = Project::new_default(1920, 1080, Rational::fps(60));
     let mut vertical = Canvas::new("Vertical", 1080, 1920, Rational::fps(30));
     let scene = Scene::new("Vertical scene", vertical.id);
@@ -187,6 +189,14 @@ fn two_canvases_render_at_their_own_size_and_rate() {
 /// machines and check only what such stalls can't explain on CI (GitHub sets `CI`).
 fn shared_runner() -> bool {
     std::env::var_os("CI").is_some()
+}
+
+/// Live-engine timing tests and headless full renders take turns. On CI's software GPU,
+/// building a video core (compiling every pipeline) and rendering it next to a live engine can
+/// stall that engine's frames for over a second.
+fn gpu_turn() -> std::sync::MutexGuard<'static, ()> {
+    static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    TURN.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 #[test]
@@ -254,6 +264,7 @@ fn frame_pacing_ten_minutes() {
 
 #[test]
 fn slow_consumer_does_not_stall_rendering() {
+    let _turn = gpu_turn();
     let engine =
         Engine::start(Project::new_default(320, 180, Rational::fps(60)), config()).unwrap();
     let sub = engine.subscribe(); // never read during the burst
@@ -416,6 +427,7 @@ fn engine_rejects_invalid_commands_without_changes() {
 }
 
 fn render_once(project: &Project) -> Vec<u8> {
+    let _turn = gpu_turn();
     let gpu = gpu();
     let mut core = VideoCore::new(gpu.clone(), SourceRegistry::with_builtins());
     core.sync(Arc::new(RenderGraph::build(project, 1)), Timestamp::ZERO);
@@ -540,6 +552,7 @@ fn fill_paints_the_empty_part_of_a_fitted_box() {
 #[test]
 #[ignore]
 fn frosted_fill_cost() {
+    let _turn = gpu_turn();
     use estream_project::ItemFill;
     let gpu = gpu();
     let measure = |fill: ItemFill| {
@@ -594,6 +607,7 @@ fn frosted_fill_cost() {
 /// Set `ESTREAM_BLESS=1` to (re)generate the reference image.
 #[test]
 fn golden_composite_scene() {
+    let _turn = gpu_turn();
     let mut project = Project::new_default(320, 180, Rational::fps(30));
     let bars = SourceDef::new(
         "Bars",
@@ -827,6 +841,7 @@ mod audio {
 
 #[test]
 fn encoder_feed_delivers_nv12_frames_in_order() {
+    let _turn = gpu_turn();
     let engine =
         Engine::start(Project::new_default(320, 180, Rational::fps(30)), config()).unwrap();
     add_fullscreen(
