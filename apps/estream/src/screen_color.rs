@@ -16,6 +16,7 @@ pub const AVAILABLE: bool = cfg!(windows);
 
 /// What happened since picking started.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(windows), allow(dead_code))]
 pub enum Pick {
     /// Still picking.
     Waiting,
@@ -47,10 +48,12 @@ pub fn under_pointer() -> Option<Rgba8> {
 
 /// How far (in pixels) the pointer may move between pressing the eyedropper and releasing it
 /// for the release to count as a click on the button rather than a drag-and-pick.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub const DRAG_SLOP: i32 = 8;
 
 /// Whether a release at `(x, y)` after pressing the eyedropper at `press` picks there (a drag)
 /// or only finishes the click on the button.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn release_picks(press: (i32, i32), x: i32, y: i32) -> bool {
     (x - press.0).abs() > DRAG_SLOP || (y - press.1).abs() > DRAG_SLOP
 }
