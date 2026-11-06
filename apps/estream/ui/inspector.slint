@@ -10,6 +10,7 @@ import {
 } from "widgets.slint";
 import { AudioSettings } from "sound.slint";
 import { KindIcon } from "panels.slint";
+import { ColorSwatch } from "color.slint";
 
 // Editor for one generic source property.
 export component PropEditor inherits VerticalLayout {
@@ -100,34 +101,16 @@ export component PropEditor inherits VerticalLayout {
     }
     if prop.kind == "color": HorizontalLayout {
         spacing: 6px;
-        Rectangle {
-            width: 28px;
-            height: 28px;
-            border-radius: Theme.radius-s;
-            background: root.prop.color;
-            border-width: 1px;
-            border-color: Theme.border-strong;
+        ColorSwatch {
+            value: root.prop.color;
+            target: "prop:" + root.prop.key;
+            label: root.prop.label;
         }
         TextField {
             text: root.prop.text;
             label: root.prop.label;
             placeholder: "#rrggbb or #rrggbbaa";
             accepted(t) => { root.set-text(t); }
-        }
-    }
-    if prop.kind == "color": HorizontalLayout {
-        spacing: 6px;
-        for swatch in [#ffffff, #000000, #6c8cff, #f0435a, #3dd68c, #f2b84b, #b06cff, #00b5d8]: Rectangle {
-            width: 20px;
-            height: 20px;
-            border-radius: 10px;
-            background: swatch;
-            border-width: 1px;
-            border-color: Theme.border-strong;
-            TouchArea {
-                mouse-cursor: MouseCursor.pointer;
-                clicked => { root.set-color(swatch); }
-            }
         }
     }
     // A gradient: a preview bar with a handle per color (drag to move, click the bar to add),
@@ -184,13 +167,10 @@ export component PropEditor inherits VerticalLayout {
         }
         HorizontalLayout {
             spacing: 6px;
-            Rectangle {
-                width: 28px;
-                height: 28px;
-                border-radius: Theme.radius-s;
-                background: root.current.color;
-                border-width: 1px;
-                border-color: Theme.border-strong;
+            ColorSwatch {
+                value: root.current.color;
+                target: "stop:" + root.prop.key + ":" + root.stop;
+                label: "Color " + (root.stop + 1);
             }
             TextField {
                 text: root.current.hex;
@@ -209,21 +189,6 @@ export component PropEditor inherits VerticalLayout {
                 tooltip: "Remove this color";
                 enabled: root.prop.stops.length > 2;
                 clicked => { root.gradient("remove", root.stop, 0); }
-            }
-        }
-        HorizontalLayout {
-            spacing: 6px;
-            for swatch in [#ffffff, #000000, #6c8cff, #f0435a, #3dd68c, #f2b84b, #b06cff, #00b5d8]: Rectangle {
-                width: 20px;
-                height: 20px;
-                border-radius: 10px;
-                background: swatch;
-                border-width: 1px;
-                border-color: Theme.border-strong;
-                TouchArea {
-                    mouse-cursor: MouseCursor.pointer;
-                    clicked => { root.gradient-color(root.stop, swatch); }
-                }
             }
         }
         if !root.prop.radial: ValueSlider {

@@ -20,8 +20,9 @@ import { Sidebar } from "sidebar.slint";
 import { SceneStrip } from "stage.slint";
 import { ChatPanel, ChatTabRow, ChatLive, ChatLine, ChatStateRow, SignInDialog } from "chat.slint";
 import { GoLiveDialog, StreamDetailsDialog, DetailsSection } from "golive.slint";
+import { ColorPicking, ColorPickerPanel } from "color.slint";
 
-export { Theme, Platform }
+export { Theme, Platform, ColorPicking }
 
 export component AppWindow inherits Window {
     in property <string> window-title: "Clutch";
@@ -392,6 +393,15 @@ export component AppWindow inherits Window {
         height: 100%;
         init => { self.focus(); }
         key-pressed(e) => {
+            // Esc stops picking from the Preview, then closes the color picker.
+            if (ColorPicking.open && e.text == Key.Escape) {
+                if (ColorPicking.from-preview) {
+                    ColorPicking.from-preview = false;
+                } else {
+                    ColorPicking.closed();
+                }
+                return EventResult.accept;
+            }
             // On the Live deck, F1 to F9 switch scenes (except the clip hotkey).
             if (root.deck-visible) {
                 let i = root.fkey-index(e.text);
@@ -1013,6 +1023,16 @@ export component AppWindow inherits Window {
     if root.startup == "recovery": RecoveryPrompt {
         restore => { root.recovery-restore(); }
         discard => { root.recovery-discard(); }
+    }
+
+    // The color picker, over everything but toasts. A click outside closes it, except while
+    // picking from the Preview.
+    if ColorPicking.open && !ColorPicking.from-preview: TouchArea {
+        clicked => { ColorPicking.closed(); main-keys.focus(); }
+    }
+    if ColorPicking.open: ColorPickerPanel {
+        x: clamp(ColorPicking.x, 8px, max(8px, root.width - self.width - 8px));
+        y: clamp(ColorPicking.y, 8px, max(8px, root.height - self.height - 8px));
     }
 
     if root.toast-text != "": Toast {

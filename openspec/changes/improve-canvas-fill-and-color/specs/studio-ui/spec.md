@@ -19,10 +19,9 @@ platform supports it.
 - **THEN** the color becomes that pixel's color
 
 #### Scenario: Picking from another window
-- **WHEN** on Windows the user clicks the eyedropper, chooses the screen, and clicks a point in
-  another app's window
-- **THEN** the color becomes the color shown at that point, and the click does not reach that
-  app
+- **WHEN** on Windows the user presses the picker's screen button, drags to a point in another
+  app's window and releases
+- **THEN** the color becomes the color shown at that point, and the app does not get a click
 
 #### Scenario: Recent colors
 - **WHEN** the user picks a color for one source and then opens the picker for another

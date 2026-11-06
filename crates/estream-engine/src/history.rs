@@ -20,6 +20,8 @@ pub struct History {
     limit: usize,
     window: Duration,
     sealed: bool,
+    /// Coalesce matching edits regardless of the time between them, until [`History::seal`].
+    held: bool,
 }
 
 impl Default for History {
@@ -36,6 +38,7 @@ impl History {
             limit,
             window,
             sealed: false,
+            held: false,
         }
     }
 
@@ -45,7 +48,7 @@ impl History {
         if !self.sealed
             && let (Some(key), Some(top)) = (&key, self.undo.last_mut())
             && top.key.as_ref() == Some(key)
-            && now.saturating_duration_since(top.at) <= self.window
+            && (self.held || now.saturating_duration_since(top.at) <= self.window)
         {
             // Keep the oldest inverse: undo returns to the state before the whole gesture.
             top.at = now;
@@ -65,6 +68,14 @@ impl History {
     /// Ends the current coalescing run (e.g. when a drag gesture finishes).
     pub fn seal(&mut self) {
         self.sealed = true;
+        self.held = false;
+    }
+
+    /// Starts a run that keeps coalescing matching edits however long the user pauses (a color
+    /// picker session), until [`History::seal`]. The first edit starts a new step.
+    pub fn hold(&mut self) {
+        self.sealed = true;
+        self.held = true;
     }
 
     pub fn can_undo(&self) -> bool {
@@ -208,6 +219,35 @@ mod tests {
         );
         doc.history.redo(&mut doc.project).unwrap();
         assert_eq!(x_of(&doc, scene, item), 500.0);
+    }
+
+    #[test]
+    fn held_run_is_one_step_despite_pauses() {
+        let (mut doc, scene, item) = setup();
+        let t0 = Instant::now();
+        doc.exec(move_to(scene, item, 5.0), t0);
+        // A picker opens: the first edit is a new step, then pauses don't split it.
+        doc.history.hold();
+        doc.exec(move_to(scene, item, 10.0), t0 + Duration::from_millis(10));
+        doc.exec(move_to(scene, item, 20.0), t0 + Duration::from_secs(5));
+        doc.exec(move_to(scene, item, 30.0), t0 + Duration::from_secs(30));
+        doc.history.seal();
+        doc.exec(
+            move_to(scene, item, 40.0),
+            t0 + Duration::from_millis(30_010),
+        );
+        doc.history.undo(&mut doc.project).unwrap();
+        assert_eq!(
+            x_of(&doc, scene, item),
+            30.0,
+            "the edit after closing is its own step"
+        );
+        doc.history.undo(&mut doc.project).unwrap();
+        assert_eq!(
+            x_of(&doc, scene, item),
+            5.0,
+            "the whole session is one step"
+        );
     }
 
     #[test]

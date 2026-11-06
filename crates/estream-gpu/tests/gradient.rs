@@ -128,3 +128,24 @@ fn solid_is_one_texel() {
     let bytes = readback::read_texture(&gpu, &out.texture).unwrap();
     assert_eq!(&bytes[..4], &[1, 2, 3, 4]);
 }
+
+#[test]
+fn read_pixel_matches_the_whole_readback() {
+    let gpu = gpu();
+    let renderer = GradientRenderer::new(&gpu);
+    let out = renderer.render(&gpu, &Paint::linear(RED, BLUE), 64, 8);
+    let all = readback::read_texture(&gpu, &out.texture).unwrap();
+    for (x, y) in [(0, 0), (31, 4), (63, 7)] {
+        let i = ((y * 64 + x) * 4) as usize;
+        assert_eq!(
+            readback::read_pixel(&gpu, &out.texture, x, y).unwrap(),
+            [all[i], all[i + 1], all[i + 2], all[i + 3]]
+        );
+    }
+    // Outside the texture: the nearest edge pixel.
+    let last = (63 * 4) as usize;
+    assert_eq!(
+        readback::read_pixel(&gpu, &out.texture, 500, 0).unwrap(),
+        [all[last], all[last + 1], all[last + 2], all[last + 3]]
+    );
+}

@@ -40,22 +40,26 @@
       settings gets Solid color / Linear gradient / Radial gradient
 
 ## 4. Color picker
-- [ ] 4.1 Picker popup widget: hue ring image (Rust, once per size), saturation/brightness
-      square, opacity slider on checkerboard, hex and RGB fields, preset swatches
-- [ ] 4.2 Recent colors (last 12) in settings
-- [ ] 4.3 Every `color` property, the canvas background and item fill open the picker; live
-      edits coalesce; `History::seal` on close (test: one undo step per session)
+- [x] 4.1 Picker (`color.slint`, one per window via the `ColorPicking` global): hue ring image
+      (Rust, once; orientation tested), saturation/brightness square, opacity slider on a
+      checkerboard, hex and R/G/B/A fields, preset swatches, Done; Esc or a click outside closes
+- [x] 4.2 Recent colors (last 12, newest first, no repeats) in settings (tested)
+- [x] 4.3 Every `color` property, gradient colors and the canvas background open the picker
+      through `ColorSwatch`; live edits; the engine holds the undo run while the picker is
+      open (`Engine::hold_history`) and seals it on close (test: pauses don't split the step).
+      Item fill uses the same swatch in 5.5
 - [x] 4.4 Gradient editor: preview bar with a handle per color (click the bar to add a color
       with the color at that point, drag a handle between its neighbours), Remove button,
-      selected color's hex and swatches, Angle slider (linear), Center X/Y and Size sliders
-      (radial); shared by the inspector and Canvas settings. Its color controls switch to the
-      picker in 4.3
-- [ ] 4.5 Eyedropper from the Preview: crosshair and loupe; engine 1 × 1 readback into a reused
-      staging buffer, reply on the event channel; no cost when not picking
-- [ ] 4.6 Screen color picking trait (`pick_screen_color`); Windows: frozen screenshot in
-      borderless topmost windows per monitor, loupe, click picks, Esc cancels
-- [ ] 4.7 Hide "From screen" where the platform has no implementation yet (macOS
-      `NSColorSampler` and the Linux portal `PickColor` come in their platform branches)
+      selected color's swatch and hex, Angle slider (linear), Center X/Y and Size sliders
+      (radial); shared by the inspector and Canvas settings
+- [x] 4.5 Eyedropper from the Preview: crosshair and loupe; one-pixel readback of the shown
+      picture (`readback::read_pixel`, tested); nothing runs when not picking; Esc cancels
+- [x] 4.6 Screen color picking on Windows: press the screen button and drag, release over the
+      color (`screen_color`: `GetCursorPos` + `GetPixel`, polled every 30 ms while dragging)
+- [x] 4.7 The screen button is hidden where the platform has no implementation yet (macOS
+      `NSColorSampler` and the Linux `PickColor` portal come in their platform branches)
+- [ ] 4.8 Check in the app: picker layout, wheel and square dragging, Preview and screen
+      eyedroppers, one undo per picker session
 
 ## 5. Fill around fitted items
 - [ ] 5.1 `SceneItem::fill: ItemFill` (serde default `None`); `UpdateItem` patch field; Copy to

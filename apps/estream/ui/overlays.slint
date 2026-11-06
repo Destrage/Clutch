@@ -4,6 +4,7 @@ import { PaletteEntry, Preset, SetupLine, SourceType, SettingsForm, DestinationR
 import { Button, IconButton, Icon, Badge, TextField, TextArea, NumberField, Select, Slider, Toggle, SectionTitle } from "widgets.slint";
 import { KindIcon } from "panels.slint";
 import { PropEditor } from "inspector.slint";
+import { ColorSwatch } from "color.slint";
 
 // Full-window scrim with a centered card. Clicking the scrim calls `dismiss`.
 export component Modal inherits Rectangle {
@@ -1957,13 +1958,11 @@ export component CanvasSettingsDialog inherits Modal {
         if root.form.background-style == 0: HorizontalLayout {
             spacing: 8px;
             Rectangle { width: 84px; }
-            Rectangle {
-                width: 28px;
-                height: 28px;
-                border-radius: Theme.radius-s;
-                background: root.form.background;
-                border-width: 1px;
-                border-color: Theme.border-strong;
+            ColorSwatch {
+                value: root.form.background;
+                target: "canvas-bg";
+                label: "Background color";
+                alpha: false;
             }
             TextField {
                 label: "Background color";
@@ -1983,23 +1982,6 @@ export component CanvasSettingsDialog inherits Modal {
                 gradient-color(i, c) => { root.background-gradient-color(i, c); }
                 gradient-text(i, t) => { root.background-gradient-text(i, t); }
             }
-        }
-        if root.form.background-style == 0: HorizontalLayout {
-            spacing: 6px;
-            Rectangle { width: 84px; }
-            for swatch in [#000000, #ffffff, #14161c, #6c8cff, #f0435a, #3dd68c, #f2b84b, #b06cff]: Rectangle {
-                width: 20px;
-                height: 20px;
-                border-radius: 10px;
-                background: swatch;
-                border-width: 1px;
-                border-color: Theme.border-strong;
-                TouchArea {
-                    mouse-cursor: MouseCursor.pointer;
-                    clicked => { root.background-color(swatch); }
-                }
-            }
-            Rectangle { horizontal-stretch: 1; }
         }
         HorizontalLayout {
             alignment: end;

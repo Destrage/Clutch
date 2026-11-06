@@ -176,6 +176,8 @@ pub struct Settings {
     pub theme: ThemeMode,
     /// Accent color as `#rrggbb`.
     pub accent: String,
+    /// The color picker's recent colors, newest first (`#rrggbb` or `#rrggbbaa`).
+    pub recent_colors: Vec<String>,
     pub window: Option<WindowState>,
     pub layout: PanelLayout,
     pub inspector: InspectorState,
@@ -539,6 +541,7 @@ impl Default for Settings {
         Self {
             theme: ThemeMode::Dark,
             accent: DEFAULT_ACCENT.into(),
+            recent_colors: Vec::new(),
             window: None,
             layout: PanelLayout::default(),
             inspector: InspectorState::default(),

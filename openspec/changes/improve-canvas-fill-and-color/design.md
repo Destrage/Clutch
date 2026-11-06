@@ -111,17 +111,18 @@ its hint gains "Try HEVC or AV1, or a 1440 × 2560 canvas" when the canvas is ta
 
 ## Eyedropper
 - **From the Preview** (all platforms): while picking, the Preview shows a crosshair and a
-  magnified loupe. A click asks the engine for one pixel of the Preview's canvas texture. The
-  video thread copies 1 × 1 texel into a reused staging buffer after the frame, maps it
-  asynchronously, and replies over the existing event channel (Rgba16Float to sRGB Rgba8). No
-  per-frame cost when not picking.
-- **From the screen**: a platform trait `pick_screen_color() -> Option<Rgba8>` (async, None if
-  cancelled).
-  - Windows (this change): grab every monitor once (GDI `BitBlt` of the virtual screen), show it
-    in borderless topmost windows with the loupe; click picks, Esc cancels. Because the image is
-    frozen, clicking doesn't reach the app underneath.
-  - macOS: `NSColorSampler`. Linux: the `org.freedesktop.portal.Screenshot.PickColor` portal.
-    Both are left to their platform branches. Until they land, the screen option is hidden there.
+  loupe (11 × 11 frame pixels, 9 times larger). A click reads one pixel of the picture the UI
+  shows (`readback::read_pixel` on the UI device's copy, already sRGB), so the engine isn't
+  involved and nothing runs when not picking. Esc cancels.
+- **From the screen** (`screen_color` module): press the screen button in the picker and drag;
+  release over any color. While the button is held the window keeps the mouse, so the app
+  under the pointer never gets the click. The app's tick reads the pixel under the pointer
+  every 30 ms (Windows: `GetCursorPos` + `GetPixel` on the screen DC) to show it live, and
+  takes it when the button is up. This replaced the planned frozen-screenshot overlay windows,
+  which would have to cover every monitor at its own scale.
+  - macOS (`NSColorSampler`) and Linux (the `PickColor` portal, via `ashpd`) pick with a
+    click of their own; they come in their platform branches. Until then the screen button is
+    hidden there (`screen_color::AVAILABLE`).
 
 ## Removing sounds from the mixer
 - Sound knobs (Stage and Live deck): a right-click menu with Settings, Mute and Remove. Full

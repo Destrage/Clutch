@@ -1,0 +1,434 @@
+// The color picker: a hue ring around a saturation/brightness square, opacity, hex and RGB
+// fields, swatches, recent colors and an eyedropper. One picker serves the whole window;
+// swatches open it through `ColorPicking.request`, and Rust applies each change to the
+// setting that opened it.
+
+import { Theme } from "theme.slint";
+import { Icons } from "icons.slint";
+import { TextField, NumberField, IconButton, Button } from "widgets.slint";
+
+export global ColorPicking {
+    in-out property <bool> open;
+    in-out property <color> color;
+    /// Where the picker opens (window coordinates of the swatch that opened it).
+    in-out property <length> x;
+    in-out property <length> y;
+    /// Whether the setting has transparency (off for canvas backgrounds).
+    in property <bool> alpha: true;
+    in property <[color]> recent;
+    /// Picking from anywhere on screen is possible on this system.
+    in property <bool> screen;
+    /// The next click on the Preview picks its color.
+    in-out property <bool> from-preview;
+    /// The hue ring and the checkerboard behind transparent colors (drawn by Rust once).
+    in property <image> wheel;
+    in property <image> checker;
+
+    /// A swatch asks to edit a color: (target, current color, x, y).
+    callback request(string, color, length, length);
+    callback changed(color);
+    callback closed();
+    callback pick-screen();
+    /// A Preview click while picking, as a fraction of the canvas (0..1 each way).
+    callback preview-picked(float, float);
+    pure callback hex(color) -> string;
+    /// A typed color, or transparent black when it isn't one (see `valid`).
+    pure callback parse(string) -> color;
+    pure callback valid(string) -> bool;
+}
+
+/// A color swatch that opens the picker for `target`.
+export component ColorSwatch inherits Rectangle {
+    in property <color> value;
+    in property <string> target;
+    in property <string> label: "Color";
+    in property <bool> alpha: true;
+    in property <length> size: 28px;
+
+    width: root.size;
+    height: root.size;
+    border-radius: Theme.radius-s;
+    border-width: 1px;
+    border-color: ta.has-hover ? Theme.accent : Theme.border-strong;
+    clip: true;
+    accessible-role: button;
+    accessible-label: root.label + " " + ColorPicking.hex(root.value);
+    accessible-action-default => { root.open(); }
+
+    function open() {
+        ColorPicking.request(root.target, root.value, root.absolute-position.x, root.absolute-position.y + root.height + 4px);
+    }
+
+    Image {
+        width: parent.width;
+        height: parent.height;
+        source: ColorPicking.checker;
+        horizontal-tiling: repeat;
+        vertical-tiling: repeat;
+        visible: root.value.alpha < 255;
+    }
+    Rectangle { background: root.value; }
+    ta := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        clicked => { root.open(); }
+    }
+}
+
+// The picker card. Hue, saturation and brightness live here so that the hue survives greys
+// and blacks; the color is rebuilt from them on every edit.
+export component ColorPickerPanel inherits Rectangle {
+    property <length> wheel-size: 200px;
+    property <length> ring: 18px;
+    property <length> inner: root.wheel-size / 2 - root.ring;
+    // The square inside the ring.
+    property <length> square: floor((root.inner - 4px) * 1.41 / 1px) * 1px;
+    property <length> square-x: (root.wheel-size - root.square) / 2;
+
+    property <float> hue;
+    property <float> sat;
+    property <float> val;
+    property <float> alpha-value: 1;
+    property <color> mine: hsv(root.hue, root.sat, root.val, root.alpha-value);
+    // "ring" | "square" while dragging on the wheel.
+    property <string> dragging;
+    property <string> hex-text: ColorPicking.hex(ColorPicking.color);
+
+    function load() {
+        let c = ColorPicking.color;
+        if (c == root.mine) { return; }
+        let h = c.to-hsv();
+        // A grey or black has no hue of its own: keep the one shown.
+        if (h.saturation > 0.001 && h.value > 0.001) {
+            root.hue = h.hue;
+        }
+        root.sat = h.saturation;
+        root.val = h.value;
+        root.alpha-value = ColorPicking.alpha ? h.alpha : 1;
+    }
+
+    function set(c: color) {
+        ColorPicking.color = c;
+        ColorPicking.changed(c);
+    }
+
+    function edit() {
+        root.set(root.mine);
+    }
+
+    function wheel-at(px: length, py: length) {
+        let dx = px - root.wheel-size / 2;
+        let dy = py - root.wheel-size / 2;
+        if (root.dragging == "ring") {
+            let a = atan2(dy / 1px, dx / 1px) / 1deg;
+            root.hue = a < 0 ? a + 360 : a;
+        } else {
+            root.sat = clamp((px - root.square-x) / root.square, 0, 1);
+            root.val = clamp(1 - (py - root.square-x) / root.square, 0, 1);
+        }
+        root.edit();
+    }
+
+    // Follow changes from outside (the eyedropper, reopening on another swatch).
+    property <color> outside: ColorPicking.color;
+    changed outside => { root.load(); }
+    init => { root.load(); }
+
+    width: 248px;
+    height: body.preferred-height;
+    background: Theme.surface-2;
+    border-radius: Theme.radius-l;
+    border-width: 1px;
+    border-color: Theme.border-strong;
+    drop-shadow-blur: 24px;
+    drop-shadow-offset-y: 8px;
+    drop-shadow-color: #00000070;
+    // Clicks inside the card stay here.
+    TouchArea { }
+
+    body := VerticalLayout {
+        padding: 12px;
+        spacing: 10px;
+
+        HorizontalLayout {
+            alignment: center;
+            wheel := Rectangle {
+                width: root.wheel-size;
+                height: root.wheel-size;
+                Image {
+                    width: parent.width;
+                    height: parent.height;
+                    source: ColorPicking.wheel;
+                    image-fit: fill;
+                }
+                // Hue position on the ring.
+                Rectangle {
+                    property <length> r: root.wheel-size / 2 - root.ring / 2;
+                    x: root.wheel-size / 2 + self.r * cos(root.hue * 1deg) - 8px;
+                    y: root.wheel-size / 2 + self.r * sin(root.hue * 1deg) - 8px;
+                    width: 16px;
+                    height: 16px;
+                    border-radius: 8px;
+                    background: hsv(root.hue, 1, 1);
+                    border-width: 2px;
+                    border-color: #ffffff;
+                    drop-shadow-blur: 3px;
+                    drop-shadow-color: #00000090;
+                }
+                // Saturation (left to right) and brightness (bottom to top).
+                Rectangle {
+                    x: root.square-x;
+                    y: root.square-x;
+                    width: root.square;
+                    height: root.square;
+                    border-radius: 3px;
+                    clip: true;
+                    Rectangle { background: @linear-gradient(90deg, #ffffff 0%, hsv(root.hue, 1, 1) 100%); }
+                    Rectangle { background: @linear-gradient(0deg, #000000 0%, #00000000 100%); }
+                    Rectangle {
+                        x: root.sat * parent.width - 7px;
+                        y: (1 - root.val) * parent.height - 7px;
+                        width: 14px;
+                        height: 14px;
+                        border-radius: 7px;
+                        border-width: 2px;
+                        border-color: root.val > 0.5 && root.sat < 0.4 ? #000000 : #ffffff;
+                    }
+                }
+                TouchArea {
+                    mouse-cursor: MouseCursor.crosshair;
+                    pointer-event(e) => {
+                        if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                            let dx = self.mouse-x - root.wheel-size / 2;
+                            let dy = self.mouse-y - root.wheel-size / 2;
+                            let d = sqrt(dx * dx / 1px / 1px + dy * dy / 1px / 1px) * 1px;
+                            if (d >= root.inner - 2px && d <= root.wheel-size / 2 + 2px) {
+                                root.dragging = "ring";
+                            } else if (self.mouse-x >= root.square-x - 4px && self.mouse-x <= root.square-x + root.square + 4px
+                                && self.mouse-y >= root.square-x - 4px && self.mouse-y <= root.square-x + root.square + 4px) {
+                                root.dragging = "square";
+                            } else {
+                                root.dragging = "";
+                            }
+                            if (root.dragging != "") { root.wheel-at(self.mouse-x, self.mouse-y); }
+                        } else if (e.kind == PointerEventKind.up) {
+                            root.dragging = "";
+                        }
+                    }
+                    moved => {
+                        if (self.pressed && root.dragging != "") { root.wheel-at(self.mouse-x, self.mouse-y); }
+                    }
+                }
+            }
+        }
+
+        // Opacity, over a checkerboard.
+        if ColorPicking.alpha: Rectangle {
+            height: 16px;
+            border-radius: 8px;
+            clip: true;
+            accessible-role: slider;
+            accessible-label: "Opacity";
+            accessible-value: round(root.alpha-value * 100) + "%";
+            Image {
+                width: parent.width;
+                height: parent.height;
+                source: ColorPicking.checker;
+                horizontal-tiling: repeat;
+                vertical-tiling: repeat;
+            }
+            Rectangle {
+                background: @linear-gradient(90deg, hsv(root.hue, root.sat, root.val, 0) 0%, hsv(root.hue, root.sat, root.val, 1) 100%);
+            }
+            Rectangle {
+                x: root.alpha-value * (parent.width - 14px);
+                width: 14px;
+                height: parent.height;
+                border-radius: 7px;
+                border-width: 2px;
+                border-color: #ffffff;
+                drop-shadow-blur: 2px;
+                drop-shadow-color: #00000090;
+            }
+            TouchArea {
+                mouse-cursor: MouseCursor.ew-resize;
+                pointer-event(e) => {
+                    if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                        root.alpha-value = clamp((self.mouse-x - 7px) / (self.width - 14px), 0, 1);
+                        root.edit();
+                    }
+                }
+                moved => {
+                    if (self.pressed) {
+                        root.alpha-value = clamp((self.mouse-x - 7px) / (self.width - 14px), 0, 1);
+                        root.edit();
+                    }
+                }
+            }
+        }
+
+        // The color, hex and the eyedroppers.
+        HorizontalLayout {
+            spacing: 6px;
+            Rectangle {
+                width: 28px;
+                height: 28px;
+                border-radius: Theme.radius-s;
+                border-width: 1px;
+                border-color: Theme.border-strong;
+                clip: true;
+                Image {
+                    width: parent.width;
+                    height: parent.height;
+                    source: ColorPicking.checker;
+                    horizontal-tiling: repeat;
+                    vertical-tiling: repeat;
+                }
+                Rectangle { background: ColorPicking.color; }
+            }
+            TextField {
+                label: "Hex";
+                text: root.hex-text;
+                placeholder: ColorPicking.alpha ? "#rrggbbaa" : "#rrggbb";
+                accepted(t) => {
+                    if (ColorPicking.valid(t)) {
+                        let c = ColorPicking.parse(t);
+                        root.set(ColorPicking.alpha ? c : c.with-alpha(1));
+                        root.load();
+                    } else {
+                        self.text = root.hex-text;
+                    }
+                }
+            }
+            IconButton {
+                icon: Icons.pipette;
+                tooltip: "Pick a color from the Preview";
+                toggled: ColorPicking.from-preview;
+                clicked => { ColorPicking.from-preview = !ColorPicking.from-preview; }
+            }
+            // Press here and drag anywhere on screen; the color under the pointer is taken on
+            // release. The window keeps the mouse while the button is held, so nothing
+            // underneath is clicked.
+            if ColorPicking.screen: Rectangle {
+                width: 28px;
+                height: 28px;
+                border-radius: Theme.radius-s;
+                background: screen-ta.pressed ? Theme.accent-soft : screen-ta.has-hover ? Theme.hover : transparent;
+                accessible-role: button;
+                accessible-label: "Pick a color from the screen: drag from here";
+                Image {
+                    x: (parent.width - 16px) / 2;
+                    y: (parent.height - 16px) / 2;
+                    width: 16px;
+                    height: 16px;
+                    source: Icons.monitor;
+                    colorize: screen-ta.pressed ? Theme.accent : Theme.text-muted;
+                }
+                screen-ta := TouchArea {
+                    mouse-cursor: MouseCursor.crosshair;
+                    pointer-event(e) => {
+                        if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                            ColorPicking.pick-screen();
+                        }
+                    }
+                }
+            }
+        }
+        if ColorPicking.screen && !ColorPicking.from-preview: Text {
+            text: "Pipette: click the Preview. Screen: drag from the screen button and let go over any color.";
+            color: Theme.text-faint;
+            font-size: Theme.font-xs;
+            wrap: word-wrap;
+        }
+        if ColorPicking.from-preview: Text {
+            text: "Click the Preview to pick its color. Esc cancels.";
+            color: Theme.accent;
+            font-size: Theme.font-xs;
+            wrap: word-wrap;
+        }
+
+        // Red, green, blue (and opacity) as numbers.
+        HorizontalLayout {
+            spacing: 4px;
+            NumberField {
+                label: "R";
+                value: ColorPicking.color.red;
+                minimum: 0;
+                maximum: 255;
+                changed(v) => { root.set(rgba(round(v), ColorPicking.color.green, ColorPicking.color.blue, ColorPicking.color.alpha / 255)); root.load(); }
+            }
+            NumberField {
+                label: "G";
+                value: ColorPicking.color.green;
+                minimum: 0;
+                maximum: 255;
+                changed(v) => { root.set(rgba(ColorPicking.color.red, round(v), ColorPicking.color.blue, ColorPicking.color.alpha / 255)); root.load(); }
+            }
+            NumberField {
+                label: "B";
+                value: ColorPicking.color.blue;
+                minimum: 0;
+                maximum: 255;
+                changed(v) => { root.set(rgba(ColorPicking.color.red, ColorPicking.color.green, round(v), ColorPicking.color.alpha / 255)); root.load(); }
+            }
+            if ColorPicking.alpha: NumberField {
+                label: "A";
+                value: round(ColorPicking.color.alpha / 2.55);
+                minimum: 0;
+                maximum: 100;
+                suffix: "%";
+                changed(v) => { root.set(ColorPicking.color.with-alpha(clamp(v, 0, 100) / 100)); root.load(); }
+            }
+        }
+
+        // Preset swatches, then the most recent picks.
+        HorizontalLayout {
+            spacing: 5px;
+            for swatch in [#ffffff, #000000, #6c8cff, #f0435a, #3dd68c, #f2b84b, #b06cff, #00b5d8]: Rectangle {
+                width: 21px;
+                height: 21px;
+                border-radius: 11px;
+                background: swatch;
+                border-width: 1px;
+                border-color: Theme.border-strong;
+                TouchArea {
+                    mouse-cursor: MouseCursor.pointer;
+                    clicked => { root.set(ColorPicking.alpha ? swatch.with-alpha(root.alpha-value) : swatch); root.load(); }
+                }
+            }
+        }
+        if ColorPicking.recent.length > 0: Text {
+            text: "Recent";
+            color: Theme.text-faint;
+            font-size: Theme.font-xs;
+        }
+        if ColorPicking.recent.length > 0: HorizontalLayout {
+            spacing: 5px;
+            alignment: start;
+            for c in ColorPicking.recent: Rectangle {
+                width: 21px;
+                height: 21px;
+                border-radius: 4px;
+                border-width: 1px;
+                border-color: Theme.border-strong;
+                clip: true;
+                Image {
+                    width: parent.width;
+                    height: parent.height;
+                    source: ColorPicking.checker;
+                    horizontal-tiling: repeat;
+                    vertical-tiling: repeat;
+                    visible: c.alpha < 255;
+                }
+                Rectangle { background: c; }
+                TouchArea {
+                    mouse-cursor: MouseCursor.pointer;
+                    clicked => { root.set(ColorPicking.alpha ? c : c.with-alpha(1)); root.load(); }
+                }
+            }
+        }
+        HorizontalLayout {
+            alignment: end;
+            Button { text: "Done"; kind: "primary"; clicked => { ColorPicking.closed(); } }
+        }
+    }
+}

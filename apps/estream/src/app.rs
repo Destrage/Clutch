@@ -8,10 +8,10 @@ use crate::settings::{
     GameAudio, InspectorState, PanelLayout, Paths, Settings, ThemeMode, WindowState,
 };
 use crate::ui::{
-    AppWindow, AudioInspect, CanvasBox, CanvasForm, CanvasSize, CanvasTab, DestinationRow,
-    FilterParamRow, FilterRow, GradientStopRow, Guide, Inspect, InspectorFolds, LayerRow, LiveRow,
-    MediaInspect, MixerStrip, PaletteEntry, Platform, Preset, PropRow, SceneRow, SettingsForm,
-    SetupLine, SourceType, Theme, VideoFilterRow,
+    AppWindow, AudioInspect, CanvasBox, CanvasForm, CanvasSize, CanvasTab, ColorPicking,
+    DestinationRow, FilterParamRow, FilterRow, GradientStopRow, Guide, Inspect, InspectorFolds,
+    LayerRow, LiveRow, MediaInspect, MixerStrip, PaletteEntry, Platform, Preset, PropRow, SceneRow,
+    SettingsForm, SetupLine, SourceType, Theme, VideoFilterRow,
 };
 use estream_core::{BlendMode, BoundsMode, CanvasId, ItemId, Rational, Rgba8, SceneId, SourceId};
 use estream_engine::{
@@ -70,6 +70,10 @@ pub struct App {
     props_generation: u64,
     /// The selected color of a gradient being edited in the inspector.
     gradient_stop: usize,
+    /// What the color picker is editing (while it is open).
+    picker: Option<Picker>,
+    /// Dragging the eyedropper over the screen: when the pointer was last read.
+    screen_picking: Option<Instant>,
     /// Canvas settings: the background being edited, and its selected gradient color.
     canvas_bg: estream_core::Paint,
     canvas_bg_stop: usize,
@@ -586,6 +590,88 @@ fn id_str(id: impl std::fmt::Display) -> SharedString {
     id.to_string().into()
 }
 
+/// What the color picker edits.
+#[derive(Clone, Debug, PartialEq)]
+enum PickerTarget {
+    /// A color property of a source.
+    Prop {
+        source: SourceId,
+        key: String,
+    },
+    /// One color of a source's gradient property.
+    Stop {
+        source: SourceId,
+        key: String,
+        index: i32,
+    },
+    /// Canvas settings: the solid background, or one color of its gradient.
+    CanvasBg,
+    CanvasStop(i32),
+}
+
+#[derive(Debug)]
+struct Picker {
+    target: PickerTarget,
+    /// The color when the picker opened (an unchanged color isn't added to recent colors).
+    start: Rgba8,
+}
+
+/// Most recent colors the picker keeps.
+const RECENT_COLORS: usize = 12;
+
+/// Puts `color` first in `recent` (once), keeping at most [`RECENT_COLORS`].
+fn remember(recent: &mut Vec<String>, color: String) {
+    recent.retain(|c| !c.eq_ignore_ascii_case(&color));
+    recent.insert(0, color);
+    recent.truncate(RECENT_COLORS);
+}
+
+/// The picker's hue ring: hue 0 (red) to the right, increasing clockwise, as in color.slint.
+/// The ring is the outer 18 % of the radius.
+fn hue_ring_image(size: u32) -> slint::Image {
+    let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(size, size);
+    let half = size as f32 / 2.0;
+    let inner = half * 0.82;
+    for (i, px) in buffer.make_mut_slice().iter_mut().enumerate() {
+        let x = (i as u32 % size) as f32 + 0.5 - half;
+        let y = (i as u32 / size) as f32 + 0.5 - half;
+        let d = x.hypot(y);
+        let coverage = ((d - inner).min(half - d) + 0.5).clamp(0.0, 1.0);
+        let hue = y.atan2(x).to_degrees().rem_euclid(360.0);
+        let [r, g, b] = hsv_to_rgb(hue, 1.0, 1.0);
+        *px = slint::Rgba8Pixel::new(r, g, b, (coverage * 255.0).round() as u8);
+    }
+    slint::Image::from_rgba8(buffer)
+}
+
+/// The checkerboard shown behind transparent colors (tiled).
+fn checker_image() -> slint::Image {
+    let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(8, 8);
+    for (i, px) in buffer.make_mut_slice().iter_mut().enumerate() {
+        let (x, y) = (i % 8 / 4, i / 8 / 4);
+        let v = if (x + y) % 2 == 0 { 255 } else { 200 };
+        *px = slint::Rgba8Pixel::new(v, v, v, 255);
+    }
+    slint::Image::from_rgba8(buffer)
+}
+
+/// HSV (hue in degrees, saturation and value 0..1) to 8-bit RGB.
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [u8; 3] {
+    let c = v * s;
+    let h = h.rem_euclid(360.0) / 60.0;
+    let x = c * (1.0 - (h % 2.0 - 1.0).abs());
+    let (r, g, b) = match h as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = v - c;
+    [r, g, b].map(|ch| ((ch + m) * 255.0).round() as u8)
+}
+
 /// Frame rates offered in Canvas settings.
 const CANVAS_RATES: [(&str, Rational); 8] = [
     ("24 fps", Rational::fps(24)),
@@ -837,6 +923,8 @@ impl App {
             props: None,
             props_generation: 0,
             gradient_stop: 0,
+            picker: None,
+            screen_picking: None,
             canvas_bg: estream_core::Paint::default(),
             canvas_bg_stop: 0,
             geoms: Vec::new(),
@@ -2676,6 +2764,7 @@ impl App {
     /// Called from a fast UI timer: preview frames, engine events, stats, toasts.
     pub fn tick(&mut self) {
         let Some(w) = self.window() else { return };
+        self.screen_pick_tick();
         let mut changed = false;
         if w.get_chat_visible() {
             self.tick_chat();
@@ -4065,7 +4154,7 @@ impl App {
         form.background = to_color(c);
         form.background_hex = hex(c).into();
         let mut row = PropRow {
-            key: "background".into(),
+            key: "canvas-background".into(),
             label: "Gradient".into(),
             kind: "gradient".into(),
             stop: self.canvas_bg_stop as i32,
@@ -4154,8 +4243,21 @@ impl App {
     }
 
     pub fn canvas_settings_cancel(&mut self) {
+        self.close_canvas_picker();
         if let Some(w) = self.window() {
             w.set_canvas_form(CanvasForm::default());
+        }
+    }
+
+    /// Closes the color picker if it edits the Canvas settings being closed.
+    fn close_canvas_picker(&mut self) {
+        if self.picker.as_ref().is_some_and(|p| {
+            matches!(
+                p.target,
+                PickerTarget::CanvasBg | PickerTarget::CanvasStop(_)
+            )
+        }) {
+            self.picker_close();
         }
     }
 
@@ -4220,6 +4322,7 @@ impl App {
         }
         let name = canvas.name.clone();
         if commands.is_empty() || self.exec(Command::Batch { commands }) {
+            self.close_canvas_picker();
             w.set_canvas_form(CanvasForm::default());
             if resized {
                 self.toast(
@@ -9488,6 +9591,180 @@ impl App {
         );
     }
 
+    // ------------------------------------------------------------ color picker
+
+    /// What a swatch's target string names: `prop:<key>`, `stop:<key>:<index>`, `canvas-bg`
+    /// or `stop:canvas-background:<index>` (Canvas settings).
+    fn picker_target(&self, target: &str) -> Option<PickerTarget> {
+        if target == "canvas-bg" {
+            return Some(PickerTarget::CanvasBg);
+        }
+        let source = self
+            .canvas_and_scene()
+            .and_then(|(snapshot, _, _)| self.current_source(&snapshot));
+        if let Some(rest) = target.strip_prefix("stop:") {
+            let (key, index) = rest.rsplit_once(':')?;
+            let index = index.parse().ok()?;
+            if key == "canvas-background" {
+                return Some(PickerTarget::CanvasStop(index));
+            }
+            return Some(PickerTarget::Stop {
+                source: source?,
+                key: key.into(),
+                index,
+            });
+        }
+        Some(PickerTarget::Prop {
+            source: source?,
+            key: target.strip_prefix("prop:")?.into(),
+        })
+    }
+
+    /// A swatch opens the picker. Every change until it closes is one undo step.
+    pub fn picker_request(&mut self, target: &str, color: slint::Color, x: f32, y: f32) {
+        self.picker_close();
+        let Some(target) = self.picker_target(target) else {
+            return;
+        };
+        let Some(w) = self.window() else { return };
+        if matches!(
+            target,
+            PickerTarget::Prop { .. } | PickerTarget::Stop { .. }
+        ) && let Some(engine) = &self.engine
+        {
+            engine.hold_history();
+        }
+        let g = w.global::<ColorPicking>();
+        g.set_alpha(target != PickerTarget::CanvasBg);
+        g.set_color(color);
+        g.set_x(x);
+        g.set_y(y);
+        g.set_recent(ModelRc::new(VecModel::from(
+            self.settings
+                .recent_colors
+                .iter()
+                .filter_map(|h| parse_hex_color(h).map(to_color))
+                .collect::<Vec<_>>(),
+        )));
+        g.set_screen(crate::screen_color::AVAILABLE);
+        g.set_from_preview(false);
+        g.set_open(true);
+        self.picker = Some(Picker {
+            target,
+            start: from_color(color),
+        });
+    }
+
+    /// The picker's color changed: apply it to the setting that opened it.
+    pub fn picker_changed(&mut self, color: slint::Color) {
+        let Some(target) = self.picker.as_ref().map(|p| p.target.clone()) else {
+            return;
+        };
+        // A source's color follows that source only: selecting another one ends the session.
+        if let PickerTarget::Prop { source, .. } | PickerTarget::Stop { source, .. } = &target {
+            let current = self
+                .canvas_and_scene()
+                .and_then(|(snapshot, _, _)| self.current_source(&snapshot));
+            if current != Some(*source) {
+                self.picker_close();
+                return;
+            }
+        }
+        match target {
+            PickerTarget::Prop { key, .. } => self.prop_color(&key, color),
+            PickerTarget::Stop { key, index, .. } => self.prop_gradient_color(&key, index, color),
+            PickerTarget::CanvasBg => self.canvas_background_color(color),
+            PickerTarget::CanvasStop(i) => self.canvas_background_gradient_color(i, color),
+        }
+    }
+
+    /// Closes the picker (Done, Esc, a click outside), ending its undo step and remembering
+    /// the color.
+    pub fn picker_close(&mut self) {
+        let Some(picker) = self.picker.take() else {
+            return;
+        };
+        self.screen_picking = None;
+        if let Some(w) = self.window() {
+            let g = w.global::<ColorPicking>();
+            g.set_open(false);
+            g.set_from_preview(false);
+            let last = from_color(g.get_color());
+            if last != picker.start {
+                self.remember_color(last);
+            }
+        }
+        if let Some(engine) = &self.engine {
+            engine.seal_history();
+        }
+    }
+
+    fn remember_color(&mut self, color: Rgba8) {
+        let h = hex(color);
+        remember(&mut self.settings.recent_colors, h);
+        self.settings.save(&self.paths.settings());
+    }
+
+    /// A click on the Preview while picking: the color of that pixel as shown.
+    pub fn picker_preview_picked(&mut self, fx: f32, fy: f32) {
+        let Some(w) = self.window() else { return };
+        let g = w.global::<ColorPicking>();
+        g.set_from_preview(false);
+        let Some(texture) = self.main_picture.as_ref().map(|p| p.texture()) else {
+            return;
+        };
+        let x = (fx.clamp(0.0, 1.0) * texture.width() as f32) as u32;
+        let y = (fy.clamp(0.0, 1.0) * texture.height() as f32) as u32;
+        match estream_gpu::readback::read_pixel(&self.gpu, texture, x, y) {
+            Ok([r, gr, b, _]) => {
+                let a = if g.get_alpha() {
+                    g.get_color().alpha()
+                } else {
+                    255
+                };
+                let color = slint::Color::from_argb_u8(a, r, gr, b);
+                g.set_color(color);
+                self.picker_changed(color);
+            }
+            Err(e) => self.toast(format!("Couldn't read the Preview: {e}"), true),
+        }
+    }
+
+    /// The eyedropper was pressed: follow the pointer over the screen until it is released.
+    pub fn picker_pick_screen(&mut self) {
+        if crate::screen_color::AVAILABLE && self.picker.is_some() {
+            self.screen_picking = Some(Instant::now() - Duration::from_secs(1));
+        }
+    }
+
+    /// While the eyedropper is dragged: show the color under the pointer; on release, take it.
+    fn screen_pick_tick(&mut self) {
+        let Some(last) = self.screen_picking else {
+            return;
+        };
+        if last.elapsed() < Duration::from_millis(30) {
+            return;
+        }
+        self.screen_picking = Some(Instant::now());
+        let Some(w) = self.window() else { return };
+        let g = w.global::<ColorPicking>();
+        let Some((c, held)) = crate::screen_color::under_pointer() else {
+            self.screen_picking = None;
+            return;
+        };
+        let a = if g.get_alpha() {
+            g.get_color().alpha()
+        } else {
+            255
+        };
+        let color = to_color(Rgba8 { a, ..c });
+        g.set_color(color);
+        if !held {
+            self.screen_picking = None;
+            self.picker_changed(color);
+        }
+    }
+
     /// The current source's value for `key`, with the schema's default when it isn't set.
     fn prop_value(&self, key: &str) -> Option<serde_json::Value> {
         let (snapshot, _, _) = self.canvas_and_scene()?;
@@ -11465,6 +11742,27 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
         }};
     }
 
+    // The color picker (a global, so any swatch can open it).
+    {
+        let g = w.global::<ColorPicking>();
+        g.set_wheel(hue_ring_image(400));
+        g.set_checker(checker_image());
+        g.on_hex(|c| hex(from_color(c)).into());
+        g.on_parse(|t| parse_hex_color(&t).map(to_color).unwrap_or_default());
+        g.on_valid(|t| parse_hex_color(&t).is_some());
+        let a = app.clone();
+        g.on_request(move |target, color, x, y| {
+            with(&a, move |a| a.picker_request(&target, color, x, y));
+        });
+        let a = app.clone();
+        g.on_changed(move |color| with(&a, move |a| a.picker_changed(color)));
+        let a = app.clone();
+        g.on_closed(move || with(&a, |a| a.picker_close()));
+        let a = app.clone();
+        g.on_pick_screen(move || with(&a, |a| a.picker_pick_screen()));
+        let a = app.clone();
+        g.on_preview_picked(move |fx, fy| with(&a, move |a| a.picker_preview_picked(fx, fy)));
+    }
     {
         let app = app.clone();
         w.on_key(move |text, ctrl, shift, alt| match app.try_borrow_mut() {
@@ -11743,6 +12041,53 @@ mod tests {
 
         applied.inverse.apply(&mut p).unwrap();
         assert_eq!(p, before);
+    }
+
+    #[test]
+    fn recent_colors_are_newest_first_unique_and_limited() {
+        let mut recent = Vec::new();
+        for i in 0..20 {
+            remember(&mut recent, format!("#0000{i:02x}"));
+        }
+        assert_eq!(recent.len(), RECENT_COLORS);
+        assert_eq!(recent[0], "#000013");
+        remember(&mut recent, "#00000F".into());
+        assert_eq!(recent[0], "#00000F");
+        assert_eq!(
+            recent
+                .iter()
+                .filter(|c| c.eq_ignore_ascii_case("#00000f"))
+                .count(),
+            1,
+            "picking a recent color again moves it to the front"
+        );
+    }
+
+    #[test]
+    fn hsv_matches_known_colors() {
+        assert_eq!(hsv_to_rgb(0.0, 1.0, 1.0), [255, 0, 0]);
+        assert_eq!(hsv_to_rgb(120.0, 1.0, 1.0), [0, 255, 0]);
+        assert_eq!(hsv_to_rgb(240.0, 1.0, 1.0), [0, 0, 255]);
+        assert_eq!(hsv_to_rgb(360.0, 1.0, 1.0), [255, 0, 0]);
+        assert_eq!(hsv_to_rgb(200.0, 0.0, 0.5), [128, 128, 128]);
+    }
+
+    #[test]
+    fn hue_ring_runs_clockwise_from_red_on_the_right() {
+        // Same orientation as color.slint: hue = atan2(dy, dx) with y pointing down.
+        let size = 100;
+        let ring = hue_ring_image(size);
+        let buffer = ring.to_rgba8().unwrap();
+        let px = |x: usize, y: usize| buffer.as_slice()[y * size as usize + x];
+        let right = px(98, 50);
+        assert_eq!((right.r, right.a), (255, 255));
+        assert!(right.g < 20 && right.b < 20, "red on the right");
+        let bottom = px(50, 98);
+        assert!(
+            bottom.g == 255 && bottom.b < 20 && bottom.r > 100,
+            "90° (yellow-green) below"
+        );
+        assert_eq!(px(50, 50).a, 0, "the middle is clear for the square");
     }
 
     #[test]
