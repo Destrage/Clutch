@@ -105,8 +105,9 @@ A missing `strength` reads as Light and a missing `amount` as 100%, so existing 
 exactly as before. Older versions ignore the unknown keys and run Light.
 
 ## Risks
-- **Model weights license**: the repository says all its contents are MIT or Apache-2.0, and the
-  weights live in it, but no file names the weights explicitly. Confirm before release (task 1.3).
+- **Model weights license**: resolved 2026-11-06. Upstream commit 7b14b89 (closing issue #700)
+  changed the README to say "All code and model weights in this repository are dual-licensed"
+  under MIT or Apache-2.0.
 - **CPU on weak laptops**: measured 24× RNNoise (12% of one core) on the dev machine. Measured
   on the Windows 10 GTX 1650 Ti laptop before Strong becomes a preset default.
 - **Music**: DeepFilterNet removes music almost entirely. The filter is offered on all sources
