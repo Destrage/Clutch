@@ -74,8 +74,8 @@ pub struct App {
     fill_stop: usize,
     /// What the color picker is editing (while it is open).
     picker: Option<Picker>,
-    /// Dragging the eyedropper over the screen: when the pointer was last read.
-    screen_picking: Option<Instant>,
+    /// The eyedropper is picking (until a click, Esc or a right click).
+    eyedropper: Option<Eyedropper>,
     /// Canvas settings: the background being edited, and its selected gradient color.
     canvas_bg: estream_core::Paint,
     canvas_bg_stop: usize,
@@ -614,6 +614,20 @@ enum PickerTarget {
     FillStop(ItemId, i32),
 }
 
+/// How long the eyedropper waits for a click before giving up.
+const EYEDROPPER_LIMIT: Duration = Duration::from_secs(60);
+
+/// The eyedropper while it picks.
+struct Eyedropper {
+    started: Instant,
+    /// When the color under the pointer was last shown.
+    polled: Instant,
+    /// The color before picking (Esc puts it back).
+    start: slint::Color,
+    /// Picking from the whole screen (else from the Preview only).
+    screen: bool,
+}
+
 #[derive(Debug)]
 struct Picker {
     target: PickerTarget,
@@ -930,7 +944,7 @@ impl App {
             gradient_stop: 0,
             fill_stop: 0,
             picker: None,
-            screen_picking: None,
+            eyedropper: None,
             canvas_bg: estream_core::Paint::default(),
             canvas_bg_stop: 0,
             geoms: Vec::new(),
@@ -9706,7 +9720,7 @@ impl App {
         let Some(picker) = self.picker.take() else {
             return;
         };
-        self.screen_picking = None;
+        self.eyedropper_end(true);
         if let Some(w) = self.window() {
             let g = w.global::<ColorPicking>();
             g.set_open(false);
@@ -9729,9 +9743,9 @@ impl App {
 
     /// A click on the Preview while picking: the color of that pixel as shown.
     pub fn picker_preview_picked(&mut self, fx: f32, fy: f32) {
+        self.eyedropper_end(false);
         let Some(w) = self.window() else { return };
         let g = w.global::<ColorPicking>();
-        g.set_from_preview(false);
         let Some(texture) = self.main_picture.as_ref().map(|p| p.texture()) else {
             return;
         };
@@ -9752,38 +9766,82 @@ impl App {
         }
     }
 
-    /// The eyedropper was pressed: follow the pointer over the screen until it is released.
-    pub fn picker_pick_screen(&mut self) {
-        if crate::screen_color::AVAILABLE && self.picker.is_some() {
-            self.screen_picking = Some(Instant::now() - Duration::from_secs(1));
+    /// The eyedropper button. With screen picking, the next click anywhere picks (Esc or a
+    /// right click cancels); otherwise the next click on the Preview does. Clicking it again
+    /// while picking cancels.
+    pub fn picker_eyedropper(&mut self) {
+        if self.picker.is_none() {
+            return;
+        }
+        if self.eyedropper.is_some() {
+            self.eyedropper_end(true);
+            return;
+        }
+        let Some(w) = self.window() else { return };
+        let g = w.global::<ColorPicking>();
+        let screen = crate::screen_color::AVAILABLE && crate::screen_color::start();
+        self.eyedropper = Some(Eyedropper {
+            started: Instant::now(),
+            polled: Instant::now() - Duration::from_secs(1),
+            start: g.get_color(),
+            screen,
+        });
+        // The Preview shows its magnifier (and, without screen picking, takes the click).
+        g.set_from_preview(true);
+    }
+
+    /// Stops picking; `cancel` puts back the color from before the eyedropper was clicked.
+    fn eyedropper_end(&mut self, cancel: bool) {
+        let Some(e) = self.eyedropper.take() else {
+            return;
+        };
+        if e.screen {
+            crate::screen_color::stop();
+        }
+        if let Some(w) = self.window() {
+            let g = w.global::<ColorPicking>();
+            g.set_from_preview(false);
+            if cancel {
+                g.set_color(e.start);
+            }
         }
     }
 
-    /// While the eyedropper is dragged: show the color under the pointer; on release, take it.
+    /// While picking from the screen: show the color under the pointer, then take the click or
+    /// cancel.
     fn screen_pick_tick(&mut self) {
-        let Some(last) = self.screen_picking else {
+        let Some(e) = &mut self.eyedropper else {
             return;
         };
-        if last.elapsed() < Duration::from_millis(30) {
+        if !e.screen || e.polled.elapsed() < Duration::from_millis(30) {
             return;
         }
-        self.screen_picking = Some(Instant::now());
+        e.polled = Instant::now();
+        let timed_out = e.started.elapsed() > EYEDROPPER_LIMIT;
         let Some(w) = self.window() else { return };
         let g = w.global::<ColorPicking>();
-        let Some((c, held)) = crate::screen_color::under_pointer() else {
-            self.screen_picking = None;
-            return;
+        let with_alpha = |c: Rgba8| {
+            let a = if g.get_alpha() {
+                g.get_color().alpha()
+            } else {
+                255
+            };
+            to_color(Rgba8 { a, ..c })
         };
-        let a = if g.get_alpha() {
-            g.get_color().alpha()
-        } else {
-            255
-        };
-        let color = to_color(Rgba8 { a, ..c });
-        g.set_color(color);
-        if !held {
-            self.screen_picking = None;
-            self.picker_changed(color);
+        match crate::screen_color::poll() {
+            crate::screen_color::Pick::Picked(c) => {
+                let color = with_alpha(c);
+                self.eyedropper_end(false);
+                g.set_color(color);
+                self.picker_changed(color);
+            }
+            crate::screen_color::Pick::Cancelled => self.eyedropper_end(true),
+            crate::screen_color::Pick::Waiting if timed_out => self.eyedropper_end(true),
+            crate::screen_color::Pick::Waiting => {
+                if let Some(c) = crate::screen_color::under_pointer() {
+                    g.set_color(with_alpha(c));
+                }
+            }
         }
     }
 
@@ -11952,7 +12010,7 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
         let a = app.clone();
         g.on_closed(move || with(&a, |a| a.picker_close()));
         let a = app.clone();
-        g.on_pick_screen(move || with(&a, |a| a.picker_pick_screen()));
+        g.on_eyedropper(move || with(&a, |a| a.picker_eyedropper()));
         let a = app.clone();
         g.on_preview_picked(move |fx, fy| with(&a, move |a| a.picker_preview_picked(fx, fy)));
     }

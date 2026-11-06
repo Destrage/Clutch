@@ -399,7 +399,7 @@ export component AppWindow inherits Window {
             // Esc stops picking from the Preview, then closes the color picker.
             if (ColorPicking.open && e.text == Key.Escape) {
                 if (ColorPicking.from-preview) {
-                    ColorPicking.from-preview = false;
+                    ColorPicking.eyedropper();
                 } else {
                     ColorPicking.closed();
                 }

@@ -63,8 +63,7 @@
 - [x] 4.8 Checked in the app: picker layout (card widened so the A field fits), ring and
       square, recent colors, Preview eyedropper (picked the test pattern's #bf0000 exactly), one
       Ctrl+Z undoes a whole picker session
-- [ ] 4.9 Screen eyedropper by hand: it reads the real mouse, which the message-driven test
-      can't move without taking over the user's pointer
+- [x] 4.9 Screen eyedropper by hand: verified by the user (2026-11-06)
 
 ## 5. Fill around fitted items
 - [x] 5.1 `SceneItem::fill: ItemFill` (serde default `None`, not written when `None`);
