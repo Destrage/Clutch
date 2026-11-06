@@ -21,7 +21,9 @@
       uses the canvas, with the hint
 - [x] 2.6 Encoder-open error hint for canvases taller than 2304: "Try HEVC or AV1, or a
       1440 × 2560 canvas"
-- [ ] 2.7 Check: stream and record a 2160 × 3840 at 60 fps canvas with NVENC H.264 and HEVC
+- [x] 2.7 Check: recorded a 2160 × 3840 at 60 fps canvas with NVENC H.264 on an RTX 4070 Ti
+      SUPER (ffprobe: h264 2160 × 3840, 60/1, 370 frames in 6.2 s). HEVC and streaming at that
+      size not tried
 
 ## 3. Paint and gradients
 - [x] 3.1 `estream-core`: `Paint`, `GradientStop`; validation (2 to 8 stops, sorted, clamped);
@@ -58,8 +60,11 @@
       color (`screen_color`: `GetCursorPos` + `GetPixel`, polled every 30 ms while dragging)
 - [x] 4.7 The screen button is hidden where the platform has no implementation yet (macOS
       `NSColorSampler` and the Linux `PickColor` portal come in their platform branches)
-- [ ] 4.8 Check in the app: picker layout, wheel and square dragging, Preview and screen
-      eyedroppers, one undo per picker session
+- [x] 4.8 Checked in the app: picker layout (card widened so the A field fits), ring and
+      square, recent colors, Preview eyedropper (picked the test pattern's #bf0000 exactly), one
+      Ctrl+Z undoes a whole picker session
+- [ ] 4.9 Screen eyedropper by hand: it reads the real mouse, which the message-driven test
+      can't move without taking over the user's pointer
 
 ## 5. Fill around fitted items
 - [x] 5.1 `SceneItem::fill: ItemFill` (serde default `None`, not written when `None`);
@@ -87,5 +92,9 @@
 ## 6. Finish
 - [x] 6.1 `cargo clippy --workspace --all-targets -- -D warnings` and tests for the touched
       crates
-- [ ] 6.2 Manual check in the app: remove and undo Desktop Audio; vertical 60 fps canvas with a
-      game and Frosted fill; Color source gradient; eyedropper from the Preview and the screen
+- [x] 6.2 Checked in the app (driven by window messages, screenshots): remove and undo Desktop
+      Audio from the knob menu; Canvas settings to 60 fps, gradient background, 4K vertical with
+      items scaled; Frosted, Color and Gradient fills on a fitted 16:9 picture; radial Color
+      source gradient with an added color; settings survive a restart. Fixed on the way: wider
+      canvas menu (long preset names were cut), W/H labels in Canvas settings, picker width,
+      stronger maximum blur (radius 48)

@@ -25,7 +25,7 @@ const SCALE: f32 = 0.25;
 const MIN_SIDE: f32 = 96.0;
 const MAX_SIDE: f32 = 640.0;
 /// Blur radius (in small-texture pixels) at Blur 1.
-const MAX_RADIUS: f32 = 32.0;
+const MAX_RADIUS: f32 = 48.0;
 
 /// The size of a Frosted texture for a box of `bounds` canvas pixels.
 pub fn frosted_size(bounds: Vec2) -> (u32, u32) {
@@ -293,7 +293,7 @@ mod tests {
         else {
             panic!("blur then color correction")
         };
-        assert_eq!(r, 16.0);
+        assert_eq!(r, 24.0);
         for s in [0.0f32, 0.3, 1.0] {
             let out = (s - 0.5) * (1.0 + c[1]) + 0.5 + c[0];
             assert!((out - s * 0.6).abs() < 1e-6);

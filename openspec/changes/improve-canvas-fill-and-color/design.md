@@ -50,7 +50,7 @@ pub enum ItemFill {
      96..=640 px), with the cover UV rect computed on the CPU each frame
      (`ItemTransform::cover_uv`). A quarter rather than an eighth: shrinking 8× in one
      bilinear step skips most source pixels, and moving game footage shimmers through the blur.
-  2. A `FilterChain` at that size: `Blur` (radius up to 32 small pixels) then
+  2. A `FilterChain` at that size: `Blur` (radius up to 48 small pixels) then
      `ColorCorrection` for dim and saturation. Dim is an exact brightness multiply: contrast
      `-dim` with brightness `-dim / 2` gives `s * (1 - dim)`. No new shader.
   3. The chain's output is drawn over the bounds box (bilinear upscale) just under the item.
