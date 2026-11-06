@@ -199,6 +199,15 @@ impl Filters {
         }
     }
 
+    /// The shared filter renderer (item fills run their own chains with it).
+    pub fn renderer(&self) -> &FilterRenderer {
+        &self.renderer
+    }
+
+    pub fn renderer_mut(&mut self) -> &mut FilterRenderer {
+        &mut self.renderer
+    }
+
     /// The filtered frame of a source, if it has an active chain that produced one.
     pub fn output(&self, id: SourceId) -> Option<FilterOutput<'_>> {
         self.sources.get(&id)?.chain.output()

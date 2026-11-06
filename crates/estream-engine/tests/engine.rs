@@ -462,6 +462,134 @@ fn gradient_color_source_renders_its_gradient() {
     assert_row_matches(&render_once(&project), 128, &paint);
 }
 
+#[test]
+fn fill_paints_the_empty_part_of_a_fitted_box() {
+    use estream_project::ItemFill;
+    // 16:9 bars fitted in a 9:16 canvas: bars in the middle, empty space above and below.
+    let render = |fill: ItemFill| {
+        let mut project = Project::new_default(90, 160, Rational::fps(30));
+        let bars = SourceDef::new(
+            "Bars",
+            "test_pattern",
+            serde_json::json!({ "width": 160, "height": 90 }),
+        );
+        let mut item = SceneItem::source(bars.id);
+        item.transform = ItemTransform {
+            bounds_mode: BoundsMode::Fit,
+            bounds: Vec2::new(90.0, 160.0),
+            bounds_alignment: Alignment::Center,
+            ..Default::default()
+        };
+        item.fill = fill;
+        project.scenes[0].items = vec![item];
+        project.sources = vec![bars];
+        render_once(&project)
+    };
+    let at = |p: &[u8], x: u32, y: u32| {
+        let i = ((y * 90 + x) * 4) as usize;
+        [p[i], p[i + 1], p[i + 2], p[i + 3]]
+    };
+    let none = render(ItemFill::None);
+    assert_eq!(
+        at(&none, 45, 10),
+        [0, 0, 0, 255],
+        "no fill: the black background"
+    );
+
+    let grey = Rgba8::new(40, 60, 80, 255);
+    let color = render(ItemFill::Paint {
+        paint: estream_core::Paint::solid(grey),
+    });
+    let top = at(&color, 45, 10);
+    assert!(
+        top.iter()
+            .zip(grey.to_array())
+            .all(|(a, b)| a.abs_diff(b) <= 2),
+        "{top:?}"
+    );
+    assert_eq!(
+        at(&color, 45, 80),
+        at(&none, 45, 80),
+        "the source itself is unchanged"
+    );
+
+    let frosted = render(ItemFill::FROSTED);
+    // ESTREAM_FILL_PNG=<folder> writes the three pictures for a look.
+    if let Some(dir) = std::env::var_os("ESTREAM_FILL_PNG") {
+        let dir = PathBuf::from(dir);
+        for (name, p) in [("none", &none), ("color", &color), ("frosted", &frosted)] {
+            readback::save_png(&dir.join(format!("fill-{name}.png")), 90, 160, p).unwrap();
+        }
+    }
+    let top = at(&frosted, 45, 10);
+    let bottom = at(&frosted, 45, 150);
+    assert!(
+        top[..3].iter().map(|&v| v as u32).sum::<u32>() > 30,
+        "frost shows the blurred source above it: {top:?}"
+    );
+    assert!(
+        bottom[..3].iter().map(|&v| v as u32).sum::<u32>() > 30,
+        "and below: {bottom:?}"
+    );
+    assert_eq!(at(&frosted, 45, 80), at(&none, 45, 80));
+}
+
+/// What Frosted costs per frame on a 1080 × 1920 canvas with a 1920 × 1080 source fitted in it.
+/// Prints the time with and without it. Run with `--ignored --nocapture` on the machine to
+/// measure; the budget check is loose so a slow software adapter doesn't fail it.
+#[test]
+#[ignore]
+fn frosted_fill_cost() {
+    use estream_project::ItemFill;
+    let gpu = gpu();
+    let measure = |fill: ItemFill| {
+        let mut project = Project::new_default(1080, 1920, Rational::fps(60));
+        let bars = SourceDef::new(
+            "Bars",
+            "test_pattern",
+            serde_json::json!({ "width": 1920, "height": 1080 }),
+        );
+        let mut item = SceneItem::source(bars.id);
+        item.transform = ItemTransform {
+            bounds_mode: BoundsMode::Fit,
+            bounds: Vec2::new(1080.0, 1920.0),
+            bounds_alignment: Alignment::Center,
+            ..Default::default()
+        };
+        item.fill = fill;
+        project.scenes[0].items = vec![item];
+        project.sources = vec![bars];
+        let mut core = VideoCore::new(gpu.clone(), SourceRegistry::with_builtins());
+        core.sync(Arc::new(RenderGraph::build(&project, 1)), Timestamp::ZERO);
+        for i in 0..30 {
+            core.render_now(Timestamp(i * 16_666_667));
+        }
+        let frames = 240u64;
+        let start = Instant::now();
+        for i in 0..frames {
+            core.render_now(Timestamp((30 + i) * 16_666_667));
+        }
+        start.elapsed().as_secs_f64() * 1000.0 / frames as f64
+    };
+    let none = measure(ItemFill::None);
+    let frosted = measure(ItemFill::FROSTED);
+    let max_blur = measure(ItemFill::Frosted {
+        blur: 1.0,
+        dim: 0.25,
+        saturation: 0.9,
+    });
+    println!(
+        "per frame: none {none:.3} ms, frosted {frosted:.3} ms (+{:.3}), blur 100% {max_blur:.3} ms (+{:.3})",
+        frosted - none,
+        max_blur - none
+    );
+    assert!(
+        max_blur - none < 4.0,
+        "Frosted costs {:.3} ms a frame",
+        max_blur - none
+    );
+}
+
 /// Golden image of a fixed composite scene rendered headless at t = 0.
 /// Set `ESTREAM_BLESS=1` to (re)generate the reference image.
 #[test]

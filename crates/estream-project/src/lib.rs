@@ -8,8 +8,8 @@ pub mod transition;
 
 pub use automation::{Automation, Chord, GameEventKind, Macro, OutputKind, Step, Toggle, Trigger};
 pub use model::{
-    AudioConfig, AudioFilterDef, Canvas, FilterDef, ItemContent, Monitoring, Project, ProjectAudio,
-    Scene, SceneItem, SourceDef,
+    AudioConfig, AudioFilterDef, Canvas, FilterDef, ItemContent, ItemFill, Monitoring, Project,
+    ProjectAudio, Scene, SceneItem, SourceDef,
 };
 pub use persist::{CURRENT_SCHEMA, LoadWarning, Loaded, PersistError};
 pub use transition::{Direction, Transition, TransitionKind};

@@ -316,6 +316,10 @@ export component InspectorPanel inherits Panel {
     callback edit-text(string, string);
     callback edit-color(color);
     callback select-option(string, int);
+    /// The item fill's gradient (see PropEditor's gradient callbacks).
+    callback fill-gradient(string, int, float);
+    callback fill-gradient-color(int, color);
+    callback fill-gradient-text(int, string);
     callback toggle(string, bool);
     in property <[PropRow]> props;
     in property <AudioInspect> audio;
@@ -719,6 +723,74 @@ export component InspectorPanel inherits Panel {
                         color: Theme.text-faint;
                         font-size: Theme.font-xs;
                         wrap: word-wrap;
+                    }
+                }
+                // What fills the box around a fitted picture (the bars on a vertical canvas).
+                if !root.sel.group && root.sel.size-mode == 2: FoldPanel {
+                    title: "Fill empty space";
+                    folded: root.folds.fill;
+                    note: root.folds.fill && root.sel.fill-kind > 0 ? ["", "Frosted", "Color", "Gradient"][root.sel.fill-kind] : "";
+                    toggle-fold => { root.folds.fill = !root.folds.fill; }
+                    Select {
+                        label: "Fill empty space";
+                        options: ["None", "Frosted", "Color", "Gradient"];
+                        current-index: root.sel.fill-kind;
+                        selected(i) => { root.select-option("fill", i); }
+                    }
+                    if root.sel.fill-kind == 1: ValueSlider {
+                        label: "Blur";
+                        value: root.sel.fill-blur * 100;
+                        minimum: 0;
+                        maximum: 100;
+                        step: 1;
+                        decimals: 0;
+                        suffix: "%";
+                        changed(v) => { root.edit("fill-blur", v / 100); }
+                        committed => { root.commit(); }
+                    }
+                    if root.sel.fill-kind == 1: ValueSlider {
+                        label: "Dim";
+                        value: root.sel.fill-dim * 100;
+                        minimum: 0;
+                        maximum: 100;
+                        step: 1;
+                        decimals: 0;
+                        suffix: "%";
+                        changed(v) => { root.edit("fill-dim", v / 100); }
+                        committed => { root.commit(); }
+                    }
+                    if root.sel.fill-kind == 1: ValueSlider {
+                        label: "Saturation";
+                        value: root.sel.fill-saturation * 100;
+                        minimum: 0;
+                        maximum: 200;
+                        step: 1;
+                        decimals: 0;
+                        suffix: "%";
+                        mark: 100;
+                        changed(v) => { root.edit("fill-saturation", v / 100); }
+                        committed => { root.commit(); }
+                    }
+                    if root.sel.fill-kind == 2: HorizontalLayout {
+                        spacing: 6px;
+                        ColorSwatch {
+                            value: root.sel.fill-color;
+                            target: "fill";
+                            label: "Fill color";
+                        }
+                        TextField {
+                            text: root.sel.fill-hex;
+                            label: "Fill color";
+                            placeholder: "#rrggbb or #rrggbbaa";
+                            accepted(t) => { root.edit-text("fill-hex", t); }
+                        }
+                    }
+                    if root.sel.fill-kind == 3: PropEditor {
+                        prop: root.sel.fill-gradient;
+                        gradient(a, i, v) => { root.fill-gradient(a, i, v); }
+                        gradient-color(i, c) => { root.fill-gradient-color(i, c); }
+                        gradient-text(i, t) => { root.fill-gradient-text(i, t); }
+                        commit => { root.commit(); }
                     }
                 }
             }

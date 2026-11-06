@@ -51,6 +51,8 @@ pub struct ItemPatch {
     pub opacity: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blend: Option<BlendMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fill: Option<estream_project::ItemFill>,
 }
 
 impl ItemPatch {
@@ -64,6 +66,7 @@ impl ItemPatch {
             self.locked.is_some(),
             self.opacity.is_some(),
             self.blend.is_some(),
+            self.fill.is_some(),
         ]
         .iter()
         .enumerate()
@@ -711,6 +714,9 @@ impl Command {
                 if let Some(v) = patch.blend {
                     old.blend = Some(std::mem::replace(&mut it.blend, v));
                 }
+                if let Some(v) = patch.fill {
+                    old.fill = Some(std::mem::replace(&mut it.fill, v));
+                }
                 Ok(applied(
                     UpdateItem {
                         scene,
@@ -915,6 +921,39 @@ mod tests {
 
         applied.inverse.apply(&mut p).unwrap();
         assert_eq!(p, before, "source, items, ids and order fully restored");
+    }
+
+    #[test]
+    fn item_fill_applies_and_undoes() {
+        let (mut p, scene) = project();
+        let src = add_source(&mut p);
+        let item = SceneItem::source(src);
+        let id = item.id;
+        Command::AddItem {
+            scene,
+            parent: None,
+            index: 0,
+            item,
+        }
+        .apply(&mut p)
+        .unwrap();
+        let before = p.clone();
+        let applied = Command::UpdateItem {
+            scene,
+            item: id,
+            patch: ItemPatch {
+                fill: Some(estream_project::ItemFill::FROSTED),
+                ..Default::default()
+            },
+        }
+        .apply(&mut p)
+        .unwrap();
+        assert_eq!(
+            p.scenes[0].find_item(id).unwrap().fill,
+            estream_project::ItemFill::FROSTED
+        );
+        applied.inverse.apply(&mut p).unwrap();
+        assert_eq!(p, before);
     }
 
     #[test]

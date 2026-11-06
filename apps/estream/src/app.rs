@@ -21,8 +21,8 @@ use estream_engine::{
 use estream_gpu::GpuContext;
 use estream_media::Service;
 use estream_project::{
-    AudioConfig, AudioFilterDef, ItemContent, Monitoring, Project, Scene, SceneItem, SourceDef,
-    persist,
+    AudioConfig, AudioFilterDef, ItemContent, ItemFill, Monitoring, Project, Scene, SceneItem,
+    SourceDef, persist,
 };
 use glam::Vec2;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
@@ -70,6 +70,8 @@ pub struct App {
     props_generation: u64,
     /// The selected color of a gradient being edited in the inspector.
     gradient_stop: usize,
+    /// The selected color of the selected item's gradient fill.
+    fill_stop: usize,
     /// What the color picker is editing (while it is open).
     picker: Option<Picker>,
     /// Dragging the eyedropper over the screen: when the pointer was last read.
@@ -607,6 +609,9 @@ enum PickerTarget {
     /// Canvas settings: the solid background, or one color of its gradient.
     CanvasBg,
     CanvasStop(i32),
+    /// The selected item's fill: its solid color, or one color of its gradient.
+    Fill(ItemId),
+    FillStop(ItemId, i32),
 }
 
 #[derive(Debug)]
@@ -923,6 +928,7 @@ impl App {
             props: None,
             props_generation: 0,
             gradient_stop: 0,
+            fill_stop: 0,
             picker: None,
             screen_picking: None,
             canvas_bg: estream_core::Paint::default(),
@@ -3449,7 +3455,7 @@ impl App {
             .and_then(|e| e.registry().get(kind).map(|t| t.name.clone()))
             .unwrap_or_else(|| kind_label(kind).to_owned());
         let t = &item.transform;
-        let inspect = Inspect {
+        let mut inspect = Inspect {
             has: true,
             id: id_str(item.id),
             name: name.into(),
@@ -3478,7 +3484,9 @@ impl App {
             visible: item.visible,
             locked: item.locked,
             no_video: false,
+            ..Default::default()
         };
+        fill_fields(&mut inspect, &item.fill, self.fill_stop);
         (selection_box, inspect)
     }
 
@@ -9599,6 +9607,9 @@ impl App {
         if target == "canvas-bg" {
             return Some(PickerTarget::CanvasBg);
         }
+        if target == "fill" {
+            return Some(PickerTarget::Fill(self.selection?));
+        }
         let source = self
             .canvas_and_scene()
             .and_then(|(snapshot, _, _)| self.current_source(&snapshot));
@@ -9607,6 +9618,9 @@ impl App {
             let index = index.parse().ok()?;
             if key == "canvas-background" {
                 return Some(PickerTarget::CanvasStop(index));
+            }
+            if key == "item-fill" {
+                return Some(PickerTarget::FillStop(self.selection?, index));
             }
             return Some(PickerTarget::Stop {
                 source: source?,
@@ -9627,10 +9641,9 @@ impl App {
             return;
         };
         let Some(w) = self.window() else { return };
-        if matches!(
-            target,
-            PickerTarget::Prop { .. } | PickerTarget::Stop { .. }
-        ) && let Some(engine) = &self.engine
+        // Canvas settings only change when applied; everything else edits the project live.
+        if !matches!(target, PickerTarget::CanvasBg | PickerTarget::CanvasStop(_))
+            && let Some(engine) = &self.engine
         {
             engine.hold_history();
         }
@@ -9670,11 +9683,20 @@ impl App {
                 return;
             }
         }
+        // An item's fill follows that item only.
+        if let PickerTarget::Fill(item) | PickerTarget::FillStop(item, _) = &target
+            && self.selection != Some(*item)
+        {
+            self.picker_close();
+            return;
+        }
         match target {
             PickerTarget::Prop { key, .. } => self.prop_color(&key, color),
             PickerTarget::Stop { key, index, .. } => self.prop_gradient_color(&key, index, color),
             PickerTarget::CanvasBg => self.canvas_background_color(color),
             PickerTarget::CanvasStop(i) => self.canvas_background_gradient_color(i, color),
+            PickerTarget::Fill(_) => self.fill_color(color),
+            PickerTarget::FillStop(_, i) => self.fill_gradient_color(i, color),
         }
     }
 
@@ -9858,7 +9880,132 @@ impl App {
 
     // ------------------------------------------------------------ inspector
 
+    // ------------------------------------------------------------ item fill
+
+    /// Applies `change` to the selected item's fill (one undoable step per gesture).
+    fn change_fill(&mut self, change: impl FnOnce(&mut ItemFill)) {
+        let Some((_, item)) = self.selected() else {
+            return;
+        };
+        let mut fill = item.fill.clone();
+        change(&mut fill);
+        if fill != item.fill {
+            self.update_selected(ItemPatch {
+                fill: Some(fill),
+                ..Default::default()
+            });
+        }
+    }
+
+    /// None (0), Frosted (1), Color (2) or Gradient (3). Color and Gradient start from each
+    /// other's colors.
+    fn fill_kind(&mut self, kind: i32) {
+        use estream_core::Paint;
+        self.fill_stop = 0;
+        self.change_fill(|fill| {
+            let color = match fill {
+                ItemFill::Paint { paint } => paint.first_color(),
+                _ => Rgba8::new(20, 22, 28, 255),
+            };
+            *fill = match kind {
+                1 if matches!(fill, ItemFill::Frosted { .. }) => fill.clone(),
+                1 => ItemFill::FROSTED,
+                2 => ItemFill::Paint {
+                    paint: Paint::solid(color),
+                },
+                3 => match fill {
+                    ItemFill::Paint { paint } if paint.is_gradient() => fill.clone(),
+                    _ => ItemFill::Paint {
+                        paint: Paint::Linear {
+                            angle: 180.0,
+                            stops: vec![
+                                estream_core::GradientStop::new(color, 0.0),
+                                estream_core::GradientStop::new(
+                                    Rgba8::new(108, 140, 255, 255),
+                                    1.0,
+                                ),
+                            ],
+                        },
+                    },
+                },
+                _ => ItemFill::None,
+            };
+        });
+    }
+
+    /// Frosted sliders: "blur", "dim" (0..1) and "saturation" (0..2).
+    fn fill_edit(&mut self, field: &str, value: f32) {
+        self.change_fill(|fill| {
+            if let ItemFill::Frosted {
+                blur,
+                dim,
+                saturation,
+            } = fill
+            {
+                match field {
+                    "blur" => *blur = value.clamp(0.0, 1.0),
+                    "dim" => *dim = value.clamp(0.0, 1.0),
+                    "saturation" => *saturation = value.clamp(0.0, 2.0),
+                    _ => {}
+                }
+            }
+        });
+    }
+
+    /// The solid fill color (Color).
+    pub fn fill_color(&mut self, color: slint::Color) {
+        self.change_fill(|fill| {
+            *fill = ItemFill::Paint {
+                paint: estream_core::Paint::solid(from_color(color)),
+            }
+        });
+    }
+
+    /// Gradient fill edits (see [`edit_gradient`]).
+    pub fn fill_gradient(&mut self, action: &str, index: i32, value: f32) {
+        let Some((_, item)) = self.selected() else {
+            return;
+        };
+        let ItemFill::Paint { mut paint } = item.fill.clone() else {
+            return;
+        };
+        let mut stop = self.fill_stop;
+        match edit_gradient(&mut paint, &mut stop, action, index, value) {
+            Ok(changed) => {
+                self.fill_stop = stop;
+                if changed {
+                    self.change_fill(|fill| *fill = ItemFill::Paint { paint });
+                } else {
+                    self.refresh();
+                }
+            }
+            Err(e) => self.toast(e, true),
+        }
+    }
+
+    pub fn fill_gradient_color(&mut self, index: i32, color: slint::Color) {
+        let Some((_, item)) = self.selected() else {
+            return;
+        };
+        let ItemFill::Paint { mut paint } = item.fill.clone() else {
+            return;
+        };
+        self.fill_stop = set_stop_color(&mut paint, index, from_color(color));
+        self.change_fill(|fill| *fill = ItemFill::Paint { paint });
+    }
+
+    pub fn fill_gradient_text(&mut self, index: i32, text: &str) {
+        match parse_hex_color(text) {
+            Some(c) => self.fill_gradient_color(index, to_color(c)),
+            None => self.toast("Use a color like #ff8800 or #ff880080".into(), true),
+        }
+    }
+
     pub fn inspect_edit(&mut self, field: &str, value: f32) {
+        if let Some(field) = field.strip_prefix("fill-") {
+            self.fill_edit(field, value);
+            return;
+        }
         let Some((scene, item)) = self.selected() else {
             return;
         };
@@ -9920,6 +10067,13 @@ impl App {
     }
 
     pub fn inspect_text(&mut self, field: &str, value: &str) {
+        if field == "fill-hex" {
+            match parse_hex_color(value) {
+                Some(c) => self.fill_color(to_color(c)),
+                None => self.toast("Use a color like #ff8800 or #ff880080".into(), true),
+            }
+            return;
+        }
         let name = value.trim();
         if field != "name" || name.is_empty() {
             return;
@@ -9986,6 +10140,10 @@ impl App {
     }
 
     pub fn inspect_option(&mut self, field: &str, index: i32) {
+        if field == "fill" {
+            self.fill_kind(index);
+            return;
+        }
         let Some((_, item)) = self.selected() else {
             return;
         };
@@ -11415,13 +11573,14 @@ fn meter_position(level: f32) -> f32 {
 }
 
 /// The inspector's panels, by the names their folds are saved under.
-const INSPECTOR_PANELS: [&str; 13] = [
+const INSPECTOR_PANELS: [&str; 14] = [
     "settings",
     "page",
     "playback",
     "place",
     "position",
     "crop",
+    "fill",
     "appearance",
     "effects",
     "volume",
@@ -11439,6 +11598,7 @@ fn inspector_fold<'a>(folds: &'a mut InspectorFolds, panel: &str) -> Option<&'a 
         "place" => &mut folds.place,
         "position" => &mut folds.position,
         "crop" => &mut folds.crop,
+        "fill" => &mut folds.fill,
         "appearance" => &mut folds.appearance,
         "effects" => &mut folds.effects,
         "volume" => &mut folds.volume,
@@ -11559,6 +11719,39 @@ fn set_stop_color(paint: &mut estream_core::Paint, index: i32, color: Rgba8) -> 
     }
     *paint = paint.normalized();
     i.min(paint.stops().len().saturating_sub(1))
+}
+
+/// The inspector's "Fill empty space" fields for an item's fill.
+fn fill_fields(inspect: &mut Inspect, fill: &ItemFill, stop: usize) {
+    match fill {
+        ItemFill::None => inspect.fill_kind = 0,
+        ItemFill::Frosted {
+            blur,
+            dim,
+            saturation,
+        } => {
+            inspect.fill_kind = 1;
+            (inspect.fill_blur, inspect.fill_dim, inspect.fill_saturation) =
+                (*blur, *dim, *saturation);
+        }
+        ItemFill::Paint { paint } if !paint.is_gradient() => {
+            inspect.fill_kind = 2;
+            inspect.fill_color = to_color(paint.first_color());
+            inspect.fill_hex = hex(paint.first_color()).into();
+        }
+        ItemFill::Paint { paint } => {
+            inspect.fill_kind = 3;
+            let mut row = PropRow {
+                key: "item-fill".into(),
+                label: "Gradient".into(),
+                kind: "gradient".into(),
+                stop: stop as i32,
+                ..Default::default()
+            };
+            fill_gradient_row(&mut row, paint);
+            inspect.fill_gradient = row;
+        }
+    }
 }
 
 /// Fills a "gradient" row: its stops, shape and a preview strip (stops left to right).
@@ -11794,6 +11987,10 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     on!(on_inspect_text, |a, field, v| a.inspect_text(&field, &v));
     on!(on_inspect_color, |a, c| a.inspect_color(c));
     on!(on_inspect_option, |a, field, i| a.inspect_option(&field, i));
+    on!(on_fill_gradient, |a, act, i, v| a.fill_gradient(&act, i, v));
+    on!(on_fill_gradient_color, |a, i, c| a
+        .fill_gradient_color(i, c));
+    on!(on_fill_gradient_text, |a, i, t| a.fill_gradient_text(i, &t));
     on!(on_inspect_toggle, |a, field, v| a.inspect_toggle(&field, v));
     on!(on_inspect_commit, |a| a.commit());
     on!(on_palette_query_changed, |a, q| a.palette_filter(&q));

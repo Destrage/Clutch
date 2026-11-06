@@ -335,6 +335,9 @@ export component AppWindow inherits Window {
     callback inspect-edit(string, float);
     callback inspect-text(string, string);
     callback inspect-color(color);
+    callback fill-gradient(string, int, float);
+    callback fill-gradient-color(int, color);
+    callback fill-gradient-text(int, string);
     callback inspect-option(string, int);
     callback inspect-toggle(string, bool);
     callback inspect-commit();
@@ -591,6 +594,9 @@ export component AppWindow inherits Window {
                             edit(field, v) => { root.inspect-edit(field, v); }
                             edit-text(field, v) => { root.inspect-text(field, v); }
                             edit-color(c) => { root.inspect-color(c); }
+                            fill-gradient(a, i, v) => { root.fill-gradient(a, i, v); }
+                            fill-gradient-color(i, c) => { root.fill-gradient-color(i, c); }
+                            fill-gradient-text(i, t) => { root.fill-gradient-text(i, t); }
                             select-option(field, i) => { root.inspect-option(field, i); }
                             toggle(field, v) => { root.inspect-toggle(field, v); }
                             commit => { root.inspect-commit(); }

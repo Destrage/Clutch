@@ -31,10 +31,11 @@ pub struct GradientStop { pub color: Rgba8, pub at: f32 } // at in 0..=1
 `SceneItem` gains `fill: ItemFill` (serde default `None`):
 
 ```rust
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ItemFill {
     None,
-    Frosted { blur: f32, dim: f32, saturation: f32 }, // 0..=1 each
-    Paint(Paint),
+    Frosted { blur: f32, dim: f32, saturation: f32 }, // blur, dim 0..=1; saturation 0..=2
+    Paint { paint: Paint },
 }
 ```
 
@@ -43,14 +44,19 @@ pub enum ItemFill {
   only mode that leaves empty space in the box). For other modes the setting is kept but has no
   effect.
 - Source items only. Groups don't get a fill in this change.
-- **Frosted** renders the item's cropped source frame scaled to *cover* the bounds box:
-  1. Downscale into a small pool texture whose long side is 1/8 of the bounds box (clamped to
-     64..=480 px). The cover UV rect is computed on the CPU each frame (matrix math only).
-  2. Two-pass gaussian blur at that size, reusing the blur filter's passes.
-  3. Composite: bilinear upscale into the bounds box with dim and saturation applied in the
-     item shader (two uniforms, no new pipeline variant if the existing uniform padding fits).
-  The small textures are allocated when the fill is set or the bounds change, never per frame.
-  At 1080 × 1920 the blur runs on about 135 × 240 pixels, a tiny fraction of the frame.
+- **Frosted** (`estream-engine/src/fill.rs`) renders the item's cropped source frame (after
+  its filters) scaled to *cover* the bounds box:
+  1. Draw it into a small texture whose long side is a quarter of the box (clamped to
+     96..=640 px), with the cover UV rect computed on the CPU each frame
+     (`ItemTransform::cover_uv`). A quarter rather than an eighth: shrinking 8× in one
+     bilinear step skips most source pixels, and moving game footage shimmers through the blur.
+  2. A `FilterChain` at that size: `Blur` (radius up to 32 small pixels) then
+     `ColorCorrection` for dim and saturation. Dim is an exact brightness multiply: contrast
+     `-dim` with brightness `-dim / 2` gives `s * (1 - dim)`. No new shader.
+  3. The chain's output is drawn over the bounds box (bilinear upscale) just under the item.
+  GPU state is kept per scene item and reallocated only when the fill or the box changes;
+  slider changes only update the chain's uniforms. At 1080 × 1920 the frost covers 270 × 480
+  pixels. Measured: +0.12 ms a frame at 1080 × 1920, 60 fps.
 - **Paint** fills the bounds box with a solid or gradient texture rendered as above.
 - Defaults: every item, new or existing, starts with `None`, so the empty space shows the
   canvas background (black unless changed) and updating Clutch never changes how a saved scene
