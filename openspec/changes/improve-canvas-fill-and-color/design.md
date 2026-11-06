@@ -66,9 +66,9 @@ pub enum ItemFill {
 - "Scale items to the new size" (on by default) adds `UpdateItem` commands to the same batch,
   scaling each item's position and bounds by the width and height ratios, so one undo restores
   everything.
-- Size and frame rate are disabled while a stream, recording or replay buffer uses the canvas,
-  with the hint "Stop the stream, recording and replay buffer on this canvas to change its size
-  or frame rate." Restarting encoders mid-stream is out of scope.
+- Size and frame rate are disabled while a stream, recording, replay buffer or virtual camera
+  uses the canvas, with the hint "Stop the stream, recording, replay buffer and virtual camera
+  on this canvas to change its size or frame rate." Restarting encoders mid-stream is out of scope.
 
 ## Presets
 Grouped landscape first, then vertical:
@@ -87,8 +87,8 @@ Grouped landscape first, then vertical:
 | Vertical 4K 2160 × 3840 · 30 fps | 2160 × 3840 | 30 |
 | Vertical 4K 2160 × 3840 · 60 fps | 2160 × 3840 | 60 |
 
-`canvas_menu` and Duplicate canvas pass a preset *index*, so the existing entries keep their
-order and the new ones are appended to `PRESETS`; the menus sort for display. The 2K and 4K
+Preset indices are only used live by the menus and the first-run wizard, never saved, so
+`PRESETS` is simply reordered. The 2K and 4K
 vertical details say "recording and YouTube", since many platforms take at most 1080p.
 
 Risk: some H.264 hardware encoders reject 2160 × 3840. The existing encoder-open error is shown;

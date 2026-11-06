@@ -8,7 +8,7 @@ canvas. The canvas presets SHALL include vertical 1080 × 1920 at 30 and 60 fps,
 SHALL be able to change an existing canvas's name, size, frame rate and background in a canvas
 settings dialog, as one undoable step. Changing the size SHALL scale the canvas's items to the
 new size unless the user turns that off. Size and frame rate SHALL NOT be changeable while a
-stream, recording or replay buffer uses the canvas.
+stream, recording, replay buffer or virtual camera uses the canvas.
 
 #### Scenario: Add a vertical canvas
 - **WHEN** the user adds a canvas from the "Vertical 1080 × 1920" preset
@@ -30,8 +30,9 @@ stream, recording or replay buffer uses the canvas.
 
 #### Scenario: Size locked while live
 - **WHEN** a stream uses the canvas and the user opens Canvas settings
-- **THEN** size and frame rate are disabled with a hint to stop the stream, recording and
-  replay buffer on that canvas first, while name and background can still be changed
+- **THEN** size and frame rate are disabled with a hint to stop the stream, recording, replay
+  buffer and virtual camera on that canvas first, while name and background can still be
+  changed
 
 #### Scenario: Remove a canvas
 - **WHEN** the user removes a canvas and then presses Undo

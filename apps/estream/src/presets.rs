@@ -42,6 +42,20 @@ pub const PRESETS: &[CanvasPreset] = &[
         fps: Rational::fps(60),
     },
     CanvasPreset {
+        label: "4K · 30 fps",
+        detail: "3840 × 2160 — recording",
+        width: 3840,
+        height: 2160,
+        fps: Rational::fps(30),
+    },
+    CanvasPreset {
+        label: "4K · 60 fps",
+        detail: "3840 × 2160 — recording and YouTube, needs a fast GPU",
+        width: 3840,
+        height: 2160,
+        fps: Rational::fps(60),
+    },
+    CanvasPreset {
         label: "Vertical 1080 × 1920 · 30 fps",
         detail: "Shorts, Reels, TikTok",
         width: 1080,
@@ -49,11 +63,32 @@ pub const PRESETS: &[CanvasPreset] = &[
         fps: Rational::fps(30),
     },
     CanvasPreset {
-        label: "4K · 30 fps",
-        detail: "3840 × 2160 — recording",
-        width: 3840,
-        height: 2160,
+        label: "Vertical 1080 × 1920 · 60 fps",
+        detail: "Shorts, Reels, TikTok — smooth gameplay",
+        width: 1080,
+        height: 1920,
+        fps: Rational::fps(60),
+    },
+    CanvasPreset {
+        label: "Vertical 2K 1440 × 2560 · 60 fps",
+        detail: "Recording and YouTube",
+        width: 1440,
+        height: 2560,
+        fps: Rational::fps(60),
+    },
+    CanvasPreset {
+        label: "Vertical 4K 2160 × 3840 · 30 fps",
+        detail: "Recording and YouTube",
+        width: 2160,
+        height: 3840,
         fps: Rational::fps(30),
+    },
+    CanvasPreset {
+        label: "Vertical 4K 2160 × 3840 · 60 fps",
+        detail: "Recording and YouTube, needs a fast GPU",
+        width: 2160,
+        height: 3840,
+        fps: Rational::fps(60),
     },
 ];
 

@@ -8,12 +8,12 @@ use crate::settings::{
     GameAudio, InspectorState, PanelLayout, Paths, Settings, ThemeMode, WindowState,
 };
 use crate::ui::{
-    AppWindow, AudioInspect, CanvasBox, CanvasTab, DestinationRow, FilterParamRow, FilterRow,
-    Guide, Inspect, InspectorFolds, LayerRow, LiveRow, MediaInspect, MixerStrip, PaletteEntry,
-    Platform, Preset, PropRow, SceneRow, SettingsForm, SetupLine, SourceType, Theme,
-    VideoFilterRow,
+    AppWindow, AudioInspect, CanvasBox, CanvasForm, CanvasSize, CanvasTab, DestinationRow,
+    FilterParamRow, FilterRow, Guide, Inspect, InspectorFolds, LayerRow, LiveRow, MediaInspect,
+    MixerStrip, PaletteEntry, Platform, Preset, PropRow, SceneRow, SettingsForm, SetupLine,
+    SourceType, Theme, VideoFilterRow,
 };
-use estream_core::{BlendMode, BoundsMode, CanvasId, ItemId, Rgba8, SceneId, SourceId};
+use estream_core::{BlendMode, BoundsMode, CanvasId, ItemId, Rational, Rgba8, SceneId, SourceId};
 use estream_engine::{
     Command, Engine, EngineConfig, Event, ItemPatch, PropKind, SourceInfo, SourceStatus,
     Subscription,
@@ -579,6 +579,71 @@ fn stream_form(
 
 fn id_str(id: impl std::fmt::Display) -> SharedString {
     id.to_string().into()
+}
+
+/// Frame rates offered in Canvas settings.
+const CANVAS_RATES: [(&str, Rational); 8] = [
+    ("24 fps", Rational::fps(24)),
+    ("25 fps", Rational::fps(25)),
+    ("29.97 fps", Rational::new(30000, 1001)),
+    ("30 fps", Rational::fps(30)),
+    ("48 fps", Rational::fps(48)),
+    ("50 fps", Rational::fps(50)),
+    ("59.94 fps", Rational::new(60000, 1001)),
+    ("60 fps", Rational::fps(60)),
+];
+
+/// The distinct preset sizes, for Canvas settings.
+fn canvas_sizes() -> Vec<CanvasSize> {
+    let mut out: Vec<CanvasSize> = Vec::new();
+    for p in PRESETS {
+        let (width, height) = (p.width as i32, p.height as i32);
+        if out.iter().any(|s| s.width == width && s.height == height) {
+            continue;
+        }
+        let label = if height > width {
+            format!("{width} × {height} · vertical")
+        } else {
+            format!("{width} × {height}")
+        };
+        out.push(CanvasSize {
+            label: label.into(),
+            width,
+            height,
+        });
+    }
+    out
+}
+
+/// Commands that scale every top-level item in `canvas`'s scenes by `ratio` (canvas width and
+/// height ratios). Positions and bounding boxes follow each axis; scale factors use the smaller
+/// ratio so sources keep their shape. Group contents are in group space, so they follow along.
+fn scale_items(snapshot: &Project, canvas: CanvasId, ratio: Vec2) -> Vec<Command> {
+    let uniform = ratio.x.min(ratio.y);
+    snapshot
+        .scenes
+        .iter()
+        .filter(|s| s.canvas == canvas)
+        .flat_map(|scene| {
+            scene.items.iter().map(move |item| {
+                let mut t = item.transform;
+                t.position *= ratio;
+                if t.bounds_mode == BoundsMode::None {
+                    t.scale *= uniform;
+                } else {
+                    t.bounds *= ratio;
+                }
+                Command::UpdateItem {
+                    scene: scene.id,
+                    item: item.id,
+                    patch: ItemPatch {
+                        transform: Some(t),
+                        ..Default::default()
+                    },
+                }
+            })
+        })
+        .collect()
 }
 
 /// Deletes an item from a scene. Removing the last use of a source removes the source too
@@ -3927,7 +3992,162 @@ impl App {
                 }
             }
             "remove" => self.canvas_remove(id),
+            "settings" => self.canvas_settings_open(id),
             _ => {}
+        }
+    }
+
+    /// Opens Canvas settings for a canvas.
+    fn canvas_settings_open(&mut self, id: &str) {
+        let Some(w) = self.window() else { return };
+        let Some(engine) = &self.engine else { return };
+        let snapshot = engine.snapshot();
+        let Some(canvas) = parse_id(id).map(CanvasId).and_then(|c| snapshot.canvas(c)) else {
+            return;
+        };
+        let sizes = canvas_sizes();
+        let mut labels: Vec<SharedString> = sizes.iter().map(|s| s.label.clone()).collect();
+        labels.push("Custom".into());
+        w.set_canvas_size_choices(ModelRc::new(VecModel::from(sizes)));
+        w.set_canvas_size_labels(ModelRc::new(VecModel::from(labels)));
+        w.set_canvas_rates(ModelRc::new(VecModel::from(
+            CANVAS_RATES
+                .iter()
+                .map(|(label, _)| SharedString::from(*label))
+                .collect::<Vec<_>>(),
+        )));
+        let background = Rgba8 {
+            a: 255,
+            ..canvas.background
+        };
+        w.set_canvas_form(CanvasForm {
+            id: id_str(canvas.id),
+            name: canvas.name.clone().into(),
+            width: canvas.width as i32,
+            height: canvas.height as i32,
+            old_width: canvas.width as i32,
+            old_height: canvas.height as i32,
+            fps_index: CANVAS_RATES
+                .iter()
+                .position(|(_, r)| *r == canvas.fps)
+                .map_or(-1, |i| i as i32),
+            background: to_color(background),
+            background_hex: hex(background).into(),
+            scale_items: true,
+            locked: self.canvas_on_air(&snapshot, canvas.id),
+        });
+        self.canvas_size_changed();
+    }
+
+    /// Keeps the Size dropdown on the preset matching the typed size, or on Custom.
+    pub fn canvas_size_changed(&mut self) {
+        let Some(w) = self.window() else { return };
+        let form = w.get_canvas_form();
+        let sizes = canvas_sizes();
+        let index = sizes
+            .iter()
+            .position(|s| s.width == form.width && s.height == form.height)
+            .unwrap_or(sizes.len());
+        w.set_canvas_size_index(index as i32);
+    }
+
+    pub fn canvas_background_color(&mut self, color: slint::Color) {
+        let Some(w) = self.window() else { return };
+        let c = Rgba8 {
+            a: 255,
+            ..from_color(color)
+        };
+        let mut form = w.get_canvas_form();
+        form.background = to_color(c);
+        form.background_hex = hex(c).into();
+        w.set_canvas_form(form);
+    }
+
+    pub fn canvas_background_text(&mut self, text: &str) {
+        let Some(w) = self.window() else { return };
+        let mut form = w.get_canvas_form();
+        match parse_hex_color(text) {
+            Some(c) => {
+                let c = Rgba8 { a: 255, ..c };
+                form.background = to_color(c);
+                form.background_hex = hex(c).into();
+            }
+            None => {
+                form.background_hex = hex(from_color(form.background)).into();
+                self.toast("Type a color as #rrggbb".into(), true);
+            }
+        }
+        w.set_canvas_form(form);
+    }
+
+    pub fn canvas_settings_cancel(&mut self) {
+        if let Some(w) = self.window() {
+            w.set_canvas_form(CanvasForm::default());
+        }
+    }
+
+    /// Applies Canvas settings as one undo step, scaling the items when asked.
+    pub fn canvas_settings_apply(&mut self) {
+        let Some(w) = self.window() else { return };
+        let Some(engine) = &self.engine else { return };
+        let snapshot = engine.snapshot();
+        let mut form = w.get_canvas_form();
+        let Some(canvas) = parse_id(&form.id)
+            .map(CanvasId)
+            .and_then(|c| snapshot.canvas(c))
+        else {
+            self.canvas_settings_cancel();
+            return;
+        };
+        // Typed hex that wasn't confirmed with Enter still counts.
+        if let Some(c) = parse_hex_color(&form.background_hex) {
+            form.background = to_color(Rgba8 { a: 255, ..c });
+        }
+        let locked = self.canvas_on_air(&snapshot, canvas.id);
+        let (width, height, fps) = if locked {
+            (canvas.width, canvas.height, canvas.fps)
+        } else {
+            let even = |v: i32| (v.clamp(128, 4096) as u32) & !1;
+            let fps = usize::try_from(form.fps_index)
+                .ok()
+                .and_then(|i| CANVAS_RATES.get(i))
+                .map_or(canvas.fps, |(_, r)| *r);
+            (even(form.width), even(form.height), fps)
+        };
+        let name = form.name.trim().to_owned();
+        let background = from_color(form.background);
+        let patch = estream_engine::CanvasPatch {
+            name: (!name.is_empty() && name != canvas.name).then_some(name),
+            width: (width != canvas.width).then_some(width),
+            height: (height != canvas.height).then_some(height),
+            fps: (fps != canvas.fps).then_some(fps),
+            background: (background != canvas.background).then_some(background),
+        };
+        let mut commands = Vec::new();
+        if patch != estream_engine::CanvasPatch::default() {
+            commands.push(Command::UpdateCanvas {
+                canvas: canvas.id,
+                patch,
+            });
+        }
+        let resized = (width, height) != (canvas.width, canvas.height);
+        if form.scale_items && resized {
+            let ratio = Vec2::new(
+                width as f32 / canvas.width as f32,
+                height as f32 / canvas.height as f32,
+            );
+            commands.extend(scale_items(&snapshot, canvas.id, ratio));
+        }
+        let name = canvas.name.clone();
+        if commands.is_empty() || self.exec(Command::Batch { commands }) {
+            w.set_canvas_form(CanvasForm::default());
+            if resized {
+                self.toast(
+                    format!("“{name}” is now {width} × {height} — Ctrl+Z to undo"),
+                    false,
+                );
+            }
+            self.refresh();
         }
     }
 
@@ -4052,6 +4272,45 @@ impl App {
                 self.show_in_preview(tid, id);
             }
             self.toast(format!("Copied “{name}” to {tname}"), false);
+        }
+    }
+
+    /// Some hardware H.264 encoders refuse frames taller than 2304 pixels (for example a
+    /// 2160 × 3840 vertical canvas). When an output that failed to start uses such a canvas,
+    /// this is the advice to add to its error.
+    fn tall_canvas_hint(&self, wanted: &[Option<CanvasId>]) -> &'static str {
+        let Some(engine) = &self.engine else {
+            return "";
+        };
+        let snapshot = engine.snapshot();
+        let tall = wanted.iter().any(|w| {
+            Self::resolve_canvas(&snapshot, *w)
+                .and_then(|c| snapshot.canvas(c))
+                .is_some_and(|c| c.height > 2304)
+        });
+        if tall {
+            "\nTry HEVC or AV1, or a 1440 × 2560 canvas."
+        } else {
+            ""
+        }
+    }
+
+    /// [`Self::tall_canvas_hint`] for the recording and replay buffer.
+    fn recording_canvas_hint(&self) -> &'static str {
+        let rec = &self.settings.recording;
+        if rec.all_canvases {
+            let Some(engine) = &self.engine else {
+                return "";
+            };
+            let all: Vec<_> = engine
+                .snapshot()
+                .canvases
+                .iter()
+                .map(|c| Some(c.id))
+                .collect();
+            self.tall_canvas_hint(&all)
+        } else {
+            self.tall_canvas_hint(&[rec.canvas])
         }
     }
 
@@ -4615,7 +4874,9 @@ impl App {
                 self.stream = Some(stream);
             }
             Err(e) => {
-                self.toast(format!("Couldn't go live: {e}"), true);
+                let wanted: Vec<_> = dests.iter().map(|d| d.settings.canvas).collect();
+                let hint = self.tall_canvas_hint(&wanted);
+                self.toast(format!("Couldn't go live: {e}{hint}"), true);
                 self.open_stream_settings();
             }
         }
@@ -4924,7 +5185,8 @@ impl App {
                         self.stream_dests = vec![LiveDest::new(config)];
                     }
                     Err(e) => {
-                        self.toast(format!("Couldn't go live: {e}"), true);
+                        let hint = self.tall_canvas_hint(&[dest.settings.canvas]);
+                        self.toast(format!("Couldn't go live: {e}{hint}"), true);
                         return;
                     }
                 }
@@ -5013,7 +5275,10 @@ impl App {
                     self.recording = Some(rec);
                     self.toast("Recording started".into(), false);
                 }
-                Err(e) => self.toast(format!("Couldn't start recording: {e}"), true),
+                Err(e) => {
+                    let hint = self.recording_canvas_hint();
+                    self.toast(format!("Couldn't start recording: {e}{hint}"), true)
+                }
             }
         }
         self.update_outputs();
@@ -5036,7 +5301,10 @@ impl App {
                         false,
                     );
                 }
-                Err(e) => self.toast(format!("Couldn't start the replay buffer: {e}"), true),
+                Err(e) => {
+                    let hint = self.recording_canvas_hint();
+                    self.toast(format!("Couldn't start the replay buffer: {e}{hint}"), true)
+                }
             }
         }
         self.update_outputs();
@@ -11067,6 +11335,13 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     on!(on_mixer_mute, |a, id| a.mixer_mute(&id));
     on!(on_mixer_remove, |a, id| a.mixer_remove(&id));
     on!(on_audio_remove, |a| a.audio_remove());
+    on!(on_canvas_size_changed, |a| a.canvas_size_changed());
+    on!(on_canvas_background_color, |a, c| a
+        .canvas_background_color(c));
+    on!(on_canvas_background_text, |a, t| a
+        .canvas_background_text(&t));
+    on!(on_canvas_settings_apply, |a| a.canvas_settings_apply());
+    on!(on_canvas_settings_cancel, |a| a.canvas_settings_cancel());
     on!(on_settings_set, |a, k, v| a.settings_set(&k, v));
     on!(on_automation_edit, |a, f, i, v| a.automation_edit(&f, i, v));
     on!(on_automation_text, |a, f, i, s| a
@@ -11149,6 +11424,76 @@ fn parse_color(hex: &str) -> Option<slint::Color> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resizing_a_canvas_scales_its_items_and_one_undo_restores_all() {
+        let mut p = Project::new_default(1080, 1920, Rational::fps(30));
+        let canvas = p.canvases[0].id;
+        let mut game = SceneItem::source(SourceId::new());
+        game.transform = interact::fit_to_canvas(Vec2::new(1080.0, 1920.0));
+        let mut logo = SceneItem::source(SourceId::new());
+        logo.transform.position = Vec2::new(540.0, 100.0);
+        logo.transform.scale = Vec2::splat(0.5);
+        let mut group = SceneItem::group("G", vec![SceneItem::source(SourceId::new())]);
+        group.transform.position = Vec2::new(0.0, 960.0);
+        let child = group.clone();
+        p.scenes[0].items = vec![game, logo, group];
+        // A scene on another canvas is left alone.
+        let other = estream_project::Canvas::new("Wide", 1920, 1080, Rational::fps(60));
+        let mut wide = Scene::new("Wide scene", other.id);
+        let mut far = SceneItem::source(SourceId::new());
+        far.transform.position = Vec2::new(100.0, 100.0);
+        wide.items.push(far);
+        p.canvases.push(other);
+        p.scenes.push(wide);
+        let before = p.clone();
+
+        let mut commands = vec![Command::UpdateCanvas {
+            canvas,
+            patch: estream_engine::CanvasPatch {
+                width: Some(1440),
+                height: Some(2560),
+                ..Default::default()
+            },
+        }];
+        commands.extend(scale_items(
+            &p,
+            canvas,
+            Vec2::new(1440.0 / 1080.0, 2560.0 / 1920.0),
+        ));
+        let applied = Command::Batch { commands }.apply(&mut p).unwrap();
+
+        let items = &p.scenes[0].items;
+        assert_eq!(items[0].transform.bounds, Vec2::new(1440.0, 2560.0));
+        assert!((items[1].transform.position - Vec2::new(720.0, 133.333_33)).length() < 0.01);
+        assert!((items[1].transform.scale - Vec2::splat(0.666_666_7)).length() < 0.001);
+        assert!((items[2].transform.position - Vec2::new(0.0, 1280.0)).length() < 0.01);
+        let ItemContent::Group { items: kids } = &items[2].content else {
+            panic!("group")
+        };
+        let ItemContent::Group { items: old } = &child.content else {
+            panic!("group")
+        };
+        assert_eq!(kids, old, "group contents stay in group space");
+        assert_eq!(p.scenes[1], before.scenes[1]);
+
+        applied.inverse.apply(&mut p).unwrap();
+        assert_eq!(p, before);
+    }
+
+    #[test]
+    fn canvas_sizes_are_distinct_and_even() {
+        let sizes = canvas_sizes();
+        for (i, s) in sizes.iter().enumerate() {
+            assert!(s.width % 2 == 0 && s.height % 2 == 0);
+            assert!(
+                !sizes[..i]
+                    .iter()
+                    .any(|o| (o.width, o.height) == (s.width, s.height))
+            );
+        }
+        assert!(sizes.iter().any(|s| (s.width, s.height) == (2160, 3840)));
+    }
 
     #[test]
     fn inspector_folds_round_trip() {

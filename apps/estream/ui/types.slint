@@ -709,3 +709,28 @@ export struct StatsForm {
     /// CPU time per video-thread stage: average, p95, share of the frame.
     stages: [StatRow],
 }
+
+/// A size offered in Canvas settings.
+export struct CanvasSize {
+    label: string,
+    width: int,
+    height: int,
+}
+
+/// Canvas settings being edited.
+export struct CanvasForm {
+    id: string,
+    name: string,
+    width: int,
+    height: int,
+    /// The size when the dialog opened (decides whether "Scale items" applies).
+    old-width: int,
+    old-height: int,
+    /// Index into the frame rate choices.
+    fps-index: int,
+    background: color,
+    background-hex: string,
+    scale-items: bool,
+    /// A stream, recording, replay buffer or virtual camera uses the canvas.
+    locked: bool,
+}

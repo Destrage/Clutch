@@ -9,17 +9,17 @@
 - [x] 1.3 Test: removing a global source and undoing restores its volume and filters
 
 ## 2. Presets and canvas settings
-- [ ] 2.1 Append the new presets to `PRESETS` (vertical 1080 × 1920 60, 1440 × 2560 60,
-      2160 × 3840 30 and 60, landscape 4K 60); menus list landscape first, then vertical,
-      keeping preset indices stable
-- [ ] 2.2 `CanvasPatch::background_paint`; `UpdateCanvas` applies and inverts it; tests
-- [ ] 2.3 Canvas settings dialog from the canvas tab menu: name, size (preset or custom, even,
-      128 to 4096), frame rate (24, 25, 30, 48, 50, 60, 29.97, 59.94), background
-- [ ] 2.4 "Scale items to the new size" (default on): one `Batch` of `UpdateCanvas` plus
-      `UpdateItem` per item; test that one undo restores canvas and items
-- [ ] 2.5 Lock size and frame rate while a stream, recording or replay buffer uses the canvas,
-      with the hint
-- [ ] 2.6 Encoder-open error hint for canvases taller than 2304: "Try HEVC or AV1, or a
+- [x] 2.1 Add the new presets to `PRESETS` (vertical 1080 × 1920 60, 1440 × 2560 60,
+      2160 × 3840 30 and 60, landscape 4K 60), landscape first, then vertical (preset indices
+      are only used live in the UI, never saved)
+- [x] 2.2 (moved to 3.5: the background gradient needs `Paint`)
+- [x] 2.3 Canvas settings dialog from the canvas tab menu: name, size (preset or custom, even,
+      128 to 4096), frame rate (24, 25, 29.97, 30, 48, 50, 59.94, 60), solid background
+- [x] 2.4 "Scale items to the new size" (default on): one `Batch` of `UpdateCanvas` plus
+      `UpdateItem` per top-level item; test that one undo restores canvas and items
+- [x] 2.5 Lock size and frame rate while a stream, recording, replay buffer or virtual camera
+      uses the canvas, with the hint
+- [x] 2.6 Encoder-open error hint for canvases taller than 2304: "Try HEVC or AV1, or a
       1440 × 2560 canvas"
 - [ ] 2.7 Check: stream and record a 2160 × 3840 at 60 fps canvas with NVENC H.264 and HEVC
 
@@ -31,8 +31,10 @@
 - [ ] 3.3 `PropKind::Gradient` in the property system, with validation
 - [ ] 3.4 Color source: `style` and `gradient` settings; render once on update; old settings
       render the solid color unchanged (test)
-- [ ] 3.5 `Canvas::background_paint` in the model (serde default `None`); `background` written as
-      the solid color or first stop; renderer draws a cached gradient texture first
+- [ ] 3.5 `Canvas::background_paint` in the model (serde default `None`) and
+      `CanvasPatch::background_paint` (applied and inverted by `UpdateCanvas`, tested);
+      `background` written as the solid color or first stop; renderer draws a cached gradient
+      texture first; Canvas settings gets Color / Gradient
 
 ## 4. Color picker
 - [ ] 4.1 Picker popup widget: hue ring image (Rust, once per size), saturation/brightness

@@ -42,7 +42,7 @@ A user setting up a vertical stream ran into five gaps:
 - **Canvas background.** Each canvas's background becomes editable: a solid color or a gradient.
 - **Canvas settings.** The canvas tab menu gets "Canvas settings…": name, size (presets or a
   custom width × height), frame rate and background. Size and frame rate are locked while a
-  stream, recording or replay buffer uses the canvas. Changing the size can scale the
+  stream, recording, replay buffer or virtual camera uses the canvas. Changing the size can scale the
   canvas's items to match (on by default).
 - **More presets.** Vertical 1080 × 1920 at 60 fps, 1440 × 2560 (2K) at 60 fps and
   2160 × 3840 (4K) at 30 and 60 fps, plus landscape 4K at 60 fps.

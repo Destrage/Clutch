@@ -5,12 +5,12 @@ import "fonts/Figtree.ttf";
 import "fonts/Jost.ttf";
 import { Theme, Platform } from "theme.slint";
 import { Icons } from "icons.slint";
-import { CanvasTab, SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SetupLine, SourceType, PropRow, MixerStrip, AudioInspect, SettingsForm, LiveRow, DestinationRow, VideoFilterRow, MediaInspect, AutomationForm, MacroRow, TriggerRow, StepRow, ClipsForm, ClipRow, ClipPlayerState, MontageForm, StatsForm, StatTile, StatRow, AlertRow, InspectorFolds } from "types.slint";
+import { CanvasTab, SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SetupLine, SourceType, PropRow, MixerStrip, AudioInspect, SettingsForm, LiveRow, DestinationRow, VideoFilterRow, MediaInspect, AutomationForm, MacroRow, TriggerRow, StepRow, ClipsForm, ClipRow, ClipPlayerState, MontageForm, StatsForm, StatTile, StatRow, AlertRow, InspectorFolds, CanvasForm, CanvasSize } from "types.slint";
 import { VSplitter, HSplitter, TooltipLayer, Hint } from "widgets.slint";
 import { Preview } from "preview.slint";
 import { InspectorPanel } from "inspector.slint";
 import { TopBar, ScenesPanel, SourcesPanel, MixerPanel, StatusBar, TransitionColumn, ProgramView, CanvasTabs } from "panels.slint";
-import { CommandPalette, AddSourceDialog, SetupWizard, SetupDialog, RecoveryPrompt, GameAudioPrompt, Toast, SettingsDialog, LivePanel, ShaderDialog } from "overlays.slint";
+import { CommandPalette, AddSourceDialog, SetupWizard, SetupDialog, RecoveryPrompt, GameAudioPrompt, Toast, SettingsDialog, LivePanel, ShaderDialog, CanvasSettingsDialog } from "overlays.slint";
 import { AutomationDialog } from "automation.slint";
 import { StatsDialog } from "stats.slint";
 import { ClipsDialog } from "clips.slint";
@@ -55,6 +55,17 @@ export component AppWindow inherits Window {
     callback canvas-menu(string, string, int);
     /// Canvas presets to duplicate a canvas as.
     in property <[string]> canvas-sizes;
+    // Canvas settings (open while `canvas-form.id` is set).
+    in-out property <CanvasForm> canvas-form;
+    in property <[CanvasSize]> canvas-size-choices;
+    in property <[string]> canvas-size-labels;
+    in property <[string]> canvas-rates;
+    in property <int> canvas-size-index;
+    callback canvas-size-changed();
+    callback canvas-background-color(color);
+    callback canvas-background-text(string);
+    callback canvas-settings-apply();
+    callback canvas-settings-cancel();
     callback canvas-rename(string, string);
     in property <image> program-frame;
     in property <int> transition-kind;
@@ -967,6 +978,22 @@ export component AppWindow inherits Window {
             if (root.setup-dialog == "") { main-keys.focus(); }
         }
         cancel => { root.setup-cancel(); main-keys.focus(); }
+    }
+
+    if root.canvas-form.id != "": CanvasSettingsDialog {
+        form <=> root.canvas-form;
+        sizes: root.canvas-size-choices;
+        size-labels: root.canvas-size-labels;
+        rates: root.canvas-rates;
+        size-index: root.canvas-size-index;
+        size-changed => { root.canvas-size-changed(); }
+        background-color(c) => { root.canvas-background-color(c); }
+        background-text(t) => { root.canvas-background-text(t); }
+        apply => {
+            root.canvas-settings-apply();
+            if (root.canvas-form.id == "") { main-keys.focus(); }
+        }
+        cancel => { root.canvas-settings-cancel(); main-keys.focus(); }
     }
 
     if root.startup == "recovery": RecoveryPrompt {

@@ -1257,7 +1257,7 @@ export component CanvasTabs inherits HorizontalLayout {
                 alignment: center;
                 IconButton {
                     icon: Icons.chevron-down;
-                    tooltip: "Canvas menu: outputs, duplicate, rename, remove";
+                    tooltip: "Canvas menu: outputs, settings, duplicate, rename, remove";
                     size: 20px;
                     icon-size: 12px;
                     opacity: hovered || ct.active ? 1 : 0.5;
@@ -1296,6 +1296,11 @@ export component CanvasTabs inherits HorizontalLayout {
                         clicked => { root.menu(ct.id, "duplicate", i); }
                     }
                     Rectangle { height: 1px; background: Theme.border; }
+                    MenuRow {
+                        label: "Canvas settings…";
+                        icon: Icons.settings;
+                        clicked => { root.menu(ct.id, "settings", -1); }
+                    }
                     MenuRow {
                         label: "Rename…";
                         icon: Icons.pencil;
