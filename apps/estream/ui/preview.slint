@@ -3,6 +3,7 @@
 
 import { Theme } from "theme.slint";
 import { CanvasBox, Guide } from "types.slint";
+import { ColorPicking } from "color.slint";
 
 export component Preview inherits Rectangle {
     in property <image> frame;
@@ -203,6 +204,56 @@ export component Preview inherits Rectangle {
                 }
             }
             return EventResult.accept;
+        }
+    }
+
+    // Picking a color: a crosshair, a magnified look at the pixels under it, and a click that
+    // reports the spot as a fraction of the canvas.
+    if ColorPicking.from-preview: pick := TouchArea {
+        mouse-cursor: MouseCursor.crosshair;
+        property <float> fx: (self.mouse-x - root.img-x) / root.img-w;
+        property <float> fy: (self.mouse-y - root.img-y) / root.img-h;
+        property <bool> inside: self.has-hover && self.fx >= 0 && self.fx < 1 && self.fy >= 0 && self.fy < 1;
+        clicked => {
+            if (self.inside) { ColorPicking.preview-picked(self.fx, self.fy); }
+        }
+        // 11 × 11 frame pixels, 9 times larger, centered on the pointer.
+        if pick.inside: Rectangle {
+            property <int> px: floor(pick.fx * root.frame.width);
+            property <int> py: floor(pick.fy * root.frame.height);
+            x: pick.mouse-x + 18px;
+            y: pick.mouse-y + 18px;
+            width: 99px;
+            height: 99px;
+            border-radius: 6px;
+            border-width: 2px;
+            border-color: #ffffff;
+            background: #000000;
+            clip: true;
+            drop-shadow-blur: 8px;
+            drop-shadow-color: #00000090;
+            Image {
+                x: 0;
+                y: 0;
+                width: 99px;
+                height: 99px;
+                source: root.frame;
+                source-clip-x: parent.px - 5;
+                source-clip-y: parent.py - 5;
+                source-clip-width: 11;
+                source-clip-height: 11;
+                image-fit: fill;
+                image-rendering: pixelated;
+            }
+            // The pixel that a click takes.
+            Rectangle {
+                x: 45px;
+                y: 45px;
+                width: 9px;
+                height: 9px;
+                border-width: 1px;
+                border-color: #ffffff;
+            }
         }
     }
 

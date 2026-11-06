@@ -3,16 +3,17 @@
 
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
-import { Inspect, PropRow, AudioInspect, VideoFilterRow, MediaInspect, InspectorFolds } from "types.slint";
+import { Inspect, PropRow, GradientStopRow, AudioInspect, VideoFilterRow, MediaInspect, InspectorFolds } from "types.slint";
 import {
     Button, IconButton, Icon, TextField, TextArea, NumberField, Toggle, Select, Panel, Badge,
     EmptyState, Hint, ValueSlider, FoldPanel, FieldRow, ParamEditor,
 } from "widgets.slint";
 import { AudioSettings } from "sound.slint";
 import { KindIcon } from "panels.slint";
+import { ColorSwatch } from "color.slint";
 
 // Editor for one generic source property.
-component PropEditor inherits VerticalLayout {
+export component PropEditor inherits VerticalLayout {
     in property <PropRow> prop;
     callback set-flag(bool);
     callback set-number(float);
@@ -21,6 +22,14 @@ component PropEditor inherits VerticalLayout {
     callback set-index(int);
     callback browse();
     callback commit();
+    /// Gradient edits: ("select" | "move" | "add" | "remove" | "angle" | "cx" | "cy" |
+    /// "radius", stop index, value).
+    callback gradient(string, int, float);
+    callback gradient-color(int, color);
+    callback gradient-text(int, string);
+
+    property <int> stop: clamp(root.prop.stop, 0, max(0, root.prop.stops.length - 1));
+    property <GradientStopRow> current: root.prop.stops.length > 0 ? root.prop.stops[root.stop] : { at: 0, color: #000000, hex: "" };
 
     // Numbers with a range small enough to drag precisely are sliders; the rest are typed.
     property <bool> number: root.prop.kind == "int" || root.prop.kind == "float";
@@ -92,13 +101,10 @@ component PropEditor inherits VerticalLayout {
     }
     if prop.kind == "color": HorizontalLayout {
         spacing: 6px;
-        Rectangle {
-            width: 28px;
-            height: 28px;
-            border-radius: Theme.radius-s;
-            background: root.prop.color;
-            border-width: 1px;
-            border-color: Theme.border-strong;
+        ColorSwatch {
+            value: root.prop.color;
+            target: "prop:" + root.prop.key;
+            label: root.prop.label;
         }
         TextField {
             text: root.prop.text;
@@ -107,19 +113,127 @@ component PropEditor inherits VerticalLayout {
             accepted(t) => { root.set-text(t); }
         }
     }
-    if prop.kind == "color": HorizontalLayout {
-        spacing: 6px;
-        for swatch in [#ffffff, #000000, #6c8cff, #f0435a, #3dd68c, #f2b84b, #b06cff, #00b5d8]: Rectangle {
-            width: 20px;
-            height: 20px;
-            border-radius: 10px;
-            background: swatch;
+    // A gradient: a preview bar with a handle per color (drag to move, click the bar to add),
+    // the selected color, and the shape.
+    if prop.kind == "gradient": VerticalLayout {
+        spacing: 8px;
+        bar := Rectangle {
+            height: 30px;
+            border-radius: Theme.radius-s;
             border-width: 1px;
             border-color: Theme.border-strong;
-            TouchArea {
-                mouse-cursor: MouseCursor.pointer;
-                clicked => { root.set-color(swatch); }
+            clip: true;
+            accessible-role: AccessibleRole.slider;
+            accessible-label: root.prop.label;
+            Image {
+                width: parent.width;
+                height: parent.height;
+                source: root.prop.preview;
+                image-fit: fill;
             }
+            TouchArea {
+                mouse-cursor: MouseCursor.copy;
+                clicked => { root.gradient("add", -1, clamp((self.mouse-x - 7px) / (bar.width - 14px), 0, 1)); }
+            }
+            for s[i] in root.prop.stops: Rectangle {
+                property <length> grab;
+                x: s.at * (bar.width - 14px);
+                y: 3px;
+                width: 14px;
+                height: bar.height - 6px;
+                border-radius: 4px;
+                background: s.color;
+                border-width: i == root.stop ? 3px : 2px;
+                border-color: i == root.stop ? Theme.accent : #ffffff;
+                drop-shadow-blur: 3px;
+                drop-shadow-color: #00000080;
+                TouchArea {
+                    mouse-cursor: MouseCursor.ew-resize;
+                    pointer-event(e) => {
+                        if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                            parent.grab = self.mouse-x;
+                            root.gradient("select", i, 0);
+                        } else if (e.kind == PointerEventKind.up) {
+                            root.commit();
+                        }
+                    }
+                    moved => {
+                        if (self.pressed) {
+                            root.gradient("move", i, clamp((parent.x + self.mouse-x - parent.grab) / (bar.width - 14px), 0, 1));
+                        }
+                    }
+                }
+            }
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            ColorSwatch {
+                value: root.current.color;
+                target: "stop:" + root.prop.key + ":" + root.stop;
+                label: "Color " + (root.stop + 1);
+            }
+            TextField {
+                text: root.current.hex;
+                label: "Color " + (root.stop + 1);
+                placeholder: "#rrggbb or #rrggbbaa";
+                accepted(t) => { root.gradient-text(root.stop, t); }
+            }
+            Text {
+                text: round(root.current.at * 100) + "%";
+                color: Theme.text-muted;
+                font-size: Theme.font-s;
+                vertical-alignment: center;
+            }
+            IconButton {
+                icon: Icons.trash;
+                tooltip: "Remove this color";
+                enabled: root.prop.stops.length > 2;
+                clicked => { root.gradient("remove", root.stop, 0); }
+            }
+        }
+        if !root.prop.radial: ValueSlider {
+            label: "Angle";
+            value: root.prop.angle;
+            minimum: 0;
+            maximum: 360;
+            step: 1;
+            decimals: 0;
+            suffix: "°";
+            changed(v) => { root.gradient("angle", -1, v); }
+            committed => { root.commit(); }
+        }
+        if root.prop.radial: ValueSlider {
+            label: "Center X";
+            value: root.prop.center-x * 100;
+            minimum: 0;
+            maximum: 100;
+            step: 1;
+            decimals: 0;
+            suffix: "%";
+            changed(v) => { root.gradient("cx", -1, v / 100); }
+            committed => { root.commit(); }
+        }
+        if root.prop.radial: ValueSlider {
+            label: "Center Y";
+            value: root.prop.center-y * 100;
+            minimum: 0;
+            maximum: 100;
+            step: 1;
+            decimals: 0;
+            suffix: "%";
+            changed(v) => { root.gradient("cy", -1, v / 100); }
+            committed => { root.commit(); }
+        }
+        if root.prop.radial: ValueSlider {
+            label: "Size";
+            value: root.prop.radius * 100;
+            minimum: 5;
+            maximum: 300;
+            step: 1;
+            decimals: 0;
+            suffix: "%";
+            changed(v) => { root.gradient("radius", -1, v / 100); }
+            committed => { root.commit(); }
         }
     }
     if prop.hint != "": Text {
@@ -202,6 +316,10 @@ export component InspectorPanel inherits Panel {
     callback edit-text(string, string);
     callback edit-color(color);
     callback select-option(string, int);
+    /// The item fill's gradient (see PropEditor's gradient callbacks).
+    callback fill-gradient(string, int, float);
+    callback fill-gradient-color(int, color);
+    callback fill-gradient-text(int, string);
     callback toggle(string, bool);
     in property <[PropRow]> props;
     in property <AudioInspect> audio;
@@ -211,6 +329,7 @@ export component InspectorPanel inherits Panel {
     callback filter-toggle(string, bool);
     callback filter-param(string, string, float);
     callback filter-move(string, bool);
+    callback audio-remove();
     in property <[VideoFilterRow]> video-filters;
     in property <MediaInspect> media;
     callback media-control(string);
@@ -232,6 +351,9 @@ export component InspectorPanel inherits Panel {
     callback prop-number(string, float);
     callback prop-text(string, string);
     callback prop-color(string, color);
+    callback prop-gradient(string, string, int, float);
+    callback prop-gradient-color(string, int, color);
+    callback prop-gradient-text(string, int, string);
     callback prop-index(string, int);
     callback prop-browse(string);
     callback prop-refresh();
@@ -399,6 +521,9 @@ export component InspectorPanel inherits Panel {
                         set-text(v) => { root.prop-text(prop.key, v); }
                         set-color(v) => { root.prop-color(prop.key, v); }
                         set-index(i) => { root.prop-index(prop.key, i); }
+                        gradient(a, i, v) => { root.prop-gradient(prop.key, a, i, v); }
+                        gradient-color(i, c) => { root.prop-gradient-color(prop.key, i, c); }
+                        gradient-text(i, t) => { root.prop-gradient-text(prop.key, i, t); }
                         browse => { root.prop-browse(prop.key); }
                         commit => { root.commit(); }
                     }
@@ -600,6 +725,74 @@ export component InspectorPanel inherits Panel {
                         wrap: word-wrap;
                     }
                 }
+                // What fills the box around a fitted picture (the bars on a vertical canvas).
+                if !root.sel.group && root.sel.size-mode == 2: FoldPanel {
+                    title: "Fill empty space";
+                    folded: root.folds.fill;
+                    note: root.folds.fill && root.sel.fill-kind > 0 ? ["", "Frosted", "Color", "Gradient"][root.sel.fill-kind] : "";
+                    toggle-fold => { root.folds.fill = !root.folds.fill; }
+                    Select {
+                        label: "Fill empty space";
+                        options: ["None", "Frosted", "Color", "Gradient"];
+                        current-index: root.sel.fill-kind;
+                        selected(i) => { root.select-option("fill", i); }
+                    }
+                    if root.sel.fill-kind == 1: ValueSlider {
+                        label: "Blur";
+                        value: root.sel.fill-blur * 100;
+                        minimum: 0;
+                        maximum: 100;
+                        step: 1;
+                        decimals: 0;
+                        suffix: "%";
+                        changed(v) => { root.edit("fill-blur", v / 100); }
+                        committed => { root.commit(); }
+                    }
+                    if root.sel.fill-kind == 1: ValueSlider {
+                        label: "Dim";
+                        value: root.sel.fill-dim * 100;
+                        minimum: 0;
+                        maximum: 100;
+                        step: 1;
+                        decimals: 0;
+                        suffix: "%";
+                        changed(v) => { root.edit("fill-dim", v / 100); }
+                        committed => { root.commit(); }
+                    }
+                    if root.sel.fill-kind == 1: ValueSlider {
+                        label: "Saturation";
+                        value: root.sel.fill-saturation * 100;
+                        minimum: 0;
+                        maximum: 200;
+                        step: 1;
+                        decimals: 0;
+                        suffix: "%";
+                        mark: 100;
+                        changed(v) => { root.edit("fill-saturation", v / 100); }
+                        committed => { root.commit(); }
+                    }
+                    if root.sel.fill-kind == 2: HorizontalLayout {
+                        spacing: 6px;
+                        ColorSwatch {
+                            value: root.sel.fill-color;
+                            target: "fill";
+                            label: "Fill color";
+                        }
+                        TextField {
+                            text: root.sel.fill-hex;
+                            label: "Fill color";
+                            placeholder: "#rrggbb or #rrggbbaa";
+                            accepted(t) => { root.edit-text("fill-hex", t); }
+                        }
+                    }
+                    if root.sel.fill-kind == 3: PropEditor {
+                        prop: root.sel.fill-gradient;
+                        gradient(a, i, v) => { root.fill-gradient(a, i, v); }
+                        gradient-color(i, c) => { root.fill-gradient-color(i, c); }
+                        gradient-text(i, t) => { root.fill-gradient-text(i, t); }
+                        commit => { root.commit(); }
+                    }
+                }
             }
 
             // Look: how it is drawn.
@@ -697,6 +890,7 @@ export component InspectorPanel inherits Panel {
                 filter-param(id, k, v) => { root.filter-param(id, k, v); }
                 filter-move(id, up) => { root.filter-move(id, up); }
                 commit => { root.commit(); }
+                remove-source => { root.audio-remove(); }
             }
         }
     }

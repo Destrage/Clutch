@@ -55,6 +55,8 @@ pub struct CanvasGraph {
     pub height: u32,
     pub fps: Rational,
     pub background: Rgba8,
+    /// A gradient background (`None` for a solid one).
+    pub background_paint: Option<estream_core::Paint>,
     /// Visible items of the active (program) scene, bottom first.
     pub items: Vec<FlatItem>,
     /// A running transition into `items`.
@@ -89,6 +91,8 @@ impl TransitionGraph {
 /// A visible source item with its group transforms and opacity resolved.
 #[derive(Clone, Debug)]
 pub struct FlatItem {
+    /// The scene item (fills keep their GPU state per item).
+    pub item: estream_core::ItemId,
     pub source: SourceId,
     /// Accumulated transform of all enclosing groups.
     pub parent: Affine2,
@@ -96,6 +100,8 @@ pub struct FlatItem {
     pub crop: Crop,
     pub opacity: f32,
     pub blend: BlendMode,
+    /// What fills the rest of the bounding box (drawn only with Fit bounds).
+    pub fill: estream_project::ItemFill,
 }
 
 impl RenderGraph {
@@ -142,6 +148,7 @@ impl RenderGraph {
                     height: canvas.height,
                     fps: canvas.fps,
                     background: canvas.background,
+                    background_paint: canvas.background_paint.clone(),
                     items: scene_items(canvas.active_scene),
                     transition,
                     preview: view
@@ -313,12 +320,18 @@ fn flatten(items: &[SceneItem], parent: Affine2, opacity: f32, out: &mut Vec<Fla
         let opacity = opacity * item.opacity;
         match &item.content {
             ItemContent::Source { source } => out.push(FlatItem {
+                item: item.id,
                 source: *source,
                 parent,
                 transform: item.transform,
                 crop: item.crop,
                 opacity,
                 blend: item.blend,
+                fill: if item.transform.bounds_mode == estream_core::BoundsMode::Fit {
+                    item.fill.clone()
+                } else {
+                    estream_project::ItemFill::None
+                },
             }),
             ItemContent::Group { items } => {
                 flatten(items, parent * item.transform.group_matrix(), opacity, out)

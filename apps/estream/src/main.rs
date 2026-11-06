@@ -18,6 +18,7 @@ mod oauth;
 mod overlay;
 mod performance;
 mod presets;
+mod screen_color;
 mod secret;
 mod services;
 mod settings;

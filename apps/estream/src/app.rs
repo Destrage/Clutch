@@ -8,12 +8,12 @@ use crate::settings::{
     GameAudio, InspectorState, PanelLayout, Paths, Settings, ThemeMode, WindowState,
 };
 use crate::ui::{
-    AppWindow, AudioInspect, CanvasBox, CanvasTab, DestCanvas, DestinationRow, FilterParamRow,
-    FilterRow, Guide, Inspect, InspectorFolds, LayerRow, LiveRow, MediaInspect, MixerStrip,
-    PaletteEntry, Platform, Preset, PropRow, SceneRow, SettingsForm, SetupLine, SourceType, Theme,
-    VideoFilterRow,
+    AppWindow, AudioInspect, CanvasBox, CanvasForm, CanvasSize, CanvasTab, ColorPicking,
+    DestCanvas, DestinationRow, FilterParamRow, FilterRow, GradientStopRow, Guide, Inspect,
+    InspectorFolds, LayerRow, LiveRow, MediaInspect, MixerStrip, PaletteEntry, Platform, Preset,
+    PropRow, SceneRow, SettingsForm, SetupLine, SourceType, Theme, VideoFilterRow,
 };
-use estream_core::{BlendMode, BoundsMode, CanvasId, ItemId, Rgba8, SceneId, SourceId};
+use estream_core::{BlendMode, BoundsMode, CanvasId, ItemId, Rational, Rgba8, SceneId, SourceId};
 use estream_engine::{
     Command, Engine, EngineConfig, Event, ItemPatch, PropKind, SourceInfo, SourceStatus,
     Subscription,
@@ -21,8 +21,8 @@ use estream_engine::{
 use estream_gpu::GpuContext;
 use estream_media::Service;
 use estream_project::{
-    AudioConfig, AudioFilterDef, ItemContent, Monitoring, Project, Scene, SceneItem, SourceDef,
-    persist,
+    AudioConfig, AudioFilterDef, ItemContent, ItemFill, Monitoring, Project, Scene, SceneItem,
+    SourceDef, persist,
 };
 use glam::Vec2;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
@@ -68,6 +68,17 @@ pub struct App {
     /// Cache key and schema behind the current property rows.
     props: Option<((SourceId, String, u64), estream_engine::PropertySchema)>,
     props_generation: u64,
+    /// The selected color of a gradient being edited in the inspector.
+    gradient_stop: usize,
+    /// The selected color of the selected item's gradient fill.
+    fill_stop: usize,
+    /// What the color picker is editing (while it is open).
+    picker: Option<Picker>,
+    /// The eyedropper is picking (until a click, Esc or a right click).
+    eyedropper: Option<Eyedropper>,
+    /// Canvas settings: the background being edited, and its selected gradient color.
+    canvas_bg: estream_core::Paint,
+    canvas_bg_stop: usize,
 
     geoms: Vec<ItemGeom>,
     selection: Option<ItemId>,
@@ -616,6 +627,182 @@ fn id_str(id: impl std::fmt::Display) -> SharedString {
     id.to_string().into()
 }
 
+/// What the color picker edits.
+#[derive(Clone, Debug, PartialEq)]
+enum PickerTarget {
+    /// A color property of a source.
+    Prop {
+        source: SourceId,
+        key: String,
+    },
+    /// One color of a source's gradient property.
+    Stop {
+        source: SourceId,
+        key: String,
+        index: i32,
+    },
+    /// Canvas settings: the solid background, or one color of its gradient.
+    CanvasBg,
+    CanvasStop(i32),
+    /// The selected item's fill: its solid color, or one color of its gradient.
+    Fill(ItemId),
+    FillStop(ItemId, i32),
+}
+
+/// How long the eyedropper waits for a click before giving up.
+const EYEDROPPER_LIMIT: Duration = Duration::from_secs(60);
+
+/// The eyedropper while it picks.
+struct Eyedropper {
+    started: Instant,
+    /// When the color under the pointer was last shown.
+    polled: Instant,
+    /// The color before picking (Esc puts it back).
+    start: slint::Color,
+    /// Picking from the whole screen (else from the Preview only).
+    screen: bool,
+}
+
+#[derive(Debug)]
+struct Picker {
+    target: PickerTarget,
+    /// The color when the picker opened (an unchanged color isn't added to recent colors).
+    start: Rgba8,
+}
+
+/// Most recent colors the picker keeps.
+const RECENT_COLORS: usize = 12;
+
+/// Puts `color` first in `recent` (once), keeping at most [`RECENT_COLORS`].
+fn remember(recent: &mut Vec<String>, color: String) {
+    recent.retain(|c| !c.eq_ignore_ascii_case(&color));
+    recent.insert(0, color);
+    recent.truncate(RECENT_COLORS);
+}
+
+/// The picker's hue ring: hue 0 (red) to the right, increasing clockwise, as in color.slint.
+/// The ring is the outer 18 % of the radius.
+fn hue_ring_image(size: u32) -> slint::Image {
+    let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(size, size);
+    let half = size as f32 / 2.0;
+    let inner = half * 0.82;
+    for (i, px) in buffer.make_mut_slice().iter_mut().enumerate() {
+        let x = (i as u32 % size) as f32 + 0.5 - half;
+        let y = (i as u32 / size) as f32 + 0.5 - half;
+        let d = x.hypot(y);
+        let coverage = ((d - inner).min(half - d) + 0.5).clamp(0.0, 1.0);
+        let hue = y.atan2(x).to_degrees().rem_euclid(360.0);
+        let [r, g, b] = hsv_to_rgb(hue, 1.0, 1.0);
+        *px = slint::Rgba8Pixel::new(r, g, b, (coverage * 255.0).round() as u8);
+    }
+    slint::Image::from_rgba8(buffer)
+}
+
+/// The checkerboard shown behind transparent colors (tiled).
+fn checker_image() -> slint::Image {
+    let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(8, 8);
+    for (i, px) in buffer.make_mut_slice().iter_mut().enumerate() {
+        let (x, y) = (i % 8 / 4, i / 8 / 4);
+        let v = if (x + y) % 2 == 0 { 255 } else { 200 };
+        *px = slint::Rgba8Pixel::new(v, v, v, 255);
+    }
+    slint::Image::from_rgba8(buffer)
+}
+
+/// HSV (hue in degrees, saturation and value 0..1) to 8-bit RGB.
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [u8; 3] {
+    let c = v * s;
+    let h = h.rem_euclid(360.0) / 60.0;
+    let x = c * (1.0 - (h % 2.0 - 1.0).abs());
+    let (r, g, b) = match h as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = v - c;
+    [r, g, b].map(|ch| ((ch + m) * 255.0).round() as u8)
+}
+
+/// Frame rates offered in Canvas settings.
+const CANVAS_RATES: [(&str, Rational); 8] = [
+    ("24 fps", Rational::fps(24)),
+    ("25 fps", Rational::fps(25)),
+    ("29.97 fps", Rational::new(30000, 1001)),
+    ("30 fps", Rational::fps(30)),
+    ("48 fps", Rational::fps(48)),
+    ("50 fps", Rational::fps(50)),
+    ("59.94 fps", Rational::new(60000, 1001)),
+    ("60 fps", Rational::fps(60)),
+];
+
+/// The distinct preset sizes, for Canvas settings.
+fn canvas_sizes() -> Vec<CanvasSize> {
+    let mut out: Vec<CanvasSize> = Vec::new();
+    for p in PRESETS {
+        let (width, height) = (p.width as i32, p.height as i32);
+        if out.iter().any(|s| s.width == width && s.height == height) {
+            continue;
+        }
+        let label = if height > width {
+            format!("{width} × {height} · vertical")
+        } else {
+            format!("{width} × {height}")
+        };
+        out.push(CanvasSize {
+            label: label.into(),
+            width,
+            height,
+        });
+    }
+    out
+}
+
+/// Commands that scale every top-level item in `canvas`'s scenes by `ratio` (canvas width and
+/// height ratios). Positions and bounding boxes follow each axis; scale factors use the smaller
+/// ratio so sources keep their shape. Group contents are in group space, so they follow along.
+fn scale_items(snapshot: &Project, canvas: CanvasId, ratio: Vec2) -> Vec<Command> {
+    let uniform = ratio.x.min(ratio.y);
+    snapshot
+        .scenes
+        .iter()
+        .filter(|s| s.canvas == canvas)
+        .flat_map(|scene| {
+            scene.items.iter().map(move |item| {
+                let mut t = item.transform;
+                t.position *= ratio;
+                if t.bounds_mode == BoundsMode::None {
+                    t.scale *= uniform;
+                } else {
+                    t.bounds *= ratio;
+                }
+                Command::UpdateItem {
+                    scene: scene.id,
+                    item: item.id,
+                    patch: ItemPatch {
+                        transform: Some(t),
+                        ..Default::default()
+                    },
+                }
+            })
+        })
+        .collect()
+}
+
+/// Deletes an item from a scene. Removing the last use of a source removes the source too
+/// (undoable as one step).
+fn remove_item_command(snapshot: &Project, scene: SceneId, item: &SceneItem) -> Command {
+    match item.source_id() {
+        Some(source) if snapshot.items_using(source).len() == 1 => Command::RemoveSource { source },
+        _ => Command::RemoveItem {
+            scene,
+            item: item.id,
+        },
+    }
+}
+
 fn parse_id(s: &str) -> Option<uuid::Uuid> {
     s.parse().ok()
 }
@@ -789,6 +976,12 @@ impl App {
             props_model: Rc::new(VecModel::default()),
             props: None,
             props_generation: 0,
+            gradient_stop: 0,
+            fill_stop: 0,
+            picker: None,
+            eyedropper: None,
+            canvas_bg: estream_core::Paint::default(),
+            canvas_bg_stop: 0,
             geoms: Vec::new(),
             selection: None,
             selected_source: None,
@@ -2628,6 +2821,7 @@ impl App {
     /// Called from a fast UI timer: preview frames, engine events, stats, toasts.
     pub fn tick(&mut self) {
         let Some(w) = self.window() else { return };
+        self.screen_pick_tick();
         let mut changed = false;
         if w.get_chat_visible() {
             self.tick_chat();
@@ -3312,7 +3506,7 @@ impl App {
             .and_then(|e| e.registry().get(kind).map(|t| t.name.clone()))
             .unwrap_or_else(|| kind_label(kind).to_owned());
         let t = &item.transform;
-        let inspect = Inspect {
+        let mut inspect = Inspect {
             has: true,
             id: id_str(item.id),
             name: name.into(),
@@ -3341,7 +3535,9 @@ impl App {
             visible: item.visible,
             locked: item.locked,
             no_video: false,
+            ..Default::default()
         };
+        fill_fields(&mut inspect, &item.fill, self.fill_stop);
         (selection_box, inspect)
     }
 
@@ -3954,6 +4150,7 @@ impl App {
                 }
             }
             "remove" => self.canvas_remove(id),
+            "settings" => self.canvas_settings_open(id),
             _ => {}
         }
     }
@@ -3981,6 +4178,247 @@ impl App {
                 },
                 false,
             );
+        }
+    }
+
+    /// Opens Canvas settings for a canvas.
+    fn canvas_settings_open(&mut self, id: &str) {
+        let Some(w) = self.window() else { return };
+        let Some(engine) = &self.engine else { return };
+        let snapshot = engine.snapshot();
+        let Some(canvas) = parse_id(id).map(CanvasId).and_then(|c| snapshot.canvas(c)) else {
+            return;
+        };
+        let sizes = canvas_sizes();
+        let mut labels: Vec<SharedString> = sizes.iter().map(|s| s.label.clone()).collect();
+        labels.push("Custom".into());
+        w.set_canvas_size_choices(ModelRc::new(VecModel::from(sizes)));
+        w.set_canvas_size_labels(ModelRc::new(VecModel::from(labels)));
+        w.set_canvas_rates(ModelRc::new(VecModel::from(
+            CANVAS_RATES
+                .iter()
+                .map(|(label, _)| SharedString::from(*label))
+                .collect::<Vec<_>>(),
+        )));
+        self.canvas_bg = canvas
+            .background_paint
+            .clone()
+            .unwrap_or(estream_core::Paint::solid(Rgba8 {
+                a: 255,
+                ..canvas.background
+            }));
+        self.canvas_bg_stop = 0;
+        let mut form = CanvasForm {
+            id: id_str(canvas.id),
+            name: canvas.name.clone().into(),
+            width: canvas.width as i32,
+            height: canvas.height as i32,
+            old_width: canvas.width as i32,
+            old_height: canvas.height as i32,
+            fps_index: CANVAS_RATES
+                .iter()
+                .position(|(_, r)| *r == canvas.fps)
+                .map_or(-1, |i| i as i32),
+            scale_items: true,
+            locked: self.canvas_on_air(&snapshot, canvas.id),
+            ..Default::default()
+        };
+        self.canvas_bg_into(&mut form);
+        w.set_canvas_form(form);
+        self.canvas_size_changed();
+    }
+
+    /// Shows the draft background (`self.canvas_bg`) in the Canvas settings form.
+    fn canvas_bg_into(&self, form: &mut CanvasForm) {
+        use estream_core::Paint;
+        let paint = &self.canvas_bg;
+        form.background_style = match paint {
+            Paint::Solid { .. } => 0,
+            Paint::Linear { .. } => 1,
+            Paint::Radial { .. } => 2,
+        };
+        let c = paint.first_color();
+        form.background = to_color(c);
+        form.background_hex = hex(c).into();
+        let mut row = PropRow {
+            key: "canvas-background".into(),
+            label: "Gradient".into(),
+            kind: "gradient".into(),
+            stop: self.canvas_bg_stop as i32,
+            ..Default::default()
+        };
+        fill_gradient_row(&mut row, paint);
+        form.background_gradient = row;
+    }
+
+    fn canvas_bg_changed(&mut self) {
+        let Some(w) = self.window() else { return };
+        let mut form = w.get_canvas_form();
+        self.canvas_bg_into(&mut form);
+        w.set_canvas_form(form);
+    }
+
+    /// Keeps the Size dropdown on the preset matching the typed size, or on Custom.
+    pub fn canvas_size_changed(&mut self) {
+        let Some(w) = self.window() else { return };
+        let form = w.get_canvas_form();
+        let sizes = canvas_sizes();
+        let index = sizes
+            .iter()
+            .position(|s| s.width == form.width && s.height == form.height)
+            .unwrap_or(sizes.len());
+        w.set_canvas_size_index(index as i32);
+    }
+
+    pub fn canvas_background_color(&mut self, color: slint::Color) {
+        self.canvas_bg = estream_core::Paint::solid(Rgba8 {
+            a: 255,
+            ..from_color(color)
+        });
+        self.canvas_bg_changed();
+    }
+
+    pub fn canvas_background_text(&mut self, text: &str) {
+        match parse_hex_color(text) {
+            Some(c) => self.canvas_background_color(to_color(c)),
+            None => {
+                self.toast("Type a color as #rrggbb".into(), true);
+                self.canvas_bg_changed();
+            }
+        }
+    }
+
+    /// Solid color (0), linear (1) or radial (2) gradient. A gradient made from a solid color
+    /// starts from it.
+    pub fn canvas_background_style(&mut self, style: i32) {
+        use estream_core::Paint;
+        let c = self.canvas_bg.first_color();
+        let gradient = if self.canvas_bg.is_gradient() {
+            self.canvas_bg.clone()
+        } else {
+            let accent = Rgba8::new(108, 140, 255, 255);
+            Paint::linear(c, if c == accent { Rgba8::BLACK } else { accent })
+        };
+        self.canvas_bg = match style {
+            1 => gradient.to_linear(),
+            2 => gradient.to_radial(),
+            _ => Paint::solid(c),
+        };
+        self.canvas_bg_stop = 0;
+        self.canvas_bg_changed();
+    }
+
+    pub fn canvas_background_gradient(&mut self, action: &str, index: i32, value: f32) {
+        let mut stop = self.canvas_bg_stop;
+        match edit_gradient(&mut self.canvas_bg, &mut stop, action, index, value) {
+            Ok(_) => self.canvas_bg_stop = stop,
+            Err(e) => self.toast(e, true),
+        }
+        self.canvas_bg_changed();
+    }
+
+    pub fn canvas_background_gradient_color(&mut self, index: i32, color: slint::Color) {
+        self.canvas_bg_stop = set_stop_color(&mut self.canvas_bg, index, from_color(color));
+        self.canvas_bg_changed();
+    }
+
+    pub fn canvas_background_gradient_text(&mut self, index: i32, text: &str) {
+        match parse_hex_color(text) {
+            Some(c) => self.canvas_background_gradient_color(index, to_color(c)),
+            None => self.toast("Use a color like #ff8800 or #ff880080".into(), true),
+        }
+    }
+
+    pub fn canvas_settings_cancel(&mut self) {
+        self.close_canvas_picker();
+        if let Some(w) = self.window() {
+            w.set_canvas_form(CanvasForm::default());
+        }
+    }
+
+    /// Closes the color picker if it edits the Canvas settings being closed.
+    fn close_canvas_picker(&mut self) {
+        if self.picker.as_ref().is_some_and(|p| {
+            matches!(
+                p.target,
+                PickerTarget::CanvasBg | PickerTarget::CanvasStop(_)
+            )
+        }) {
+            self.picker_close();
+        }
+    }
+
+    /// Applies Canvas settings as one undo step, scaling the items when asked.
+    pub fn canvas_settings_apply(&mut self) {
+        let Some(w) = self.window() else { return };
+        let Some(engine) = &self.engine else { return };
+        let snapshot = engine.snapshot();
+        let form = w.get_canvas_form();
+        let Some(canvas) = parse_id(&form.id)
+            .map(CanvasId)
+            .and_then(|c| snapshot.canvas(c))
+        else {
+            self.canvas_settings_cancel();
+            return;
+        };
+        // A typed solid color that wasn't confirmed with Enter still counts.
+        if !self.canvas_bg.is_gradient()
+            && let Some(c) = parse_hex_color(&form.background_hex)
+        {
+            self.canvas_bg = estream_core::Paint::solid(Rgba8 { a: 255, ..c });
+        }
+        let locked = self.canvas_on_air(&snapshot, canvas.id);
+        let (width, height, fps) = if locked {
+            (canvas.width, canvas.height, canvas.fps)
+        } else {
+            let even = |v: i32| (v.clamp(128, 4096) as u32) & !1;
+            let fps = usize::try_from(form.fps_index)
+                .ok()
+                .and_then(|i| CANVAS_RATES.get(i))
+                .map_or(canvas.fps, |(_, r)| *r);
+            (even(form.width), even(form.height), fps)
+        };
+        let name = form.name.trim().to_owned();
+        let current = canvas
+            .background_paint
+            .clone()
+            .unwrap_or(estream_core::Paint::solid(canvas.background));
+        let background = self.canvas_bg.normalized();
+        let patch = estream_engine::CanvasPatch {
+            name: (!name.is_empty() && name != canvas.name).then_some(name),
+            width: (width != canvas.width).then_some(width),
+            height: (height != canvas.height).then_some(height),
+            fps: (fps != canvas.fps).then_some(fps),
+            background: None,
+            background_paint: (background != current).then_some(background),
+            follow_scenes: None,
+        };
+        let mut commands = Vec::new();
+        if patch != estream_engine::CanvasPatch::default() {
+            commands.push(Command::UpdateCanvas {
+                canvas: canvas.id,
+                patch,
+            });
+        }
+        let resized = (width, height) != (canvas.width, canvas.height);
+        if form.scale_items && resized {
+            let ratio = Vec2::new(
+                width as f32 / canvas.width as f32,
+                height as f32 / canvas.height as f32,
+            );
+            commands.extend(scale_items(&snapshot, canvas.id, ratio));
+        }
+        let name = canvas.name.clone();
+        if commands.is_empty() || self.exec(Command::Batch { commands }) {
+            self.close_canvas_picker();
+            w.set_canvas_form(CanvasForm::default());
+            if resized {
+                self.toast(
+                    format!("“{name}” is now {width} × {height} — Ctrl+Z to undo"),
+                    false,
+                );
+            }
+            self.refresh();
         }
     }
 
@@ -4105,6 +4543,45 @@ impl App {
                 self.show_in_preview(tid, id);
             }
             self.toast(format!("Copied “{name}” to {tname}"), false);
+        }
+    }
+
+    /// Some hardware H.264 encoders refuse frames taller than 2304 pixels (for example a
+    /// 2160 × 3840 vertical canvas). When an output that failed to start uses such a canvas,
+    /// this is the advice to add to its error.
+    fn tall_canvas_hint(&self, wanted: &[Option<CanvasId>]) -> &'static str {
+        let Some(engine) = &self.engine else {
+            return "";
+        };
+        let snapshot = engine.snapshot();
+        let tall = wanted.iter().any(|w| {
+            Self::resolve_canvas(&snapshot, *w)
+                .and_then(|c| snapshot.canvas(c))
+                .is_some_and(|c| c.height > 2304)
+        });
+        if tall {
+            "\nTry HEVC or AV1, or a 1440 × 2560 canvas."
+        } else {
+            ""
+        }
+    }
+
+    /// [`Self::tall_canvas_hint`] for the recording and replay buffer.
+    fn recording_canvas_hint(&self) -> &'static str {
+        let rec = &self.settings.recording;
+        if rec.all_canvases {
+            let Some(engine) = &self.engine else {
+                return "";
+            };
+            let all: Vec<_> = engine
+                .snapshot()
+                .canvases
+                .iter()
+                .map(|c| Some(c.id))
+                .collect();
+            self.tall_canvas_hint(&all)
+        } else {
+            self.tall_canvas_hint(&[rec.canvas])
         }
     }
 
@@ -4668,7 +5145,9 @@ impl App {
                 self.stream = Some(stream);
             }
             Err(e) => {
-                self.toast(format!("Couldn't go live: {e}"), true);
+                let wanted: Vec<_> = dests.iter().map(|d| d.settings.canvas).collect();
+                let hint = self.tall_canvas_hint(&wanted);
+                self.toast(format!("Couldn't go live: {e}{hint}"), true);
                 self.open_stream_settings();
             }
         }
@@ -5020,7 +5499,8 @@ impl App {
                         self.stream_dests = vec![LiveDest::new(config)];
                     }
                     Err(e) => {
-                        self.toast(format!("Couldn't go live: {e}"), true);
+                        let hint = self.tall_canvas_hint(&[dest.settings.canvas]);
+                        self.toast(format!("Couldn't go live: {e}{hint}"), true);
                         return;
                     }
                 }
@@ -5109,7 +5589,10 @@ impl App {
                     self.recording = Some(rec);
                     self.toast("Recording started".into(), false);
                 }
-                Err(e) => self.toast(format!("Couldn't start recording: {e}"), true),
+                Err(e) => {
+                    let hint = self.recording_canvas_hint();
+                    self.toast(format!("Couldn't start recording: {e}{hint}"), true)
+                }
             }
         }
         self.update_outputs();
@@ -5132,7 +5615,10 @@ impl App {
                         false,
                     );
                 }
-                Err(e) => self.toast(format!("Couldn't start the replay buffer: {e}"), true),
+                Err(e) => {
+                    let hint = self.recording_canvas_hint();
+                    self.toast(format!("Couldn't start the replay buffer: {e}{hint}"), true)
+                }
             }
         }
         self.update_outputs();
@@ -9215,6 +9701,9 @@ impl App {
         if self.props.as_ref().is_some_and(|p| p.0 == key) {
             return;
         }
+        if self.props.as_ref().is_none_or(|p| p.0.0 != source.id) {
+            self.gradient_stop = 0;
+        }
         let Some(schema) = self.engine.as_ref().and_then(|e| {
             e.registry()
                 .get(&source.kind)
@@ -9228,7 +9717,11 @@ impl App {
         let rows = schema
             .properties
             .iter()
-            .map(|p| prop_row(p, &settings[&p.key]))
+            .map(|p| {
+                let mut row = prop_row(p, &settings[&p.key]);
+                row.stop = self.gradient_stop as i32;
+                row
+            })
             .collect();
         sync_model(&self.props_model, rows);
         self.props = Some((key, schema));
@@ -9273,6 +9766,291 @@ impl App {
         );
     }
 
+    // ------------------------------------------------------------ color picker
+
+    /// What a swatch's target string names: `prop:<key>`, `stop:<key>:<index>`, `canvas-bg`
+    /// or `stop:canvas-background:<index>` (Canvas settings).
+    fn picker_target(&self, target: &str) -> Option<PickerTarget> {
+        if target == "canvas-bg" {
+            return Some(PickerTarget::CanvasBg);
+        }
+        if target == "fill" {
+            return Some(PickerTarget::Fill(self.selection?));
+        }
+        let source = self
+            .canvas_and_scene()
+            .and_then(|(snapshot, _, _)| self.current_source(&snapshot));
+        if let Some(rest) = target.strip_prefix("stop:") {
+            let (key, index) = rest.rsplit_once(':')?;
+            let index = index.parse().ok()?;
+            if key == "canvas-background" {
+                return Some(PickerTarget::CanvasStop(index));
+            }
+            if key == "item-fill" {
+                return Some(PickerTarget::FillStop(self.selection?, index));
+            }
+            return Some(PickerTarget::Stop {
+                source: source?,
+                key: key.into(),
+                index,
+            });
+        }
+        Some(PickerTarget::Prop {
+            source: source?,
+            key: target.strip_prefix("prop:")?.into(),
+        })
+    }
+
+    /// A swatch opens the picker. Every change until it closes is one undo step.
+    pub fn picker_request(&mut self, target: &str, color: slint::Color, x: f32, y: f32) {
+        self.picker_close();
+        let Some(target) = self.picker_target(target) else {
+            return;
+        };
+        let Some(w) = self.window() else { return };
+        // Canvas settings only change when applied; everything else edits the project live.
+        if !matches!(target, PickerTarget::CanvasBg | PickerTarget::CanvasStop(_))
+            && let Some(engine) = &self.engine
+        {
+            engine.hold_history();
+        }
+        let g = w.global::<ColorPicking>();
+        g.set_alpha(target != PickerTarget::CanvasBg);
+        g.set_color(color);
+        g.set_x(x);
+        g.set_y(y);
+        g.set_recent(ModelRc::new(VecModel::from(
+            self.settings
+                .recent_colors
+                .iter()
+                .filter_map(|h| parse_hex_color(h).map(to_color))
+                .collect::<Vec<_>>(),
+        )));
+        g.set_screen(crate::screen_color::AVAILABLE);
+        g.set_from_preview(false);
+        g.set_open(true);
+        self.picker = Some(Picker {
+            target,
+            start: from_color(color),
+        });
+    }
+
+    /// The picker's color changed: apply it to the setting that opened it.
+    pub fn picker_changed(&mut self, color: slint::Color) {
+        let Some(target) = self.picker.as_ref().map(|p| p.target.clone()) else {
+            return;
+        };
+        // A source's color follows that source only: selecting another one ends the session.
+        if let PickerTarget::Prop { source, .. } | PickerTarget::Stop { source, .. } = &target {
+            let current = self
+                .canvas_and_scene()
+                .and_then(|(snapshot, _, _)| self.current_source(&snapshot));
+            if current != Some(*source) {
+                self.picker_close();
+                return;
+            }
+        }
+        // An item's fill follows that item only.
+        if let PickerTarget::Fill(item) | PickerTarget::FillStop(item, _) = &target
+            && self.selection != Some(*item)
+        {
+            self.picker_close();
+            return;
+        }
+        match target {
+            PickerTarget::Prop { key, .. } => self.prop_color(&key, color),
+            PickerTarget::Stop { key, index, .. } => self.prop_gradient_color(&key, index, color),
+            PickerTarget::CanvasBg => self.canvas_background_color(color),
+            PickerTarget::CanvasStop(i) => self.canvas_background_gradient_color(i, color),
+            PickerTarget::Fill(_) => self.fill_color(color),
+            PickerTarget::FillStop(_, i) => self.fill_gradient_color(i, color),
+        }
+    }
+
+    /// Closes the picker (Done, Esc, a click outside), ending its undo step and remembering
+    /// the color.
+    pub fn picker_close(&mut self) {
+        let Some(picker) = self.picker.take() else {
+            return;
+        };
+        self.eyedropper_end(true);
+        if let Some(w) = self.window() {
+            let g = w.global::<ColorPicking>();
+            g.set_open(false);
+            g.set_from_preview(false);
+            let last = from_color(g.get_color());
+            if last != picker.start {
+                self.remember_color(last);
+            }
+        }
+        if let Some(engine) = &self.engine {
+            engine.seal_history();
+        }
+    }
+
+    fn remember_color(&mut self, color: Rgba8) {
+        let h = hex(color);
+        remember(&mut self.settings.recent_colors, h);
+        self.settings.save(&self.paths.settings());
+    }
+
+    /// A click on the Preview while picking: the color of that pixel as shown.
+    pub fn picker_preview_picked(&mut self, fx: f32, fy: f32) {
+        self.eyedropper_end(false);
+        let Some(w) = self.window() else { return };
+        let g = w.global::<ColorPicking>();
+        let Some(texture) = self.main_picture.as_ref().map(|p| p.texture()) else {
+            return;
+        };
+        let x = (fx.clamp(0.0, 1.0) * texture.width() as f32) as u32;
+        let y = (fy.clamp(0.0, 1.0) * texture.height() as f32) as u32;
+        match estream_gpu::readback::read_pixel(&self.gpu, texture, x, y) {
+            Ok([r, gr, b, _]) => {
+                let a = if g.get_alpha() {
+                    g.get_color().alpha()
+                } else {
+                    255
+                };
+                let color = slint::Color::from_argb_u8(a, r, gr, b);
+                g.set_color(color);
+                self.picker_changed(color);
+            }
+            Err(e) => self.toast(format!("Couldn't read the Preview: {e}"), true),
+        }
+    }
+
+    /// The eyedropper button. With screen picking, the next click anywhere picks (Esc or a
+    /// right click cancels); otherwise the next click on the Preview does. Clicking it again
+    /// while picking cancels.
+    pub fn picker_eyedropper(&mut self) {
+        if self.picker.is_none() {
+            return;
+        }
+        if self.eyedropper.is_some() {
+            self.eyedropper_end(true);
+            return;
+        }
+        let Some(w) = self.window() else { return };
+        let g = w.global::<ColorPicking>();
+        let screen = crate::screen_color::AVAILABLE && crate::screen_color::start();
+        self.eyedropper = Some(Eyedropper {
+            started: Instant::now(),
+            polled: Instant::now() - Duration::from_secs(1),
+            start: g.get_color(),
+            screen,
+        });
+        // The Preview shows its magnifier (and, without screen picking, takes the click).
+        g.set_from_preview(true);
+    }
+
+    /// Stops picking; `cancel` puts back the color from before the eyedropper was clicked.
+    fn eyedropper_end(&mut self, cancel: bool) {
+        let Some(e) = self.eyedropper.take() else {
+            return;
+        };
+        if e.screen {
+            crate::screen_color::stop();
+        }
+        if let Some(w) = self.window() {
+            let g = w.global::<ColorPicking>();
+            g.set_from_preview(false);
+            if cancel {
+                g.set_color(e.start);
+            }
+        }
+    }
+
+    /// While picking from the screen: show the color under the pointer, then take the click or
+    /// cancel.
+    fn screen_pick_tick(&mut self) {
+        let Some(e) = &mut self.eyedropper else {
+            return;
+        };
+        if !e.screen || e.polled.elapsed() < Duration::from_millis(30) {
+            return;
+        }
+        e.polled = Instant::now();
+        let timed_out = e.started.elapsed() > EYEDROPPER_LIMIT;
+        let Some(w) = self.window() else { return };
+        let g = w.global::<ColorPicking>();
+        let with_alpha = |c: Rgba8| {
+            let a = if g.get_alpha() {
+                g.get_color().alpha()
+            } else {
+                255
+            };
+            to_color(Rgba8 { a, ..c })
+        };
+        match crate::screen_color::poll() {
+            crate::screen_color::Pick::Picked(c) => {
+                let color = with_alpha(c);
+                self.eyedropper_end(false);
+                g.set_color(color);
+                self.picker_changed(color);
+            }
+            crate::screen_color::Pick::Cancelled => self.eyedropper_end(true),
+            crate::screen_color::Pick::Waiting if timed_out => self.eyedropper_end(true),
+            crate::screen_color::Pick::Waiting => {
+                if let Some(c) = crate::screen_color::under_pointer() {
+                    g.set_color(with_alpha(c));
+                }
+            }
+        }
+    }
+
+    /// The current source's value for `key`, with the schema's default when it isn't set.
+    fn prop_value(&self, key: &str) -> Option<serde_json::Value> {
+        let (snapshot, _, _) = self.canvas_and_scene()?;
+        let def = snapshot.source(self.current_source(&snapshot)?)?;
+        let schema = &self.props.as_ref()?.1;
+        Some(schema.with_defaults(&def.settings)[key].clone())
+    }
+
+    /// The gradient being edited in `key`.
+    fn prop_paint(&self, key: &str) -> Option<estream_core::Paint> {
+        if !matches!(self.prop(key)?.kind, PropKind::Gradient) {
+            return None;
+        }
+        serde_json::from_value::<estream_core::Paint>(self.prop_value(key)?)
+            .ok()
+            .map(|p| p.normalized())
+    }
+
+    /// Gradient edits from the inspector (see [`edit_gradient`]).
+    pub fn prop_gradient(&mut self, key: &str, action: &str, index: i32, value: f32) {
+        let Some(mut paint) = self.prop_paint(key) else {
+            return;
+        };
+        let mut stop = self.gradient_stop;
+        match edit_gradient(&mut paint, &mut stop, action, index, value) {
+            Ok(changed) => {
+                self.gradient_stop = stop;
+                if changed {
+                    self.set_setting(key, serde_json::to_value(&paint).unwrap_or_default());
+                } else {
+                    self.props_generation += 1;
+                    self.refresh();
+                }
+            }
+            Err(e) => self.toast(e, true),
+        }
+    }
+
+    pub fn prop_gradient_color(&mut self, key: &str, index: i32, color: slint::Color) {
+        let Some(mut paint) = self.prop_paint(key) else {
+            return;
+        };
+        self.gradient_stop = set_stop_color(&mut paint, index, from_color(color));
+        self.set_setting(key, serde_json::to_value(&paint).unwrap_or_default());
+    }
+
+    pub fn prop_gradient_text(&mut self, key: &str, index: i32, text: &str) {
+        match parse_hex_color(text) {
+            Some(c) => self.prop_gradient_color(key, index, to_color(c)),
+            None => self.toast("Use a color like #ff8800 or #ff880080".into(), true),
+        }
+    }
+
     pub fn prop_index(&mut self, key: &str, index: i32) {
         if let Some(PropKind::Select { options }) = self.prop(key).map(|p| p.kind)
             && let Some(option) = options.get(index.max(0) as usize)
@@ -9313,7 +10091,132 @@ impl App {
 
     // ------------------------------------------------------------ inspector
 
+    // ------------------------------------------------------------ item fill
+
+    /// Applies `change` to the selected item's fill (one undoable step per gesture).
+    fn change_fill(&mut self, change: impl FnOnce(&mut ItemFill)) {
+        let Some((_, item)) = self.selected() else {
+            return;
+        };
+        let mut fill = item.fill.clone();
+        change(&mut fill);
+        if fill != item.fill {
+            self.update_selected(ItemPatch {
+                fill: Some(fill),
+                ..Default::default()
+            });
+        }
+    }
+
+    /// None (0), Frosted (1), Color (2) or Gradient (3). Color and Gradient start from each
+    /// other's colors.
+    fn fill_kind(&mut self, kind: i32) {
+        use estream_core::Paint;
+        self.fill_stop = 0;
+        self.change_fill(|fill| {
+            let color = match fill {
+                ItemFill::Paint { paint } => paint.first_color(),
+                _ => Rgba8::new(20, 22, 28, 255),
+            };
+            *fill = match kind {
+                1 if matches!(fill, ItemFill::Frosted { .. }) => fill.clone(),
+                1 => ItemFill::FROSTED,
+                2 => ItemFill::Paint {
+                    paint: Paint::solid(color),
+                },
+                3 => match fill {
+                    ItemFill::Paint { paint } if paint.is_gradient() => fill.clone(),
+                    _ => ItemFill::Paint {
+                        paint: Paint::Linear {
+                            angle: 180.0,
+                            stops: vec![
+                                estream_core::GradientStop::new(color, 0.0),
+                                estream_core::GradientStop::new(
+                                    Rgba8::new(108, 140, 255, 255),
+                                    1.0,
+                                ),
+                            ],
+                        },
+                    },
+                },
+                _ => ItemFill::None,
+            };
+        });
+    }
+
+    /// Frosted sliders: "blur", "dim" (0..1) and "saturation" (0..2).
+    fn fill_edit(&mut self, field: &str, value: f32) {
+        self.change_fill(|fill| {
+            if let ItemFill::Frosted {
+                blur,
+                dim,
+                saturation,
+            } = fill
+            {
+                match field {
+                    "blur" => *blur = value.clamp(0.0, 1.0),
+                    "dim" => *dim = value.clamp(0.0, 1.0),
+                    "saturation" => *saturation = value.clamp(0.0, 2.0),
+                    _ => {}
+                }
+            }
+        });
+    }
+
+    /// The solid fill color (Color).
+    pub fn fill_color(&mut self, color: slint::Color) {
+        self.change_fill(|fill| {
+            *fill = ItemFill::Paint {
+                paint: estream_core::Paint::solid(from_color(color)),
+            }
+        });
+    }
+
+    /// Gradient fill edits (see [`edit_gradient`]).
+    pub fn fill_gradient(&mut self, action: &str, index: i32, value: f32) {
+        let Some((_, item)) = self.selected() else {
+            return;
+        };
+        let ItemFill::Paint { mut paint } = item.fill.clone() else {
+            return;
+        };
+        let mut stop = self.fill_stop;
+        match edit_gradient(&mut paint, &mut stop, action, index, value) {
+            Ok(changed) => {
+                self.fill_stop = stop;
+                if changed {
+                    self.change_fill(|fill| *fill = ItemFill::Paint { paint });
+                } else {
+                    self.refresh();
+                }
+            }
+            Err(e) => self.toast(e, true),
+        }
+    }
+
+    pub fn fill_gradient_color(&mut self, index: i32, color: slint::Color) {
+        let Some((_, item)) = self.selected() else {
+            return;
+        };
+        let ItemFill::Paint { mut paint } = item.fill.clone() else {
+            return;
+        };
+        self.fill_stop = set_stop_color(&mut paint, index, from_color(color));
+        self.change_fill(|fill| *fill = ItemFill::Paint { paint });
+    }
+
+    pub fn fill_gradient_text(&mut self, index: i32, text: &str) {
+        match parse_hex_color(text) {
+            Some(c) => self.fill_gradient_color(index, to_color(c)),
+            None => self.toast("Use a color like #ff8800 or #ff880080".into(), true),
+        }
+    }
+
     pub fn inspect_edit(&mut self, field: &str, value: f32) {
+        if let Some(field) = field.strip_prefix("fill-") {
+            self.fill_edit(field, value);
+            return;
+        }
         let Some((scene, item)) = self.selected() else {
             return;
         };
@@ -9375,6 +10278,13 @@ impl App {
     }
 
     pub fn inspect_text(&mut self, field: &str, value: &str) {
+        if field == "fill-hex" {
+            match parse_hex_color(value) {
+                Some(c) => self.fill_color(to_color(c)),
+                None => self.toast("Use a color like #ff8800 or #ff880080".into(), true),
+            }
+            return;
+        }
         let name = value.trim();
         if field != "name" || name.is_empty() {
             return;
@@ -9441,6 +10351,10 @@ impl App {
     }
 
     pub fn inspect_option(&mut self, field: &str, index: i32) {
+        if field == "fill" {
+            self.fill_kind(index);
+            return;
+        }
         let Some((_, item)) = self.selected() else {
             return;
         };
@@ -10021,25 +10935,85 @@ impl App {
 
     fn remove_selected(&mut self) {
         let Some((scene, item)) = self.selected() else {
+            // A sound picked in the mixer that isn't placed in the edited scene.
+            if self.selection.is_none()
+                && let Some(source) = self.selected_source
+            {
+                self.remove_sound(source);
+            }
             return;
         };
         let Some((snapshot, _, _)) = self.canvas_and_scene() else {
             return;
         };
-        // Removing the last use of a source removes the source too (undoable as one step).
-        let command = match item.source_id() {
-            Some(source) if snapshot.items_using(source).len() == 1 => {
-                Command::RemoveSource { source }
-            }
-            _ => Command::RemoveItem {
-                scene,
-                item: item.id,
-            },
-        };
-        if self.exec(command) {
+        if self.exec(remove_item_command(&snapshot, scene, &item)) {
             self.selection = None;
             self.refresh();
             self.toast("Deleted — Ctrl+Z to undo".into(), false);
+        }
+    }
+
+    /// Remove on a mixer strip or knob.
+    pub fn mixer_remove(&mut self, id: &str) {
+        if let Some(source) = parse_id(id).map(SourceId) {
+            self.remove_sound(source);
+        }
+    }
+
+    /// "Remove source" in the sound settings panel.
+    pub fn audio_remove(&mut self) {
+        let Some((snapshot, _, _)) = self.canvas_and_scene() else {
+            return;
+        };
+        if let Some(source) = self.current_source(&snapshot) {
+            self.remove_sound(source);
+        }
+    }
+
+    /// Takes a sound out of the edited canvas's mix (undoable). A source heard in all scenes is
+    /// removed; one placed in a scene leaves the edited scene (or, failing that, the canvas's
+    /// program scene), the same as deleting it in the source list.
+    fn remove_sound(&mut self, source: SourceId) {
+        let Some((snapshot, canvas, edit)) = self.canvas_and_scene() else {
+            return;
+        };
+        let Some(def) = snapshot.source(source) else {
+            return;
+        };
+        let name = def.name.clone();
+        let command = if def.audio.global {
+            Command::RemoveSource { source }
+        } else {
+            let program = snapshot.canvas(canvas).and_then(|c| c.active_scene);
+            let placed = [edit, program].into_iter().flatten().find_map(|id| {
+                let scene = snapshot.scene(id)?;
+                let mut found = None;
+                scene.walk(&mut |i| {
+                    if found.is_none() && i.source_id() == Some(source) {
+                        found = Some(i.clone());
+                    }
+                });
+                Some((id, found?))
+            });
+            match placed {
+                Some((scene, item)) => remove_item_command(&snapshot, scene, &item),
+                None => return,
+            }
+        };
+        let removed: Vec<ItemId> = snapshot
+            .items_using(source)
+            .into_iter()
+            .map(|(_, item)| item)
+            .collect();
+        if self.exec(command) {
+            if self.selected_source == Some(source) {
+                self.selected_source = None;
+            }
+            if self.selection.is_some_and(|s| removed.contains(&s)) {
+                self.selection = None;
+            }
+            self.refresh();
+            self.toast(format!("Removed {name} — Ctrl+Z to undo"), false);
         }
     }
 
@@ -10810,13 +11784,14 @@ fn meter_position(level: f32) -> f32 {
 }
 
 /// The inspector's panels, by the names their folds are saved under.
-const INSPECTOR_PANELS: [&str; 13] = [
+const INSPECTOR_PANELS: [&str; 14] = [
     "settings",
     "page",
     "playback",
     "place",
     "position",
     "crop",
+    "fill",
     "appearance",
     "effects",
     "volume",
@@ -10834,6 +11809,7 @@ fn inspector_fold<'a>(folds: &'a mut InspectorFolds, panel: &str) -> Option<&'a 
         "place" => &mut folds.place,
         "position" => &mut folds.position,
         "crop" => &mut folds.crop,
+        "fill" => &mut folds.fill,
         "appearance" => &mut folds.appearance,
         "effects" => &mut folds.effects,
         "volume" => &mut folds.volume,
@@ -10883,6 +11859,142 @@ fn db_to_fader(db: f32) -> f32 {
     }
 }
 
+/// Applies a gradient edit to `paint`: "select", "move", "add" or "remove" a color (`index`),
+/// or set the "angle", center ("cx", "cy") or "radius" (`value`). `selected` follows the edited
+/// color. `Ok(true)` when the paint changed, `Ok(false)` when only the selection did, and an
+/// error message when the edit isn't possible.
+fn edit_gradient(
+    paint: &mut estream_core::Paint,
+    selected: &mut usize,
+    action: &str,
+    index: i32,
+    value: f32,
+) -> Result<bool, String> {
+    use estream_core::{GradientStop, Paint, paint::MAX_STOPS};
+    let i = usize::try_from(index).unwrap_or(0);
+    let count = paint.stops().len();
+    let at = value.clamp(0.0, 1.0);
+    let color_there = paint.color_at(at);
+    match (action, &mut *paint) {
+        ("select", _) => {
+            *selected = i.min(count.saturating_sub(1));
+            return Ok(false);
+        }
+        (_, Paint::Solid { .. }) => return Ok(false),
+        ("add", Paint::Linear { stops, .. } | Paint::Radial { stops, .. }) => {
+            if count >= MAX_STOPS {
+                return Err(format!("A gradient has at most {MAX_STOPS} colors"));
+            }
+            // After every color at or before it.
+            let pos = stops.iter().filter(|s| s.at <= at).count();
+            stops.insert(pos, GradientStop::new(color_there, at));
+            *selected = pos;
+        }
+        ("remove", Paint::Linear { stops, .. } | Paint::Radial { stops, .. }) => {
+            if count <= 2 {
+                return Err("A gradient needs at least 2 colors".into());
+            }
+            if i < stops.len() {
+                stops.remove(i);
+            }
+        }
+        // A color moves only between its neighbours, so the order (and the handle being
+        // dragged) stays the same.
+        ("move", Paint::Linear { stops, .. } | Paint::Radial { stops, .. }) => {
+            if i < stops.len() {
+                let lo = if i > 0 { stops[i - 1].at } else { 0.0 };
+                let hi = stops.get(i + 1).map_or(1.0, |s| s.at);
+                stops[i].at = value.clamp(lo, hi);
+            }
+        }
+        ("angle", Paint::Linear { angle, .. }) => *angle = value.round(),
+        ("cx" | "cy", Paint::Radial { center, .. }) => {
+            center[usize::from(action == "cy")] = value.clamp(0.0, 1.0);
+        }
+        ("radius", Paint::Radial { radius, .. }) => *radius = value.clamp(0.05, 3.0),
+        _ => return Ok(false),
+    }
+    *paint = paint.normalized();
+    *selected = (*selected).min(paint.stops().len().saturating_sub(1));
+    Ok(true)
+}
+
+/// Sets the color of stop `index` and returns it as the selected stop.
+fn set_stop_color(paint: &mut estream_core::Paint, index: i32, color: Rgba8) -> usize {
+    use estream_core::Paint;
+    let i = usize::try_from(index).unwrap_or(0);
+    if let Paint::Linear { stops, .. } | Paint::Radial { stops, .. } = paint
+        && let Some(s) = stops.get_mut(i)
+    {
+        s.color = color;
+    }
+    *paint = paint.normalized();
+    i.min(paint.stops().len().saturating_sub(1))
+}
+
+/// The inspector's "Fill empty space" fields for an item's fill.
+fn fill_fields(inspect: &mut Inspect, fill: &ItemFill, stop: usize) {
+    match fill {
+        ItemFill::None => inspect.fill_kind = 0,
+        ItemFill::Frosted {
+            blur,
+            dim,
+            saturation,
+        } => {
+            inspect.fill_kind = 1;
+            (inspect.fill_blur, inspect.fill_dim, inspect.fill_saturation) =
+                (*blur, *dim, *saturation);
+        }
+        ItemFill::Paint { paint } if !paint.is_gradient() => {
+            inspect.fill_kind = 2;
+            inspect.fill_color = to_color(paint.first_color());
+            inspect.fill_hex = hex(paint.first_color()).into();
+        }
+        ItemFill::Paint { paint } => {
+            inspect.fill_kind = 3;
+            let mut row = PropRow {
+                key: "item-fill".into(),
+                label: "Gradient".into(),
+                kind: "gradient".into(),
+                stop: stop as i32,
+                ..Default::default()
+            };
+            fill_gradient_row(&mut row, paint);
+            inspect.fill_gradient = row;
+        }
+    }
+}
+
+/// Fills a "gradient" row: its stops, shape and a preview strip (stops left to right).
+fn fill_gradient_row(row: &mut PropRow, paint: &estream_core::Paint) {
+    use estream_core::Paint;
+    let stops: Vec<GradientStopRow> = paint
+        .stops()
+        .iter()
+        .map(|s| GradientStopRow {
+            at: s.at,
+            color: to_color(s.color),
+            hex: hex(s.color).into(),
+        })
+        .collect();
+    row.stops = ModelRc::new(VecModel::from(stops));
+    match paint {
+        Paint::Linear { angle, .. } => row.angle = *angle,
+        Paint::Radial { center, radius, .. } => {
+            row.radial = true;
+            (row.center_x, row.center_y, row.radius) = (center[0], center[1], *radius);
+        }
+        Paint::Solid { .. } => {}
+    }
+    const WIDTH: u32 = 256;
+    let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(WIDTH, 1);
+    for (x, px) in buffer.make_mut_slice().iter_mut().enumerate() {
+        let c = paint.color_at((x as f32 + 0.5) / WIDTH as f32);
+        *px = slint::Rgba8Pixel::new(c.r, c.g, c.b, c.a);
+    }
+    row.preview = slint::Image::from_rgba8(buffer);
+}
+
 /// Builds a property row for the inspector from a schema property and its current value.
 fn prop_row(p: &estream_engine::Property, value: &serde_json::Value) -> PropRow {
     let mut row = PropRow {
@@ -10928,6 +12040,13 @@ fn prop_row(p: &estream_engine::Property, value: &serde_json::Value) -> PropRow 
             let c = serde_json::from_value::<Rgba8>(value.clone()).unwrap_or(Rgba8::WHITE);
             row.color = to_color(c);
             row.text = hex(c).into();
+        }
+        PropKind::Gradient => {
+            row.kind = "gradient".into();
+            let paint = serde_json::from_value::<estream_core::Paint>(value.clone())
+                .unwrap_or_default()
+                .normalized();
+            fill_gradient_row(&mut row, &paint);
         }
         PropKind::Select { options } => {
             row.kind = "select".into();
@@ -11027,6 +12146,27 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
         }};
     }
 
+    // The color picker (a global, so any swatch can open it).
+    {
+        let g = w.global::<ColorPicking>();
+        g.set_wheel(hue_ring_image(400));
+        g.set_checker(checker_image());
+        g.on_hex(|c| hex(from_color(c)).into());
+        g.on_parse(|t| parse_hex_color(&t).map(to_color).unwrap_or_default());
+        g.on_valid(|t| parse_hex_color(&t).is_some());
+        let a = app.clone();
+        g.on_request(move |target, color, x, y| {
+            with(&a, move |a| a.picker_request(&target, color, x, y));
+        });
+        let a = app.clone();
+        g.on_changed(move |color| with(&a, move |a| a.picker_changed(color)));
+        let a = app.clone();
+        g.on_closed(move || with(&a, |a| a.picker_close()));
+        let a = app.clone();
+        g.on_eyedropper(move || with(&a, |a| a.picker_eyedropper()));
+        let a = app.clone();
+        g.on_preview_picked(move |fx, fy| with(&a, move |a| a.picker_preview_picked(fx, fy)));
+    }
     {
         let app = app.clone();
         w.on_key(move |text, ctrl, shift, alt| match app.try_borrow_mut() {
@@ -11058,6 +12198,10 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     on!(on_inspect_text, |a, field, v| a.inspect_text(&field, &v));
     on!(on_inspect_color, |a, c| a.inspect_color(c));
     on!(on_inspect_option, |a, field, i| a.inspect_option(&field, i));
+    on!(on_fill_gradient, |a, act, i, v| a.fill_gradient(&act, i, v));
+    on!(on_fill_gradient_color, |a, i, c| a
+        .fill_gradient_color(i, c));
+    on!(on_fill_gradient_text, |a, i, t| a.fill_gradient_text(i, &t));
     on!(on_inspect_toggle, |a, field, v| a.inspect_toggle(&field, v));
     on!(on_inspect_commit, |a| a.commit());
     on!(on_palette_query_changed, |a, q| a.palette_filter(&q));
@@ -11135,6 +12279,12 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     on!(on_prop_number, |a, k, v| a.prop_number(&k, v));
     on!(on_prop_text, |a, k, v| a.prop_text(&k, &v));
     on!(on_prop_color, |a, k, v| a.prop_color(&k, v));
+    on!(on_prop_gradient, |a, k, act, i, v| a
+        .prop_gradient(&k, &act, i, v));
+    on!(on_prop_gradient_color, |a, k, i, c| a
+        .prop_gradient_color(&k, i, c));
+    on!(on_prop_gradient_text, |a, k, i, t| a
+        .prop_gradient_text(&k, i, &t));
     on!(on_prop_index, |a, k, i| a.prop_index(&k, i));
     on!(on_prop_browse, |a, k| a.prop_browse(&k));
     on!(on_prop_refresh, |a| a.prop_refresh());
@@ -11147,6 +12297,23 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     on!(on_mixer_select, |a, id| a.mixer_select(&id));
     on!(on_mixer_fader, |a, id, v| a.mixer_fader(&id, v));
     on!(on_mixer_mute, |a, id| a.mixer_mute(&id));
+    on!(on_mixer_remove, |a, id| a.mixer_remove(&id));
+    on!(on_audio_remove, |a| a.audio_remove());
+    on!(on_canvas_size_changed, |a| a.canvas_size_changed());
+    on!(on_canvas_background_color, |a, c| a
+        .canvas_background_color(c));
+    on!(on_canvas_background_text, |a, t| a
+        .canvas_background_text(&t));
+    on!(on_canvas_background_style, |a, s| a
+        .canvas_background_style(s));
+    on!(on_canvas_background_gradient, |a, act, i, v| a
+        .canvas_background_gradient(&act, i, v));
+    on!(on_canvas_background_gradient_color, |a, i, c| a
+        .canvas_background_gradient_color(i, c));
+    on!(on_canvas_background_gradient_text, |a, i, t| a
+        .canvas_background_gradient_text(i, &t));
+    on!(on_canvas_settings_apply, |a| a.canvas_settings_apply());
+    on!(on_canvas_settings_cancel, |a| a.canvas_settings_cancel());
     on!(on_settings_set, |a, k, v| a.settings_set(&k, v));
     on!(on_automation_edit, |a, f, i, v| a.automation_edit(&f, i, v));
     on!(on_automation_text, |a, f, i, s| a
@@ -11229,6 +12396,174 @@ fn parse_color(hex: &str) -> Option<slint::Color> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resizing_a_canvas_scales_its_items_and_one_undo_restores_all() {
+        let mut p = Project::new_default(1080, 1920, Rational::fps(30));
+        let canvas = p.canvases[0].id;
+        let mut game = SceneItem::source(SourceId::new());
+        game.transform = interact::fit_to_canvas(Vec2::new(1080.0, 1920.0));
+        let mut logo = SceneItem::source(SourceId::new());
+        logo.transform.position = Vec2::new(540.0, 100.0);
+        logo.transform.scale = Vec2::splat(0.5);
+        let mut group = SceneItem::group("G", vec![SceneItem::source(SourceId::new())]);
+        group.transform.position = Vec2::new(0.0, 960.0);
+        let child = group.clone();
+        p.scenes[0].items = vec![game, logo, group];
+        // A scene on another canvas is left alone.
+        let other = estream_project::Canvas::new("Wide", 1920, 1080, Rational::fps(60));
+        let mut wide = Scene::new("Wide scene", other.id);
+        let mut far = SceneItem::source(SourceId::new());
+        far.transform.position = Vec2::new(100.0, 100.0);
+        wide.items.push(far);
+        p.canvases.push(other);
+        p.scenes.push(wide);
+        let before = p.clone();
+
+        let mut commands = vec![Command::UpdateCanvas {
+            canvas,
+            patch: estream_engine::CanvasPatch {
+                width: Some(1440),
+                height: Some(2560),
+                ..Default::default()
+            },
+        }];
+        commands.extend(scale_items(
+            &p,
+            canvas,
+            Vec2::new(1440.0 / 1080.0, 2560.0 / 1920.0),
+        ));
+        let applied = Command::Batch { commands }.apply(&mut p).unwrap();
+
+        let items = &p.scenes[0].items;
+        assert_eq!(items[0].transform.bounds, Vec2::new(1440.0, 2560.0));
+        assert!((items[1].transform.position - Vec2::new(720.0, 133.333_33)).length() < 0.01);
+        assert!((items[1].transform.scale - Vec2::splat(0.666_666_7)).length() < 0.001);
+        assert!((items[2].transform.position - Vec2::new(0.0, 1280.0)).length() < 0.01);
+        let ItemContent::Group { items: kids } = &items[2].content else {
+            panic!("group")
+        };
+        let ItemContent::Group { items: old } = &child.content else {
+            panic!("group")
+        };
+        assert_eq!(kids, old, "group contents stay in group space");
+        assert_eq!(p.scenes[1], before.scenes[1]);
+
+        applied.inverse.apply(&mut p).unwrap();
+        assert_eq!(p, before);
+    }
+
+    #[test]
+    fn recent_colors_are_newest_first_unique_and_limited() {
+        let mut recent = Vec::new();
+        for i in 0..20 {
+            remember(&mut recent, format!("#0000{i:02x}"));
+        }
+        assert_eq!(recent.len(), RECENT_COLORS);
+        assert_eq!(recent[0], "#000013");
+        remember(&mut recent, "#00000F".into());
+        assert_eq!(recent[0], "#00000F");
+        assert_eq!(
+            recent
+                .iter()
+                .filter(|c| c.eq_ignore_ascii_case("#00000f"))
+                .count(),
+            1,
+            "picking a recent color again moves it to the front"
+        );
+    }
+
+    #[test]
+    fn hsv_matches_known_colors() {
+        assert_eq!(hsv_to_rgb(0.0, 1.0, 1.0), [255, 0, 0]);
+        assert_eq!(hsv_to_rgb(120.0, 1.0, 1.0), [0, 255, 0]);
+        assert_eq!(hsv_to_rgb(240.0, 1.0, 1.0), [0, 0, 255]);
+        assert_eq!(hsv_to_rgb(360.0, 1.0, 1.0), [255, 0, 0]);
+        assert_eq!(hsv_to_rgb(200.0, 0.0, 0.5), [128, 128, 128]);
+    }
+
+    #[test]
+    fn hue_ring_runs_clockwise_from_red_on_the_right() {
+        // Same orientation as color.slint: hue = atan2(dy, dx) with y pointing down.
+        let size = 100;
+        let ring = hue_ring_image(size);
+        let buffer = ring.to_rgba8().unwrap();
+        let px = |x: usize, y: usize| buffer.as_slice()[y * size as usize + x];
+        let right = px(98, 50);
+        assert_eq!((right.r, right.a), (255, 255));
+        assert!(right.g < 20 && right.b < 20, "red on the right");
+        let bottom = px(50, 98);
+        assert!(
+            bottom.g == 255 && bottom.b < 20 && bottom.r > 100,
+            "90° (yellow-green) below"
+        );
+        assert_eq!(px(50, 50).a, 0, "the middle is clear for the square");
+    }
+
+    #[test]
+    fn gradient_edits_keep_order_and_limits() {
+        use estream_core::Paint;
+        let red = Rgba8::new(255, 0, 0, 255);
+        let blue = Rgba8::new(0, 0, 255, 255);
+        let mut paint = Paint::linear(red, blue);
+        let mut stop = 0;
+
+        // Adding takes the color already there and selects the new stop.
+        assert_eq!(
+            edit_gradient(&mut paint, &mut stop, "add", -1, 0.5),
+            Ok(true)
+        );
+        assert_eq!(stop, 1);
+        assert_eq!(paint.stops()[1].color, Rgba8::new(188, 0, 188, 255));
+
+        // A dragged stop can't pass its neighbours.
+        edit_gradient(&mut paint, &mut stop, "move", 1, 0.95).unwrap();
+        edit_gradient(&mut paint, &mut stop, "move", 1, 2.0).unwrap();
+        assert_eq!(paint.stops()[1].at, 1.0);
+        edit_gradient(&mut paint, &mut stop, "move", 1, -1.0).unwrap();
+        assert_eq!(paint.stops()[1].at, 0.0);
+
+        // Never fewer than 2 or more than 8 colors.
+        edit_gradient(&mut paint, &mut stop, "remove", 1, 0.0).unwrap();
+        assert!(edit_gradient(&mut paint, &mut stop, "remove", 0, 0.0).is_err());
+        for _ in 0..6 {
+            edit_gradient(&mut paint, &mut stop, "add", -1, 0.3).unwrap();
+        }
+        assert_eq!(paint.stops().len(), 8);
+        assert!(edit_gradient(&mut paint, &mut stop, "add", -1, 0.3).is_err());
+
+        // Shape settings only apply to the matching kind.
+        edit_gradient(&mut paint, &mut stop, "angle", -1, 179.6).unwrap();
+        assert!(matches!(paint, Paint::Linear { angle: 180.0, .. }));
+        assert_eq!(
+            edit_gradient(&mut paint, &mut stop, "radius", -1, 2.0),
+            Ok(false)
+        );
+
+        // Selecting changes nothing else.
+        let copy = paint.clone();
+        assert_eq!(
+            edit_gradient(&mut paint, &mut stop, "select", 3, 0.0),
+            Ok(false)
+        );
+        assert_eq!((stop, &paint), (3, &copy));
+        assert_eq!(set_stop_color(&mut paint, 2, red), 2);
+        assert_eq!(paint.stops()[2].color, red);
+    }
+
+    #[test]
+    fn canvas_sizes_are_distinct_and_even() {
+        let sizes = canvas_sizes();
+        for (i, s) in sizes.iter().enumerate() {
+            assert!(s.width % 2 == 0 && s.height % 2 == 0);
+            assert!(
+                !sizes[..i]
+                    .iter()
+                    .any(|o| (o.width, o.height) == (s.width, s.height))
+            );
+        }
+        assert!(sizes.iter().any(|s| (s.width, s.height) == (2160, 3840)));
+    }
 
     #[test]
     fn inspector_folds_round_trip() {

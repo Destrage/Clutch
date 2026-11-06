@@ -945,6 +945,7 @@ component MixerRow inherits Rectangle {
     callback fader(float);
     callback commit();
     callback toggle-mute();
+    callback remove();
 
     height: 52px;
     border-radius: Theme.radius-m;
@@ -1002,8 +1003,9 @@ component MixerRow inherits Rectangle {
                     committed => { root.commit(); }
                 }
             }
-            if !root.master: VerticalLayout {
+            if !root.master: HorizontalLayout {
                 alignment: center;
+                spacing: 2px;
                 IconButton {
                     icon: root.strip.muted ? Icons.volume-x : Icons.volume;
                     tooltip: root.strip.muted ? "Unmute" : "Mute";
@@ -1012,6 +1014,14 @@ component MixerRow inherits Rectangle {
                     size: 26px;
                     icon-size: 14px;
                     clicked => { root.toggle-mute(); }
+                }
+                IconButton {
+                    icon: Icons.trash;
+                    tooltip: root.strip.global ? "Remove (Ctrl+Z undoes it)" : "Remove from this scene (Ctrl+Z undoes it)";
+                    tint: Theme.text-muted;
+                    size: 26px;
+                    icon-size: 14px;
+                    clicked => { root.remove(); }
                 }
             }
         }
@@ -1025,6 +1035,7 @@ export component MixerPanel inherits Panel {
     callback fader(string, float);
     callback commit();
     callback toggle-mute(string);
+    callback remove(string);
     callback add();
 
     PanelHeader {
@@ -1058,6 +1069,7 @@ export component MixerPanel inherits Panel {
                 fader(v) => { root.fader(strip.id, v); }
                 commit => { root.commit(); }
                 toggle-mute => { root.toggle-mute(strip.id); }
+                remove => { root.remove(strip.id); }
             }
         }
     }
@@ -1245,7 +1257,7 @@ export component CanvasTabs inherits HorizontalLayout {
                 alignment: center;
                 IconButton {
                     icon: Icons.chevron-down;
-                    tooltip: "Canvas menu: outputs, duplicate, rename, remove";
+                    tooltip: "Canvas menu: outputs, settings, duplicate, rename, remove";
                     size: 20px;
                     icon-size: 12px;
                     opacity: hovered || ct.active ? 1 : 0.5;
@@ -1256,7 +1268,7 @@ export component CanvasTabs inherits HorizontalLayout {
         menu := PopupWindow {
             x: 0;
             y: 38px;
-            width: 300px;
+            width: 360px;
             Rectangle {
                 background: Theme.surface-3;
                 border-radius: Theme.radius-m;
@@ -1289,6 +1301,11 @@ export component CanvasTabs inherits HorizontalLayout {
                         clicked => { root.menu(ct.id, "duplicate", i); }
                     }
                     Rectangle { height: 1px; background: Theme.border; }
+                    MenuRow {
+                        label: "Canvas settings…";
+                        icon: Icons.settings;
+                        clicked => { root.menu(ct.id, "settings", -1); }
+                    }
                     MenuRow {
                         label: "Rename…";
                         icon: Icons.pencil;

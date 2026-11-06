@@ -61,6 +61,71 @@ pub fn read_texture(gpu: &GpuContext, texture: &wgpu::Texture) -> Result<Vec<u8>
     Ok(out)
 }
 
+/// Copies one texel of a 4-byte-per-pixel texture (e.g. an eyedropper pick). Coordinates are
+/// clamped to the texture.
+pub fn read_pixel(
+    gpu: &GpuContext,
+    texture: &wgpu::Texture,
+    x: u32,
+    y: u32,
+) -> Result<[u8; 4], GpuError> {
+    let format = texture.format();
+    if format.block_copy_size(None) != Some(4) {
+        return Err(GpuError::Readback(format!("unsupported format {format:?}")));
+    }
+    let (x, y) = (
+        x.min(texture.width().saturating_sub(1)),
+        y.min(texture.height().saturating_sub(1)),
+    );
+    let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("readback pixel"),
+        size: wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as u64,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut encoder = gpu.device.create_command_encoder(&Default::default());
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d { x, y, z: 0 },
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT),
+                rows_per_image: Some(1),
+            },
+        },
+        wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+    );
+    gpu.queue.submit([encoder.finish()]);
+    let (tx, rx) = std::sync::mpsc::channel();
+    buffer.map_async(wgpu::MapMode::Read, .., move |result| {
+        let _ = tx.send(result);
+    });
+    gpu.device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .map_err(|e| GpuError::Readback(e.to_string()))?;
+    rx.recv()
+        .map_err(|e| GpuError::Readback(e.to_string()))?
+        .map_err(|e| GpuError::Readback(e.to_string()))?;
+    let px = {
+        let mapped = buffer
+            .get_mapped_range(..)
+            .map_err(|e| GpuError::Readback(e.to_string()))?;
+        [mapped[0], mapped[1], mapped[2], mapped[3]]
+    };
+    buffer.unmap();
+    Ok(px)
+}
+
 /// Saves tightly packed RGBA8 pixels as a PNG.
 pub fn save_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {

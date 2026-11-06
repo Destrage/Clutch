@@ -97,6 +97,7 @@ fn wait_for(mut cond: impl FnMut() -> bool, timeout: Duration) -> bool {
 
 #[test]
 fn engine_renders_live_frames_and_applies_edits() {
+    let _turn = gpu_turn();
     let engine =
         Engine::start(Project::new_default(320, 180, Rational::fps(60)), config()).unwrap();
     let canvas = engine.snapshot().canvases[0].id;
@@ -145,6 +146,7 @@ fn engine_renders_live_frames_and_applies_edits() {
 
 #[test]
 fn two_canvases_render_at_their_own_size_and_rate() {
+    let _turn = gpu_turn();
     let mut project = Project::new_default(1920, 1080, Rational::fps(60));
     let mut vertical = Canvas::new("Vertical", 1080, 1920, Rational::fps(30));
     let scene = Scene::new("Vertical scene", vertical.id);
@@ -187,6 +189,14 @@ fn two_canvases_render_at_their_own_size_and_rate() {
 /// machines and check only what such stalls can't explain on CI (GitHub sets `CI`).
 fn shared_runner() -> bool {
     std::env::var_os("CI").is_some()
+}
+
+/// Live-engine timing tests and headless full renders take turns. On CI's software GPU,
+/// building a video core (compiling every pipeline) and rendering it next to a live engine can
+/// stall that engine's frames for over a second.
+fn gpu_turn() -> std::sync::MutexGuard<'static, ()> {
+    static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    TURN.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 #[test]
@@ -254,6 +264,7 @@ fn frame_pacing_ten_minutes() {
 
 #[test]
 fn slow_consumer_does_not_stall_rendering() {
+    let _turn = gpu_turn();
     let engine =
         Engine::start(Project::new_default(320, 180, Rational::fps(60)), config()).unwrap();
     let sub = engine.subscribe(); // never read during the burst
@@ -415,10 +426,188 @@ fn engine_rejects_invalid_commands_without_changes() {
     assert!(!engine.undo().unwrap(), "nothing recorded");
 }
 
+fn render_once(project: &Project) -> Vec<u8> {
+    let _turn = gpu_turn();
+    let gpu = gpu();
+    let mut core = VideoCore::new(gpu.clone(), SourceRegistry::with_builtins());
+    core.sync(Arc::new(RenderGraph::build(project, 1)), Timestamp::ZERO);
+    let outputs = core.render_now(Timestamp::ZERO);
+    let frame = outputs[0].latest().unwrap();
+    readback::read_texture(&gpu, frame.preview).unwrap()
+}
+
+/// Checks a row of rendered pixels against the gradient's own colors at each pixel center
+/// (the dither and the trip through the canvas allow a few levels).
+fn assert_row_matches(pixels: &[u8], width: u32, paint: &estream_core::Paint) {
+    for x in (0..width).step_by(7).chain([width - 1]) {
+        let i = ((8 * width + x) * 4) as usize;
+        let got = &pixels[i..i + 4];
+        let want = paint.color_at((x as f32 + 0.5) / width as f32).to_array();
+        assert!(
+            got.iter().zip(want).all(|(a, b)| a.abs_diff(b) <= 4),
+            "x {x}: {got:?} vs {want:?}"
+        );
+    }
+}
+
+#[test]
+fn gradient_canvas_background_shows_where_no_item_covers() {
+    let mut project = Project::new_default(256, 16, Rational::fps(30));
+    let paint = estream_core::Paint::linear(Rgba8::new(255, 0, 0, 255), Rgba8::new(0, 0, 255, 255));
+    project.canvases[0].background_paint = Some(paint.clone());
+    assert_row_matches(&render_once(&project), 256, &paint);
+}
+
+#[test]
+fn gradient_color_source_renders_its_gradient() {
+    let mut project = Project::new_default(128, 16, Rational::fps(30));
+    let paint = estream_core::Paint::linear(Rgba8::WHITE, Rgba8::BLACK);
+    let source = SourceDef::new(
+        "Fade",
+        "color",
+        serde_json::json!({ "width": 128, "height": 16, "style": "linear", "gradient": paint }),
+    );
+    let mut item = SceneItem::source(source.id);
+    item.transform = fill(128.0, 16.0);
+    project.scenes[0].items = vec![item];
+    project.sources = vec![source];
+    assert_row_matches(&render_once(&project), 128, &paint);
+}
+
+#[test]
+fn fill_paints_the_empty_part_of_a_fitted_box() {
+    use estream_project::ItemFill;
+    // 16:9 bars fitted in a 9:16 canvas: bars in the middle, empty space above and below.
+    let render = |fill: ItemFill| {
+        let mut project = Project::new_default(90, 160, Rational::fps(30));
+        let bars = SourceDef::new(
+            "Bars",
+            "test_pattern",
+            serde_json::json!({ "width": 160, "height": 90 }),
+        );
+        let mut item = SceneItem::source(bars.id);
+        item.transform = ItemTransform {
+            bounds_mode: BoundsMode::Fit,
+            bounds: Vec2::new(90.0, 160.0),
+            bounds_alignment: Alignment::Center,
+            ..Default::default()
+        };
+        item.fill = fill;
+        project.scenes[0].items = vec![item];
+        project.sources = vec![bars];
+        render_once(&project)
+    };
+    let at = |p: &[u8], x: u32, y: u32| {
+        let i = ((y * 90 + x) * 4) as usize;
+        [p[i], p[i + 1], p[i + 2], p[i + 3]]
+    };
+    let none = render(ItemFill::None);
+    assert_eq!(
+        at(&none, 45, 10),
+        [0, 0, 0, 255],
+        "no fill: the black background"
+    );
+
+    let grey = Rgba8::new(40, 60, 80, 255);
+    let color = render(ItemFill::Paint {
+        paint: estream_core::Paint::solid(grey),
+    });
+    let top = at(&color, 45, 10);
+    assert!(
+        top.iter()
+            .zip(grey.to_array())
+            .all(|(a, b)| a.abs_diff(b) <= 2),
+        "{top:?}"
+    );
+    assert_eq!(
+        at(&color, 45, 80),
+        at(&none, 45, 80),
+        "the source itself is unchanged"
+    );
+
+    let frosted = render(ItemFill::FROSTED);
+    // ESTREAM_FILL_PNG=<folder> writes the three pictures for a look.
+    if let Some(dir) = std::env::var_os("ESTREAM_FILL_PNG") {
+        let dir = PathBuf::from(dir);
+        for (name, p) in [("none", &none), ("color", &color), ("frosted", &frosted)] {
+            readback::save_png(&dir.join(format!("fill-{name}.png")), 90, 160, p).unwrap();
+        }
+    }
+    let top = at(&frosted, 45, 10);
+    let bottom = at(&frosted, 45, 150);
+    assert!(
+        top[..3].iter().map(|&v| v as u32).sum::<u32>() > 30,
+        "frost shows the blurred source above it: {top:?}"
+    );
+    assert!(
+        bottom[..3].iter().map(|&v| v as u32).sum::<u32>() > 30,
+        "and below: {bottom:?}"
+    );
+    assert_eq!(at(&frosted, 45, 80), at(&none, 45, 80));
+}
+
+/// What Frosted costs per frame on a 1080 × 1920 canvas with a 1920 × 1080 source fitted in it.
+/// Prints the time with and without it. Run with `--ignored --nocapture` on the machine to
+/// measure; the budget check is loose so a slow software adapter doesn't fail it.
+#[test]
+#[ignore]
+fn frosted_fill_cost() {
+    let _turn = gpu_turn();
+    use estream_project::ItemFill;
+    let gpu = gpu();
+    let measure = |fill: ItemFill| {
+        let mut project = Project::new_default(1080, 1920, Rational::fps(60));
+        let bars = SourceDef::new(
+            "Bars",
+            "test_pattern",
+            serde_json::json!({ "width": 1920, "height": 1080 }),
+        );
+        let mut item = SceneItem::source(bars.id);
+        item.transform = ItemTransform {
+            bounds_mode: BoundsMode::Fit,
+            bounds: Vec2::new(1080.0, 1920.0),
+            bounds_alignment: Alignment::Center,
+            ..Default::default()
+        };
+        item.fill = fill;
+        project.scenes[0].items = vec![item];
+        project.sources = vec![bars];
+        let mut core = VideoCore::new(gpu.clone(), SourceRegistry::with_builtins());
+        core.sync(Arc::new(RenderGraph::build(&project, 1)), Timestamp::ZERO);
+        for i in 0..30 {
+            core.render_now(Timestamp(i * 16_666_667));
+        }
+        let frames = 240u64;
+        let start = Instant::now();
+        for i in 0..frames {
+            core.render_now(Timestamp((30 + i) * 16_666_667));
+        }
+        start.elapsed().as_secs_f64() * 1000.0 / frames as f64
+    };
+    let none = measure(ItemFill::None);
+    let frosted = measure(ItemFill::FROSTED);
+    let max_blur = measure(ItemFill::Frosted {
+        blur: 1.0,
+        dim: 0.25,
+        saturation: 0.9,
+    });
+    println!(
+        "per frame: none {none:.3} ms, frosted {frosted:.3} ms (+{:.3}), blur 100% {max_blur:.3} ms (+{:.3})",
+        frosted - none,
+        max_blur - none
+    );
+    assert!(
+        max_blur - none < 4.0,
+        "Frosted costs {:.3} ms a frame",
+        max_blur - none
+    );
+}
+
 /// Golden image of a fixed composite scene rendered headless at t = 0.
 /// Set `ESTREAM_BLESS=1` to (re)generate the reference image.
 #[test]
 fn golden_composite_scene() {
+    let _turn = gpu_turn();
     let mut project = Project::new_default(320, 180, Rational::fps(30));
     let bars = SourceDef::new(
         "Bars",
@@ -656,6 +845,7 @@ mod audio {
 
 #[test]
 fn encoder_feed_delivers_nv12_frames_in_order() {
+    let _turn = gpu_turn();
     let engine =
         Engine::start(Project::new_default(320, 180, Rational::fps(30)), config()).unwrap();
     add_fullscreen(

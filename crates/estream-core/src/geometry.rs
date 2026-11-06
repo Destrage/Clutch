@@ -157,6 +157,27 @@ impl ItemTransform {
         self.placement() * Affine2::from_scale(self.scale)
     }
 
+    /// Maps the unit square onto the bounding box (for fills behind a fitted source).
+    pub fn bounds_matrix(&self) -> Affine2 {
+        self.placement() * Affine2::from_scale(self.bounds.max(Vec2::ZERO))
+    }
+
+    /// The part of the cropped source that *covers* the bounding box (the middle of it, at the
+    /// box's aspect), as texture coordinates. Zero when there is nothing to show.
+    pub fn cover_uv(&self, crop: Crop, source_size: Size) -> (Vec2, Vec2) {
+        let src = source_size.to_vec2().max(Vec2::ZERO);
+        let crop_min = Vec2::new(crop.left as f32, crop.top as f32);
+        let crop_max = Vec2::new(crop.right as f32, crop.bottom as f32);
+        let cropped = (src - crop_min - crop_max).max(Vec2::ZERO);
+        let bounds = self.bounds.max(Vec2::ZERO);
+        if cropped.min_element() <= 0.0 || bounds.min_element() <= 0.0 {
+            return (Vec2::ZERO, Vec2::ZERO);
+        }
+        let visible = bounds / (bounds / cropped).max_element();
+        let min = crop_min + (cropped - visible) * 0.5;
+        (min / src, (min + visible) / src)
+    }
+
     /// Lays out a source of `source_size` pixels with `crop` applied first.
     pub fn layout(&self, crop: Crop, source_size: Size) -> ItemLayout {
         let src = source_size.to_vec2().max(Vec2::ZERO);
@@ -205,6 +226,46 @@ mod tests {
 
     fn approx(a: Vec2, b: Vec2) {
         assert!((a - b).abs().max_element() < 1e-3, "{a:?} != {b:?}");
+    }
+
+    #[test]
+    fn cover_uv_takes_the_middle_at_the_box_aspect() {
+        let t = ItemTransform {
+            bounds_mode: BoundsMode::Fit,
+            bounds: Vec2::new(1080.0, 1920.0),
+            ..Default::default()
+        };
+        // A 16:9 game behind a 9:16 box: the full height, the middle 9/16 of 9/16 of the width.
+        let (min, max) = t.cover_uv(Crop::NONE, Size::new(1920.0, 1080.0));
+        let w = 1080.0 * 1080.0 / 1920.0 / 1920.0;
+        approx(min, Vec2::new((1.0 - w) / 2.0, 0.0));
+        approx(max, Vec2::new((1.0 + w) / 2.0, 1.0));
+        // Crop is respected.
+        let crop = Crop {
+            left: 100,
+            top: 0,
+            right: 0,
+            bottom: 80,
+        };
+        let (min, max) = t.cover_uv(crop, Size::new(1920.0, 1080.0));
+        assert!(min.x > 100.0 / 1920.0 && max.y <= 1000.0 / 1080.0 + 1e-6);
+        // Nothing to cover.
+        let none = ItemTransform::default().cover_uv(Crop::NONE, Size::new(10.0, 10.0));
+        assert_eq!(none, (Vec2::ZERO, Vec2::ZERO));
+    }
+
+    #[test]
+    fn bounds_matrix_maps_the_unit_square_to_the_box() {
+        let t = ItemTransform {
+            position: Vec2::new(10.0, 20.0),
+            bounds: Vec2::new(100.0, 50.0),
+            bounds_mode: BoundsMode::Fit,
+            ..Default::default()
+        };
+        approx(
+            t.bounds_matrix().transform_point2(Vec2::ONE),
+            Vec2::new(110.0, 70.0),
+        );
     }
 
     #[test]

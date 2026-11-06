@@ -798,9 +798,12 @@ export component Select inherits Rectangle {
     in property <[string]> options;
     in property <int> current-index;
     in property <string> label;
+    in property <bool> enabled: true;
     callback selected(int);
 
     height: 28px;
+    opacity: root.enabled ? 1 : 0.5;
+    accessible-enabled: root.enabled;
     border-radius: Theme.radius-s;
     background: ta.has-hover ? Theme.surface-3 : Theme.surface-2;
     border-width: 1px;
@@ -825,6 +828,7 @@ export component Select inherits Rectangle {
         }
     }
     ta := TouchArea {
+        enabled: root.enabled;
         mouse-cursor: MouseCursor.pointer;
         clicked => { popup.show(); }
     }

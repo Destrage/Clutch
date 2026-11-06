@@ -1,0 +1,140 @@
+# Design: improve-canvas-fill-and-color
+
+## Paint and gradients
+`estream-core` gets one paint type, used by the Color source, item fill and canvas background:
+
+```rust
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Paint {
+    Solid { color: Rgba8 },
+    Linear { angle: f32, stops: Vec<GradientStop> },          // CSS angle: 90 = left to right
+    Radial { center: [f32; 2], radius: f32, stops: Vec<GradientStop> }, // radius 1 = farthest corner
+}
+pub struct GradientStop { pub color: Rgba8, pub at: f32 } // at in 0..=1
+```
+
+- 2 to 8 stops, sorted by `at`. `normalized()` clamps and sorts; fewer than 2 stops is solid.
+- Interpolation is in linear light (premultiplied), which avoids the grey band between
+  complementary colors that sRGB interpolation gives. `Paint::color_at` is the CPU reference;
+  the GPU output is tested against it.
+- Gradients are rendered once, when settings change, never per frame, by one shared
+  `GradientRenderer` (in `SourceContext` and the video thread). A small WGSL pass sRGB-encodes
+  each pixel, adds +-half a level of interleaved gradient noise, and writes an `Rgba8Unorm`
+  texture (long side capped at 4096) that is sampled through an `Rgba8UnormSrgb` view. The
+  dither is even in brightness, so the 8-bit encode doesn't band. Solid paint is one texel.
+- Property system: a new `PropKind::Gradient` whose value is the serialized `Paint`. The Color
+  source keeps its `color` key and gains `style` (`solid` | `linear` | `radial`) and `gradient`.
+  With `style` missing or `solid`, it renders `color` exactly as today.
+- Text keeps its two-color top-to-bottom gradient for now; moving it to `Paint` is a later step.
+
+## Fill around fitted items
+`SceneItem` gains `fill: ItemFill` (serde default `None`):
+
+```rust
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ItemFill {
+    None,
+    Frosted { blur: f32, dim: f32, saturation: f32 }, // blur, dim 0..=1; saturation 0..=2
+    Paint { paint: Paint },
+}
+```
+
+- The fill covers the item's bounds box and is drawn directly beneath the item, with the item's
+  opacity and blend mode. It is shown in the Layout tab only when the bounds mode is Fit (the
+  only mode that leaves empty space in the box). For other modes the setting is kept but has no
+  effect.
+- Source items only. Groups don't get a fill in this change.
+- **Frosted** (`estream-engine/src/fill.rs`) renders the item's cropped source frame (after
+  its filters) scaled to *cover* the bounds box:
+  1. Draw it into a small texture whose long side is a quarter of the box (clamped to
+     96..=640 px), with the cover UV rect computed on the CPU each frame
+     (`ItemTransform::cover_uv`). A quarter rather than an eighth: shrinking 8× in one
+     bilinear step skips most source pixels, and moving game footage shimmers through the blur.
+  2. A `FilterChain` at that size: `Blur` (radius up to 48 small pixels) then
+     `ColorCorrection` for dim and saturation. Dim is an exact brightness multiply: contrast
+     `-dim` with brightness `-dim / 2` gives `s * (1 - dim)`. No new shader.
+  3. The chain's output is drawn over the bounds box (bilinear upscale) just under the item.
+  GPU state is kept per scene item and reallocated only when the fill or the box changes;
+  slider changes only update the chain's uniforms. At 1080 × 1920 the frost covers 270 × 480
+  pixels. Measured: +0.12 ms a frame at 1080 × 1920, 60 fps.
+- **Paint** fills the bounds box with a solid or gradient texture rendered as above.
+- Defaults: every item, new or existing, starts with `None`, so the empty space shows the
+  canvas background (black unless changed) and updating Clutch never changes how a saved scene
+  looks. Choosing Frosted starts from `Frosted { blur: 0.6, dim: 0.25, saturation: 0.9 }`.
+- Copy to canvas and Duplicate canvas copy `fill` with the item.
+
+## Canvas background and settings
+- `Canvas` gains `background_paint: Option<Paint>`. `background` (Rgba8) stays and is written as
+  the solid color or the gradient's first stop, so an older version still opens the project and
+  shows a sensible color. The renderer uses `background_paint` when present: solid paint is the
+  clear color, a gradient is a cached canvas-sized texture drawn first.
+- `CanvasPatch` gets `background_paint`. Size, frame rate and background changes already go
+  through `UpdateCanvas`, so they are undoable and reach the remote API.
+- Canvas settings dialog: name; size from the presets or custom (even numbers, 128 to 4096 per
+  side); frame rate 24, 25, 30, 48, 50, 60, 29.97 or 59.94; background (Color / Gradient).
+- "Scale items to the new size" (on by default) adds `UpdateItem` commands to the same batch,
+  scaling each item's position and bounds by the width and height ratios, so one undo restores
+  everything.
+- Size and frame rate are disabled while a stream, recording, replay buffer or virtual camera
+  uses the canvas, with the hint "Stop the stream, recording, replay buffer and virtual camera
+  on this canvas to change its size or frame rate." Restarting encoders mid-stream is out of scope.
+
+## Presets
+Grouped landscape first, then vertical:
+
+| Label | Size | FPS |
+|---|---|---|
+| 1080p · 60 fps | 1920 × 1080 | 60 |
+| 1080p · 30 fps | 1920 × 1080 | 30 |
+| 1440p · 60 fps | 2560 × 1440 | 60 |
+| 720p · 60 fps | 1280 × 720 | 60 |
+| 4K · 30 fps | 3840 × 2160 | 30 |
+| 4K · 60 fps | 3840 × 2160 | 60 |
+| Vertical 1080 × 1920 · 30 fps | 1080 × 1920 | 30 |
+| Vertical 1080 × 1920 · 60 fps | 1080 × 1920 | 60 |
+| Vertical 2K 1440 × 2560 · 60 fps | 1440 × 2560 | 60 |
+| Vertical 4K 2160 × 3840 · 30 fps | 2160 × 3840 | 30 |
+| Vertical 4K 2160 × 3840 · 60 fps | 2160 × 3840 | 60 |
+
+Preset indices are only used live by the menus and the first-run wizard, never saved, so
+`PRESETS` is simply reordered. The 2K and 4K
+vertical details say "recording and YouTube", since many platforms take at most 1080p.
+
+Risk: some H.264 hardware encoders reject 2160 × 3840. The existing encoder-open error is shown;
+its hint gains "Try HEVC or AV1, or a 1440 × 2560 canvas" when the canvas is taller than 2304.
+
+## Color picker
+- A Slint popup opened from any `color` property swatch. Hue ring around a saturation/brightness
+  square. The square is two native linear gradients (white to hue, transparent to black). The
+  ring is a Rust-generated image, made once per size, since Slint has no conic gradient.
+- Opacity slider over a checkerboard; hex field (`#rgb`, `#rrggbb`, `#rrggbbaa`); R, G, B and
+  opacity number fields; the eight preset swatches; the last 12 picked colors, kept in settings.
+- Live edits: dragging sends `SetSourceSettings` (or the matching command) continuously. Those
+  commands already coalesce per target (`Command::coalesce_key`), and the picker calls
+  `History::seal` when it closes, so one session is one undo step.
+- The gradient editor reuses the picker: a bar with draggable stops (click to add, drag off or
+  Delete to remove), an angle dial for linear, and a center point for radial.
+
+## Eyedropper
+- **From the Preview** (all platforms): while picking, the Preview shows a crosshair and a
+  loupe (11 × 11 frame pixels, 9 times larger). A click reads one pixel of the picture the UI
+  shows (`readback::read_pixel` on the UI device's copy, already sRGB), so the engine isn't
+  involved and nothing runs when not picking. Esc cancels.
+- **From the screen** (`screen_color` module): press the screen button in the picker and drag;
+  release over any color. While the button is held the window keeps the mouse, so the app
+  under the pointer never gets the click. The app's tick reads the pixel under the pointer
+  every 30 ms (Windows: `GetCursorPos` + `GetPixel` on the screen DC) to show it live, and
+  takes it when the button is up. This replaced the planned frozen-screenshot overlay windows,
+  which would have to cover every monitor at its own scale.
+  - macOS (`NSColorSampler`) and Linux (the `PickColor` portal, via `ashpd`) pick with a
+    click of their own; they come in their platform branches. Until then the screen button is
+    hidden there (`screen_color::AVAILABLE`).
+
+## Removing sounds from the mixer
+- Sound knobs (Stage and Live deck): a right-click menu with Settings, Mute and Remove. Full
+  mixer rows: a Remove button next to Mute. Sound settings panel: "Remove source" (or "Remove
+  from scene") at the bottom. Delete also removes a sound picked in the mixer.
+- A source heard in all scenes: `RemoveSource` (it has no scene items). A source in the current
+  scene: the same logic as `remove_selected` (remove the item; remove the source too when it was
+  the last use). Toast: "Removed Desktop Audio — Ctrl+Z to undo".
+- Nothing re-adds Desktop Audio by itself: setups only run on first run or when picked.
