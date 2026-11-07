@@ -360,6 +360,8 @@ export component LiveDeck inherits Rectangle {
                         frame: root.preview;
                         canvas-w: root.canvas-w;
                         canvas-h: root.canvas-h;
+                        on-air: false;
+                        badge: false;
                     }
                     ViewTag { x: 12px; y: 12px; text: "Preview"; tint: Theme.accent; }
                 }
@@ -375,6 +377,7 @@ export component LiveDeck inherits Rectangle {
                         frame: root.frame;
                         canvas-w: root.canvas-w;
                         canvas-h: root.canvas-h;
+                        badge: !root.studio-mode;
                     }
                     if root.studio-mode: ViewTag { x: 12px; y: 12px; text: "Live"; tint: Theme.live; }
                     Button {
