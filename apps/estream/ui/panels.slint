@@ -741,6 +741,10 @@ export component ProgramView inherits Rectangle {
     in property <image> frame;
     in property <float> canvas-w: 1920;
     in property <float> canvas-h: 1080;
+    // The red border around the picture (off for a Preview that isn't on air).
+    in property <bool> on-air: true;
+    // The "PROGRAM" badge (off where the parent draws its own label).
+    in property <bool> badge: true;
     property <float> fit: max(0.01, min((self.width - 48px) / 1px / canvas-w, (self.height - 48px) / 1px / canvas-h));
 
     background: Theme.bg;
@@ -758,12 +762,12 @@ export component ProgramView inherits Rectangle {
             image-fit: fill;
         }
         // Drawn over the image so the on-air frame is always visible.
-        Rectangle {
+        if root.on-air: Rectangle {
             border-width: 2px;
             border-color: Theme.live;
         }
     }
-    Rectangle {
+    if root.badge: Rectangle {
         x: 12px;
         y: 10px;
         width: label.preferred-width + 14px;
