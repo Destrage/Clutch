@@ -65,6 +65,10 @@ pub struct App {
     /// would rebuild the rows under the pointer and swallow clicks.
     music_tracks: Rc<VecModel<SharedString>>,
     props_model: Rc<VecModel<PropRow>>,
+    /// The selected source's video and audio filters, updated in place so their sliders keep
+    /// working while dragged (see [`sync_filter_model`]).
+    video_filters_model: Rc<VecModel<VideoFilterRow>>,
+    audio_filters_model: Rc<VecModel<FilterRow>>,
     /// Cache key and schema behind the current property rows.
     props: Option<((SourceId, String, u64), estream_engine::PropertySchema)>,
     props_generation: u64,
@@ -242,6 +246,9 @@ pub struct App {
     /// Setting up the stream details before going live (the Go live window, or the same work
     /// without it).
     details: Option<crate::golive::Window>,
+    /// The Go live window's sections, updated in place: a new model on every search result
+    /// would rebuild the category field under the cursor and take its focus.
+    details_model: Rc<VecModel<crate::ui::DetailsSection>>,
     /// Sharing: the YouTube watch link per destination (from the Go live window), the links the
     /// Share window shows, the go-live announcer, and Discord post results from worker threads.
     share_youtube: HashMap<usize, String>,
@@ -869,6 +876,40 @@ fn sync_model<T: Clone + PartialEq + 'static>(model: &VecModel<T>, rows: Vec<T>)
     }
 }
 
+/// Like [`sync_model`] for filter rows, which hold their parameters in a nested model. A row
+/// whose filter is unchanged keeps its parameter model and has it updated in place: a new model
+/// would make the UI rebuild the parameter sliders, ending a drag after its first step.
+fn sync_filter_model<T: Clone + PartialEq + 'static>(
+    model: &VecModel<T>,
+    rows: Vec<(T, Vec<FilterParamRow>)>,
+    id: impl Fn(&T) -> &SharedString,
+    params: impl Fn(&mut T) -> &mut ModelRc<FilterParamRow>,
+) {
+    let same_filters = model.row_count() == rows.len();
+    let rows = rows
+        .into_iter()
+        .enumerate()
+        .map(|(i, (mut row, new_params))| {
+            let kept = model
+                .row_data(i)
+                .filter(|old| same_filters && id(old) == id(&row))
+                .map(|mut old| params(&mut old).clone());
+            let vm = kept
+                .as_ref()
+                .and_then(|m| m.as_any().downcast_ref::<VecModel<FilterParamRow>>());
+            *params(&mut row) = match (vm, &kept) {
+                (Some(vm), Some(m)) => {
+                    sync_model(vm, new_params);
+                    m.clone()
+                }
+                _ => ModelRc::new(VecModel::from(new_params)),
+            };
+            row
+        })
+        .collect();
+    sync_model(model, rows);
+}
+
 fn unique_name<'a>(base: &str, existing: impl Iterator<Item = &'a str>) -> String {
     let existing: Vec<&str> = existing.collect();
     if !existing.contains(&base) {
@@ -993,6 +1034,8 @@ impl App {
             palette_model: Rc::new(VecModel::default()),
             music_tracks: Rc::new(VecModel::default()),
             props_model: Rc::new(VecModel::default()),
+            video_filters_model: Rc::new(VecModel::default()),
+            audio_filters_model: Rc::new(VecModel::default()),
             props: None,
             props_generation: 0,
             gradient_stop: 0,
@@ -1093,6 +1136,7 @@ impl App {
             yt_watch: None,
             yt_created: None,
             details: None,
+            details_model: Rc::new(VecModel::default()),
             share_youtube: HashMap::new(),
             share_links: Vec::new(),
             share_title: String::new(),
@@ -1133,6 +1177,8 @@ impl App {
         window.set_guides(ModelRc::from(app.guides_model.clone()));
         window.set_palette_entries(ModelRc::from(app.palette_model.clone()));
         window.set_props(ModelRc::from(app.props_model.clone()));
+        window.set_video_filters(ModelRc::from(app.video_filters_model.clone()));
+        window.set_details_sections(ModelRc::from(app.details_model.clone()));
         window.set_mixer_strips(ModelRc::from(app.mixer_model.clone()));
         window.set_live_rows(ModelRc::from(app.live_model.clone()));
         window.set_live_active_rows(ModelRc::from(app.live_active_model.clone()));
@@ -5540,7 +5586,7 @@ impl App {
         }
         let emotes = &mut self.chat_emotes;
         let rows = d.rows(&mut |url| emotes.picture(url));
-        w.set_details_sections(ModelRc::new(VecModel::from(rows)));
+        sync_model(&self.details_model, rows);
         w.set_details_keys_only(d.keys_only.join(", ").into());
         w.set_details_live(d.live);
         w.set_details_busy(d.busy().unwrap_or_default().into());
@@ -8219,7 +8265,7 @@ impl App {
             return AudioInspect::default();
         };
         let a = &source.audio;
-        let filters: Vec<FilterRow> = a
+        let filters: Vec<(FilterRow, Vec<FilterParamRow>)> = a
             .filters
             .iter()
             .map(|f| {
@@ -8260,14 +8306,21 @@ impl App {
                         }
                     })
                     .collect();
-                FilterRow {
+                let row = FilterRow {
                     id: f.id.clone().into(),
                     name: kind.map_or(f.kind.as_str(), |k| k.name).into(),
                     enabled: f.enabled,
-                    params: ModelRc::new(VecModel::from(params)),
-                }
+                    params: ModelRc::default(),
+                };
+                (row, params)
             })
             .collect();
+        sync_filter_model(
+            &self.audio_filters_model,
+            filters,
+            |r| &r.id,
+            |r| &mut r.params,
+        );
         AudioInspect {
             has: true,
             volume_db: a.volume_db,
@@ -8282,7 +8335,7 @@ impl App {
             },
             tracks: a.tracks as i32,
             global: a.global,
-            filters: ModelRc::new(VecModel::from(filters)),
+            filters: ModelRc::from(self.audio_filters_model.clone()),
             problem: if a.monitoring != Monitoring::Off
                 && source.kind != "audio_output"
                 && desktop_audio_busy_leaving_out()
@@ -9743,13 +9796,13 @@ impl App {
             });
         let Some(source) = source else {
             w.set_video_filter_kinds(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
-            w.set_video_filters(ModelRc::new(VecModel::from(Vec::<VideoFilterRow>::new())));
+            self.video_filters_model.clear();
             return;
         };
         let mut kinds = vec![SharedString::from("+ Add filter…")];
         kinds.extend(KINDS.iter().map(|k| SharedString::from(k.name)));
         w.set_video_filter_kinds(ModelRc::new(VecModel::from(kinds)));
-        let rows: Vec<VideoFilterRow> = source
+        let rows: Vec<(VideoFilterRow, Vec<FilterParamRow>)> = source
             .filters
             .iter()
             .filter_map(|f| {
@@ -9785,18 +9838,24 @@ impl App {
                             .map_or(p.to_owned(), |n| n.to_string_lossy().into_owned())
                     })
                     .unwrap_or_default();
-                Some(VideoFilterRow {
+                let row = VideoFilterRow {
                     id: f.id.clone().into(),
                     name: info.name.into(),
                     enabled: f.enabled,
-                    params: ModelRc::new(VecModel::from(params)),
+                    params: ModelRc::default(),
                     file_label: info.file.map_or("", |f| f.label).into(),
                     file: file.into(),
                     code: info.code,
-                })
+                };
+                Some((row, params))
             })
             .collect();
-        w.set_video_filters(ModelRc::new(VecModel::from(rows)));
+        sync_filter_model(
+            &self.video_filters_model,
+            rows,
+            |r| &r.id,
+            |r| &mut r.params,
+        );
     }
 
     /// Applies `change` to the selected source's video filters (one undoable step).

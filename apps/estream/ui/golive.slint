@@ -263,7 +263,8 @@ export component StreamDetailsDialog inherits Modal {
                                 spacing: 4px;
                                 category-field := TextField {
                                     label: "Category";
-                                    // Kept in Rust: the window's sections are rebuilt as results arrive.
+                                    // Kept in Rust too. Sections update in place as results arrive, so the
+                                    // field keeps its focus while typing.
                                     text: s.category-query;
                                     placeholder: s.category == "" ? "Search for a category" : "Change category (" + s.category + ")";
                                     edited(t) => { root.text(i, "category-search", t); }

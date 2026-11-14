@@ -603,6 +603,8 @@ export component AppWindow inherits Window {
                             tab <=> root.inspector-tab;
                             folds <=> root.inspector-folds;
                             canvas-info: root.canvas-info;
+                            canvas-w: root.canvas-w;
+                            canvas-h: root.canvas-h;
                             gpu-info: root.gpu-info;
                             edit(field, v) => { root.inspect-edit(field, v); }
                             edit-text(field, v) => { root.inspect-text(field, v); }
