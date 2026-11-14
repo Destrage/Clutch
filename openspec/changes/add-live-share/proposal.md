@@ -10,7 +10,8 @@ YouTube watch link of the broadcast it created or chose in the Go live window, a
 category the streamer just set.
 
 ## What Changes
-- **Share while live.** A Share button in the Live panel opens a popover with:
+- **Share while live.** A Share button in the Live deck and in the Live panel (and Share stream in
+  the command palette) opens a Share window with:
   - one watch link per platform being streamed to (Twitch, Kick, YouTube), each with Copy;
   - a ready-made message (by default `Live now: <title>` and the links), editable before
     copying, with Copy;
@@ -25,7 +26,7 @@ category the streamer just set.
     reconnects or for a restart within 10 minutes.
   - A failed post shows a toast and never affects the stream.
   - Webhook URLs are secrets: saved encrypted like stream keys, and never logged.
-- **Message template.** One template in Settings → Stream → Sharing, used for the share popover
+- **Message template.** One template in Settings → Stream → Sharing, used for the Share window
   and Discord, with `{title}`, `{category}`, `{links}`, `{twitch}`, `{youtube}` and `{kick}`.
 
 ## Not included
@@ -40,7 +41,7 @@ category the streamer just set.
 
 ## Impact
 - Affected specs: `streaming`.
-- Affected code: `apps/estream` (Live panel Share popover, Settings → Stream → Sharing, settings
+- Affected code: `apps/estream` (Share window (Live deck, Live panel, palette), Settings → Stream → Sharing, settings
   fields for the template and webhooks, a Discord webhook sender on a worker thread, posting on
   go-live).
 - No new dependencies: posts use the app's existing `ureq` client.

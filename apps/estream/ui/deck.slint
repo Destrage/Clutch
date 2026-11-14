@@ -125,6 +125,7 @@ export component LiveDeck inherits Rectangle {
     callback toggle-record();
     callback end-stream();
     callback edit-layout();
+    callback share();
     /// Studio mode: the Preview render next to the program (`frame`).
     in property <bool> studio-mode;
     in property <image> preview;
@@ -290,6 +291,14 @@ export component LiveDeck inherits Rectangle {
                             }
                         }
                     }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                Button {
+                    text: "Share";
+                    tooltip: "Your watch links and a message for friends, Discord and socials";
+                    clicked => { root.share(); }
                 }
             }
             VerticalLayout {

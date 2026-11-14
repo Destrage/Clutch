@@ -8,11 +8,11 @@
 | YouTube | `https://www.youtube.com/watch?v=<id>` | the broadcast applied in the Go live window, else a live link in the destination's channel field |
 
 A platform with no link (no channel name, or YouTube without a broadcast) is left out of the
-links, and the popover says where to add it, as the chat tab does. With several destinations on
+links, and the Share window says where to add it, as the chat tab does. With several destinations on
 the same platform, each gets its own line, labeled with the destination's name.
 
 ## Message
-The template is plain text with placeholders, filled when the popover opens or a post is sent:
+The template is plain text with placeholders, filled when the Share window opens or a post is sent:
 - `{title}`: the title applied in the Go live window (the first platform's, in destination
   order), else empty.
 - `{category}`: the category or game applied, else empty.
@@ -45,8 +45,10 @@ Opened with the system browser, text URL-encoded:
 ## When to announce
 - Trigger: the first destination of a stream session reaches "live" (connected and sending; for
   YouTube with the broadcast started). Later destinations in the same session don't post again.
+  If YouTube is the only destination and never reports its broadcast as started, the post goes
+  out 90 s after the video started flowing, so a missed status check doesn't skip it.
 - Reconnects within the session don't post. A new session within 10 minutes of the last
   announcement to the same webhook doesn't post either (covers a crash or a quick restart); the
-  Share popover's Post to Discord still works for a manual post.
+  Share window's Post to Discord still works for a manual post.
 - The time of the last announcement per webhook is kept in memory only; a restart of Clutch
   forgets it, which is fine for the 10-minute window.

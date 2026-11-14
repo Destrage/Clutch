@@ -22,6 +22,7 @@ mod screen_color;
 mod secret;
 mod services;
 mod settings;
+mod share;
 mod shell;
 mod twitch;
 mod update;

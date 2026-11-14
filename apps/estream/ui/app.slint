@@ -5,12 +5,12 @@ import "fonts/Figtree.ttf";
 import "fonts/Jost.ttf";
 import { Theme, Platform } from "theme.slint";
 import { Icons } from "icons.slint";
-import { CanvasTab, SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SetupLine, SourceType, PropRow, MixerStrip, AudioInspect, SettingsForm, LiveRow, DestinationRow, VideoFilterRow, MediaInspect, AutomationForm, MacroRow, TriggerRow, StepRow, ClipsForm, ClipRow, ClipPlayerState, MontageForm, StatsForm, StatTile, StatRow, AlertRow, InspectorFolds, CanvasForm, CanvasSize } from "types.slint";
+import { CanvasTab, SceneRow, LayerRow, CanvasBox, Guide, Inspect, PaletteEntry, Preset, SetupLine, SourceType, PropRow, MixerStrip, AudioInspect, SettingsForm, LiveRow, DestinationRow, VideoFilterRow, MediaInspect, AutomationForm, MacroRow, TriggerRow, StepRow, ClipsForm, ClipRow, ClipPlayerState, MontageForm, StatsForm, StatTile, StatRow, AlertRow, InspectorFolds, CanvasForm, CanvasSize, ShareForm } from "types.slint";
 import { VSplitter, HSplitter, TooltipLayer, Hint } from "widgets.slint";
 import { Preview } from "preview.slint";
 import { InspectorPanel } from "inspector.slint";
 import { TopBar, ScenesPanel, SourcesPanel, MixerPanel, StatusBar, TransitionColumn, ProgramView, CanvasTabs } from "panels.slint";
-import { CommandPalette, AddSourceDialog, SetupWizard, SetupDialog, RecoveryPrompt, GameAudioPrompt, Toast, SettingsDialog, LivePanel, ShaderDialog, CanvasSettingsDialog } from "overlays.slint";
+import { CommandPalette, AddSourceDialog, SetupWizard, SetupDialog, RecoveryPrompt, GameAudioPrompt, Toast, SettingsDialog, LivePanel, ShaderDialog, CanvasSettingsDialog, ShareDialog } from "overlays.slint";
 import { AutomationDialog } from "automation.slint";
 import { StatsDialog } from "stats.slint";
 import { ClipsDialog } from "clips.slint";
@@ -376,6 +376,17 @@ export component AppWindow inherits Window {
     callback settings-set(string, float);
     callback settings-text(string, string);
     callback settings-browse();
+    // Sharing: the Share window, and adding a Discord webhook in Settings.
+    in-out property <bool> share-open;
+    in property <ShareForm> share-form;
+    in-out property <string> share-message;
+    in-out property <string> share-new-name;
+    in-out property <string> share-new-url;
+    callback share-copy-link(int);
+    callback share-copy(string);
+    callback share-site(string, string);
+    callback share-discord(int, string);
+    callback share-add-webhook(string, string);
 
     public function zoom-fit() { preview.zoom-fit(); }
     public function zoom-actual() { preview.zoom-actual(); }
@@ -737,6 +748,7 @@ export component AppWindow inherits Window {
             toggle-record => { root.action("record.toggle"); main-keys.focus(); }
             end-stream => { root.action("stream.toggle"); main-keys.focus(); }
             edit-layout => { root.deck-edit = true; main-keys.focus(); }
+            share => { root.action("stream.share"); }
             studio-mode: root.studio-mode;
             preview: root.preview-frame;
             transition-label: root.transition-label;
@@ -896,6 +908,7 @@ export component AppWindow inherits Window {
         rows: root.live-rows;
         streaming: root.stream-state != 0;
         edit-details => { root.live-panel-open = false; root.action("stream.details"); }
+        share => { root.live-panel-open = false; root.action("stream.share"); }
         toggle(i) => { root.live-toggle(i); }
         manage => { root.live-panel-open = false; root.settings-page = 1; root.action("settings"); }
         add-platform => { root.live-panel-open = false; root.action("go-live-setup"); }
@@ -909,8 +922,24 @@ export component AppWindow inherits Window {
         set(k, v) => { root.settings-set(k, v); }
         set-text(k, v) => { root.settings-text(k, v); }
         browse => { root.settings-browse(); }
+        new-webhook-name <=> root.share-new-name;
+        new-webhook-url <=> root.share-new-url;
+        add-webhook(n, u) => { root.share-add-webhook(n, u); }
         dismiss => {
             root.settings-open = false;
+            main-keys.focus();
+        }
+    }
+
+    if root.share-open: ShareDialog {
+        form: root.share-form;
+        message <=> root.share-message;
+        copy-link(i) => { root.share-copy-link(i); }
+        copy-message(t) => { root.share-copy(t); }
+        open-site(s, t) => { root.share-site(s, t); }
+        post-discord(i, t) => { root.share-discord(i, t); }
+        dismiss => {
+            root.share-open = false;
             main-keys.focus();
         }
     }

@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Share Links
-While streaming, the Live panel SHALL offer a Share popover with a watch link for each streamed
+While streaming, the Live deck and the Live panel SHALL offer a Share window with a watch link for each streamed
 destination whose link Clutch can build (Twitch and Kick from the channel name, YouTube from the
 broadcast), a message filled from the share template that the user can edit and copy, and buttons
 that open a pre-filled post on X, Bluesky, Reddit and WhatsApp in the browser. A destination
@@ -9,13 +9,13 @@ without a link SHALL be left out, with where to add it.
 
 #### Scenario: Links for the streamed platforms
 - **WHEN** the user streams to Twitch (channel `someone`) and to a YouTube broadcast, and opens Share
-- **THEN** the popover shows `https://www.twitch.tv/someone` and the broadcast's watch link, each
+- **THEN** the Share window shows `https://www.twitch.tv/someone` and the broadcast's watch link, each
   with Copy
 
 #### Scenario: Copy the message
 - **WHEN** the user clicks Copy under the message
 - **THEN** the clipboard holds the template filled with the stream's title and links, including
-  any edits the user made in the popover
+  any edits the user made in the Share window
 
 #### Scenario: Missing title
 - **WHEN** the stream has no title and the template is `Live now: {title}\n{links}`

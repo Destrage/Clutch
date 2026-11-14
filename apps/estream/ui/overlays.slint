@@ -1,6 +1,6 @@
 import { Theme, Platform } from "theme.slint";
 import { Icons } from "icons.slint";
-import { PaletteEntry, Preset, SetupLine, SourceType, SettingsForm, DestinationRow, LiveRow, CanvasForm, CanvasSize } from "types.slint";
+import { PaletteEntry, Preset, SetupLine, SourceType, SettingsForm, DestinationRow, LiveRow, CanvasForm, CanvasSize, ShareForm } from "types.slint";
 import { Button, IconButton, Icon, Badge, TextField, TextArea, NumberField, Select, Slider, Toggle, SectionTitle } from "widgets.slint";
 import { KindIcon } from "panels.slint";
 import { PropEditor } from "inspector.slint";
@@ -932,6 +932,10 @@ export component SettingsDialog inherits Modal {
     callback set(string, float);
     callback set-text(string, string);
     callback browse();
+    /// Settings → Stream → Sharing: the Discord webhook being added (Rust clears it once added).
+    in-out property <string> new-webhook-name;
+    in-out property <string> new-webhook-url;
+    callback add-webhook(string, string);
 
     card-width: 820px;
     card-top: 40px;
@@ -1177,6 +1181,76 @@ export component SettingsDialog inherits Modal {
                         form: root.form;
                         set(k, v) => { root.set(k, v); }
                         set-text(k, v) => { root.set-text(k, v); }
+                    }
+
+                    SectionTitle { text: "SHARING"; }
+                    Text {
+                        text: "While live, Share in the Destinations panel gives you your links and this message to send to friends. Discord channels below get it when you go live.";
+                        color: Theme.text-faint;
+                        font-size: Theme.font-s;
+                        wrap: word-wrap;
+                        width: scroller.page-width - 36px;
+                    }
+                    SettingRow {
+                        label: "Message";
+                        hint: "Fills in " + root.form.share-placeholders + ". Lines with nothing to fill in are left out.";
+                        TextArea {
+                            label: "Share message";
+                            text: root.form.share-template;
+                            edited(t) => { root.set-text("share-template", t); }
+                        }
+                    }
+                    Text { text: "Discord"; color: Theme.text; font-size: Theme.font-m; font-weight: 700; }
+                    if root.form.share-webhooks.length == 0: Text {
+                        text: "No Discord channels yet. In Discord: Server settings → Integrations → Webhooks → New webhook, pick the channel, then Copy webhook URL and paste it below.";
+                        color: Theme.text-faint;
+                        font-size: Theme.font-s;
+                        wrap: word-wrap;
+                        width: scroller.page-width - 36px;
+                    }
+                    for w[i] in root.form.share-webhooks: HorizontalLayout {
+                        spacing: 12px;
+                        Text { text: w.name; color: Theme.text; font-size: Theme.font-m; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                        VerticalLayout {
+                            alignment: center;
+                            Toggle { label: "Post when I go live"; checked: w.go-live; toggled(v) => { root.set("share-webhook-go-live", i); } }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            Toggle { label: "@everyone"; checked: w.mention; toggled(v) => { root.set("share-webhook-mention", i); } }
+                        }
+                        Button { text: "Send test"; kind: "ghost"; tooltip: "Post the message to " + w.name + " now"; clicked => { root.set("share-webhook-test", i); } }
+                        VerticalLayout {
+                            alignment: center;
+                            IconButton { icon: Icons.trash; tooltip: "Remove " + w.name; clicked => { root.set("share-webhook-remove", i); } }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        TextField {
+                            label: "Name";
+                            placeholder: "Name (e.g. My server)";
+                            horizontal-stretch: 1;
+                            text <=> root.new-webhook-name;
+                        }
+                        TextField {
+                            label: "Webhook URL";
+                            placeholder: "Webhook URL";
+                            input-type: InputType.password;
+                            horizontal-stretch: 2;
+                            text <=> root.new-webhook-url;
+                            accepted => { root.add-webhook(root.new-webhook-name, root.new-webhook-url); }
+                        }
+                        Button {
+                            text: "Add";
+                            enabled: root.new-webhook-url != "";
+                            clicked => { root.add-webhook(root.new-webhook-name, root.new-webhook-url); }
+                        }
+                    }
+                    Text {
+                        text: root.form.share-storage;
+                        color: Theme.text-faint;
+                        font-size: Theme.font-xs;
                     }
                 }
 
@@ -1769,6 +1843,7 @@ export component LivePanel inherits Rectangle {
     /// Live: the stream details can be edited.
     in property <bool> streaming;
     callback edit-details();
+    callback share();
     callback toggle(int);
     callback manage();
     callback add-platform();
@@ -1801,6 +1876,24 @@ export component LivePanel inherits Rectangle {
                 if root.streaming: Button { text: "Edit details"; kind: "ghost"; tooltip: "Title, category and more on each platform, without reconnecting"; clicked => { root.edit-details(); } }
                 Button { text: "Add platform"; kind: "ghost"; clicked => { root.add-platform(); } }
                 Button { text: "Manage…"; kind: "ghost"; clicked => { root.manage(); } }
+            }
+            if root.streaming: Rectangle {
+                height: share-row.preferred-height;
+                border-radius: Theme.radius-m;
+                background: Theme.accent.with-alpha(0.10);
+                share-row := HorizontalLayout {
+                    padding: 8px;
+                    spacing: 8px;
+                    Text {
+                        text: "Tell friends and your Discord where to watch";
+                        color: Theme.text-muted;
+                        font-size: Theme.font-s;
+                        vertical-alignment: center;
+                        wrap: word-wrap;
+                        horizontal-stretch: 1;
+                    }
+                    Button { text: "Share"; kind: "primary"; clicked => { root.share(); } }
+                }
             }
             if root.rows.length == 0: Text {
                 text: "No destinations yet. Click Add platform to stream to Twitch, YouTube, Kick or Facebook.";
@@ -1840,6 +1933,81 @@ export component LivePanel inherits Rectangle {
                     }
                 }
             }
+        }
+    }
+}
+
+/// Share while live: watch links, a message to copy or post, share pages and Discord.
+export component ShareDialog inherits Modal {
+    in property <ShareForm> form;
+    /// The message, filled from the template by Rust when the window opens; edits stay here.
+    in-out property <string> message;
+    callback copy-link(int);
+    callback copy-message(string);
+    callback open-site(string, string);
+    callback post-discord(int, string);
+
+    card-width: 520px;
+    VerticalLayout {
+        padding: 22px;
+        spacing: 12px;
+        HorizontalLayout {
+            Text { text: "Share your stream"; color: Theme.text; font-size: Theme.font-l; font-weight: 700; horizontal-stretch: 1; vertical-alignment: center; }
+            Button { text: "Done"; kind: "ghost"; clicked => { root.dismiss(); } }
+        }
+        for l[i] in root.form.links: HorizontalLayout {
+            spacing: 8px;
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 1;
+                Text { text: l.label; color: Theme.text-muted; font-size: Theme.font-xs; }
+                Text { text: l.url; color: Theme.text; font-size: Theme.font-m; overflow: elide; }
+            }
+            VerticalLayout {
+                alignment: center;
+                Button { text: "Copy"; kind: "ghost"; has-icon: true; icon: Icons.copy; tooltip: "Copy " + l.url; clicked => { root.copy-link(i); } }
+            }
+        }
+        for n in root.form.notes: Text {
+            text: n;
+            color: Theme.text-faint;
+            font-size: Theme.font-s;
+            wrap: word-wrap;
+        }
+        Text { text: "Message"; color: Theme.text; font-size: Theme.font-m; font-weight: 700; }
+        TextArea {
+            label: "Message";
+            text <=> root.message;
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+            Button { text: "Copy message"; kind: "primary"; has-icon: true; icon: Icons.copy; clicked => { root.copy-message(root.message); } }
+        }
+        Text { text: "Post on"; color: Theme.text-muted; font-size: Theme.font-s; }
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+            Button { text: "X"; kind: "ghost"; tooltip: "Opens X with the message filled in"; clicked => { root.open-site("x", root.message); } }
+            Button { text: "Bluesky"; kind: "ghost"; tooltip: "Opens Bluesky with the message filled in"; clicked => { root.open-site("bluesky", root.message); } }
+            Button { text: "Reddit"; kind: "ghost"; tooltip: "Opens Reddit with your link and title filled in"; clicked => { root.open-site("reddit", root.message); } }
+            Button { text: "WhatsApp"; kind: "ghost"; tooltip: "Opens WhatsApp with the message filled in"; clicked => { root.open-site("whatsapp", root.message); } }
+        }
+        if root.form.webhooks.length > 0: HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+            for w[i] in root.form.webhooks: Button {
+                text: root.form.webhooks.length == 1 ? "Post to Discord" : "Post to " + w;
+                kind: "ghost";
+                tooltip: "Post the message to " + w + " on Discord";
+                clicked => { root.post-discord(i, root.message); }
+            }
+        }
+        if root.form.webhooks.length == 0: Text {
+            text: "Add a Discord channel in Settings → Stream → Sharing to post there, or have Clutch post when you go live.";
+            color: Theme.text-faint;
+            font-size: Theme.font-xs;
+            wrap: word-wrap;
         }
     }
 }

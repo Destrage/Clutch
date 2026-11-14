@@ -42,7 +42,7 @@ pub fn twitch_login(text: &str) -> Option<String> {
 }
 
 /// A channel name from a bare name or a channel link on `host`.
-fn channel_name(text: &str, host: &str) -> Option<String> {
+pub(crate) fn channel_name(text: &str, host: &str) -> Option<String> {
     let text = text.trim().trim_end_matches('/');
     let name = match text.find(host) {
         Some(i) => text[i + host.len()..]
@@ -60,7 +60,7 @@ fn channel_name(text: &str, host: &str) -> Option<String> {
 }
 
 /// The video ID from a YouTube watch, live or short link, or a bare 11-character ID.
-fn youtube_video_id(text: &str) -> Option<String> {
+pub(crate) fn youtube_video_id(text: &str) -> Option<String> {
     let text = text.trim();
     let valid = |id: &str| {
         id.len() == 11

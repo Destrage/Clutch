@@ -289,6 +289,27 @@ export struct LiveRow {
     health: int,
 }
 
+/// A Discord webhook in Settings → Stream → Sharing.
+export struct ShareWebhookRow {
+    name: string,
+    go-live: bool,
+    mention: bool,
+}
+
+/// A watch link in the Share window.
+export struct ShareLinkRow {
+    /// "Twitch", or "Twitch (destination)" when there are several.
+    label: string,
+    url: string,
+}
+
+/// The Share window: links, what is missing, and the Discord webhooks to post to.
+export struct ShareForm {
+    links: [ShareLinkRow],
+    notes: [string],
+    webhooks: [string],
+}
+
 /// A stream event kind's sound in Settings.
 export struct EventSoundRow {
     label: string,
@@ -368,6 +389,11 @@ export struct SettingsForm {
     stream-reconnect: bool,
     // Going live opens the Go live window (stream details per platform).
     ask-details: bool,
+    // Sharing: the message template, the Discord webhooks, and where secrets are kept.
+    share-template: string,
+    share-placeholders: string,
+    share-webhooks: [ShareWebhookRow],
+    share-storage: string,
     // Game capture sound when the game is already heard: 0 ask, 1 always capture, 2 leave off.
     game-audio: int,
     // Chat: emotes as images, 7TV / BetterTTV / FrankerFaceZ emotes, animation.
