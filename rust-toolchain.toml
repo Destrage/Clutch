@@ -1,3 +1,5 @@
 [toolchain]
-channel = "stable"
+# Pinned: Rust 1.100 moved test binaries out of target/<profile>/deps, where the build copies the
+# FFmpeg libraries and looks for the browser helper. Move up once the build handles that layout.
+channel = "1.99.1"
 components = ["rustfmt", "clippy"]
