@@ -26,5 +26,5 @@
 
 ## 5. Verification
 - [x] 5.1 `cargo test` and `cargo clippy --all-targets` for the app
-- [ ] 5.2 In the app: go live to Twitch and YouTube with a test webhook; check the post arrives
+- [x] 5.2 In the app: go live to Twitch and YouTube with a test webhook; check the post arrives (checked 2026-11-15: test post, go-live post, share text)
       once, the links open the right pages, and a reconnect doesn't post again
