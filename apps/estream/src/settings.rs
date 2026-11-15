@@ -225,11 +225,70 @@ pub struct Settings {
     /// Hardware encoders take frames on the GPU (default: on). Not in the UI: set it to
     /// `false` in settings.json to force CPU frames when troubleshooting.
     pub gpu_encode: bool,
+    /// The share message and the Discord webhooks that announce the stream.
+    pub share: ShareSettings,
     /// Single-stream settings from before multistream; read once, migrated, never written.
     #[serde(rename = "stream", skip_serializing)]
     legacy_stream: Option<estream_media::StreamSettings>,
     #[serde(rename = "stream_key_protected", skip_serializing)]
     legacy_key: Option<String>,
+}
+
+/// Sharing the stream (Settings → Stream → Sharing).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ShareSettings {
+    /// The share message, with placeholders (see `share::PLACEHOLDERS`).
+    pub template: String,
+    pub webhooks: Vec<DiscordWebhook>,
+}
+
+impl Default for ShareSettings {
+    fn default() -> Self {
+        Self {
+            template: crate::share::DEFAULT_TEMPLATE.into(),
+            webhooks: Vec::new(),
+        }
+    }
+}
+
+/// A Discord channel's webhook. The URL lets anyone post there, so it is a secret: kept in
+/// memory, saved encrypted, never logged.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DiscordWebhook {
+    pub name: String,
+    #[serde(skip)]
+    pub url: String,
+    pub url_protected: String,
+    /// Announce the stream when it goes live.
+    pub on_go_live: bool,
+    /// Ping @everyone in the announcement.
+    pub mention_everyone: bool,
+}
+
+impl Default for DiscordWebhook {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            url: String::new(),
+            url_protected: String::new(),
+            on_go_live: true,
+            mention_everyone: false,
+        }
+    }
+}
+
+impl DiscordWebhook {
+    pub fn new(name: &str, url: &str) -> Self {
+        let url = url.trim().to_owned();
+        Self {
+            name: name.trim().to_owned(),
+            url_protected: crate::secret::protect(&url),
+            url,
+            ..Default::default()
+        }
+    }
 }
 
 /// One streaming destination.
@@ -568,6 +627,7 @@ impl Default for Settings {
             game_audio: GameAudio::Ask,
             scroll_pan: false,
             gpu_encode: true,
+            share: ShareSettings::default(),
             legacy_stream: None,
             legacy_key: None,
         }
@@ -629,6 +689,9 @@ impl Settings {
         }
         if let Some(k) = &mut settings.kick {
             k.unprotect();
+        }
+        for w in &mut settings.share.webhooks {
+            w.url = crate::secret::unprotect(&w.url_protected);
         }
         settings
     }
@@ -955,6 +1018,33 @@ mod tests {
             assert_eq!(loaded.destinations[0].stream.key, "live_42_secret");
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn webhook_url_is_encrypted_on_disk() {
+        let dir = std::env::temp_dir().join(format!("estream-webhook-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let mut s = Settings::default();
+        let url = "https://discord.com/api/webhooks/1/secret_token";
+        s.share.webhooks.push(DiscordWebhook::new("My server", url));
+        s.save(&path);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("secret_token"), "{text}");
+        let loaded = Settings::load(&path);
+        assert_eq!(loaded.share.webhooks[0].name, "My server");
+        assert!(loaded.share.webhooks[0].on_go_live);
+        if cfg!(windows) {
+            assert_eq!(loaded.share.webhooks[0].url, url);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn settings_without_sharing_get_the_default_template() {
+        let s: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(s.share.template, crate::share::DEFAULT_TEMPLATE);
+        assert!(s.share.webhooks.is_empty());
     }
 
     #[test]

@@ -249,6 +249,16 @@ pub struct App {
     /// The Go live window's sections, updated in place: a new model on every search result
     /// would rebuild the category field under the cursor and take its focus.
     details_model: Rc<VecModel<crate::ui::DetailsSection>>,
+    /// Sharing: the YouTube watch link per destination (from the Go live window), the links the
+    /// Share window shows, the go-live announcer, and Discord post results from worker threads.
+    share_youtube: HashMap<usize, String>,
+    share_links: Vec<crate::share::Link>,
+    share_title: String,
+    /// When the stream first reached the air (for the announcement), while streaming.
+    share_live_since: Option<Instant>,
+    announcer: crate::share::Announcer,
+    share_tx: std::sync::mpsc::Sender<ShareResult>,
+    share_rx: std::sync::mpsc::Receiver<ShareResult>,
     /// `details` is shown as the Go live window.
     details_shown: bool,
     /// `details` was opened by one destination's Start (settings index): only it starts.
@@ -309,6 +319,14 @@ enum ToastAction {
     UseYouTubeKey(usize, crate::youtube::StreamSetup),
     /// Open a page (the YouTube broadcast Clutch set up).
     OpenUrl(String),
+}
+
+/// A Discord post that finished: the webhook's name, whether it was the go-live announcement,
+/// and how it went.
+struct ShareResult {
+    webhook: String,
+    auto: bool,
+    result: Result<(), String>,
 }
 
 /// Checks what YouTube does with the stream sent with `key`, in the background: every 20 seconds
@@ -999,6 +1017,7 @@ impl App {
             youtube: youtube.clone(),
             kick: kick.clone(),
         });
+        let (share_tx, share_rx) = std::sync::mpsc::channel();
         let app = App {
             window: window.as_weak(),
             collection: paths.default_collection(),
@@ -1118,6 +1137,13 @@ impl App {
             yt_created: None,
             details: None,
             details_model: Rc::new(VecModel::default()),
+            share_youtube: HashMap::new(),
+            share_links: Vec::new(),
+            share_title: String::new(),
+            share_live_since: None,
+            announcer: crate::share::Announcer::default(),
+            share_tx,
+            share_rx,
             details_shown: false,
             details_only: None,
             yt_start: None,
@@ -2883,6 +2909,7 @@ impl App {
         self.tick_stream_fill();
         self.tick_youtube_start();
         self.tick_details();
+        self.poll_share();
         if self.visibility_at.elapsed() >= Duration::from_millis(250) {
             self.visibility_at = Instant::now();
             let now = window_visibility(w.window());
@@ -5235,6 +5262,320 @@ impl App {
         self.show_details();
     }
 
+    // ------------------------------------------------------------ sharing
+
+    /// The destinations of the running stream, with their index in the settings; when not
+    /// streaming (a webhook test), the ones Go Live would stream to.
+    fn streamed_destinations(&self) -> Vec<(usize, &crate::settings::DestinationConfig)> {
+        if self.stream_dests.is_empty() {
+            return self
+                .settings
+                .destinations
+                .iter()
+                .enumerate()
+                .filter(|(_, d)| d.enabled)
+                .collect();
+        }
+        self.stream_dests
+            .iter()
+            .filter_map(|d| Some((d.config, self.settings.destinations.get(d.config)?)))
+            .collect()
+    }
+
+    /// Watch links of the streamed destinations, and what's missing for the others.
+    fn collect_share_links(&self) -> (Vec<crate::share::Link>, Vec<String>) {
+        let mut links: Vec<crate::share::Link> = Vec::new();
+        let mut notes: Vec<String> = Vec::new();
+        for (config, d) in self.streamed_destinations() {
+            let youtube = self.share_youtube.get(&config).map(String::as_str);
+            match crate::share::watch_link(d.stream.service, &d.channel, youtube) {
+                Ok(Some(url)) if !links.iter().any(|l| l.url == url) => {
+                    links.push(crate::share::Link {
+                        service: d.stream.service,
+                        dest: d.name.clone(),
+                        url,
+                    });
+                }
+                Ok(_) => {}
+                Err(why) if !notes.iter().any(|n| n == why) => notes.push(why.to_owned()),
+                Err(_) => {}
+            }
+        }
+        (links, notes)
+    }
+
+    /// The title and category applied to the streamed platforms: the first title set, and the
+    /// first category name (YouTube keeps only a category number).
+    fn share_details(&self) -> (String, String) {
+        let (mut title, mut category) = (String::new(), String::new());
+        for (_, d) in self.streamed_destinations() {
+            let details = &d.details;
+            let (t, c) = match d.stream.service {
+                Service::Twitch => details
+                    .twitch
+                    .as_ref()
+                    .map(|x| (x.title.as_str(), x.category.as_str())),
+                Service::Kick => details
+                    .kick
+                    .as_ref()
+                    .map(|x| (x.title.as_str(), x.category.as_str())),
+                Service::YouTube => details.youtube.as_ref().map(|x| (x.title.as_str(), "")),
+                _ => None,
+            }
+            .unwrap_or_default();
+            if title.is_empty() {
+                title = t.trim().to_owned();
+            }
+            if category.is_empty() {
+                category = c.trim().to_owned();
+            }
+        }
+        (title, category)
+    }
+
+    /// The share message for the running stream, from the template in settings.
+    fn share_message(&self) -> String {
+        let (links, _) = self.collect_share_links();
+        let (title, category) = self.share_details();
+        self.fill_share_message(&links, &title, &category)
+    }
+
+    fn fill_share_message(
+        &self,
+        links: &[crate::share::Link],
+        title: &str,
+        category: &str,
+    ) -> String {
+        let template = match self.settings.share.template.trim() {
+            "" => crate::share::DEFAULT_TEMPLATE,
+            t => t,
+        };
+        let text = crate::share::fill(
+            template,
+            &crate::share::Details {
+                title,
+                category,
+                links,
+            },
+        );
+        if text.is_empty() {
+            "I'm live!".into()
+        } else {
+            text
+        }
+    }
+
+    /// Share (Live panel, Live deck, palette): the links and the message, while live.
+    pub fn open_share(&mut self) {
+        if self.stream.is_none() {
+            self.toast(
+                "Go live first, then Share gives you your links and a message to send".into(),
+                false,
+            );
+            return;
+        }
+        let (links, notes) = self.collect_share_links();
+        let (title, category) = self.share_details();
+        let message = self.fill_share_message(&links, &title, &category);
+        let Some(w) = self.window() else { return };
+        let rows: Vec<crate::ui::ShareLinkRow> = links
+            .iter()
+            .map(|l| {
+                let name = crate::share::platform_name(l.service);
+                let same = links.iter().filter(|o| o.service == l.service).count();
+                crate::ui::ShareLinkRow {
+                    label: if same > 1 {
+                        format!("{name} ({})", l.dest)
+                    } else {
+                        name.to_owned()
+                    }
+                    .into(),
+                    url: l.url.clone().into(),
+                }
+            })
+            .collect();
+        let webhooks: Vec<SharedString> = self
+            .settings
+            .share
+            .webhooks
+            .iter()
+            .filter(|h| !h.url.is_empty())
+            .map(|h| h.name.clone().into())
+            .collect();
+        w.set_share_form(crate::ui::ShareForm {
+            links: ModelRc::new(VecModel::from(rows)),
+            notes: ModelRc::new(VecModel::from(
+                notes
+                    .into_iter()
+                    .map(SharedString::from)
+                    .collect::<Vec<_>>(),
+            )),
+            webhooks: ModelRc::new(VecModel::from(webhooks)),
+        });
+        w.set_share_message(message.into());
+        w.set_share_open(true);
+        self.share_links = links;
+        self.share_title = title;
+    }
+
+    fn copy(&mut self, text: &str, done: String) {
+        match crate::shell::copy_text(text) {
+            Ok(()) => self.toast(done, false),
+            Err(e) => self.toast(format!("Couldn't copy: {e}"), true),
+        }
+    }
+
+    pub fn share_copy_link(&mut self, i: usize) {
+        if let Some(url) = self.share_links.get(i).map(|l| l.url.clone()) {
+            self.copy(&url, format!("Copied {url}"));
+        }
+    }
+
+    pub fn share_copy(&mut self, text: &str) {
+        self.copy(text, "Message copied".into());
+    }
+
+    /// Opens a site's share page with the message (Reddit: the first link and the title).
+    pub fn share_site(&mut self, site: &str, text: &str) {
+        let link = self.share_links.first().map(|l| l.url.as_str());
+        let Some(url) = crate::share::share_page(site, text, &self.share_title, link) else {
+            return;
+        };
+        if let Err(e) = crate::shell::open_url(&url) {
+            self.toast(format!("Couldn't open the browser: {e}"), true);
+        }
+    }
+
+    /// Post to Discord in the Share window: `i` counts the webhooks that have a URL.
+    pub fn share_discord(&mut self, i: usize, text: &str) {
+        let hook = self
+            .settings
+            .share
+            .webhooks
+            .iter()
+            .filter(|h| !h.url.is_empty())
+            .nth(i)
+            .cloned();
+        if let Some(hook) = hook {
+            self.spawn_post(&hook, text.to_owned(), false);
+        }
+    }
+
+    /// Settings → Stream → Sharing → Add.
+    pub fn share_add_webhook(&mut self, name: &str, url: &str) {
+        if !crate::share::is_webhook_url(url) {
+            self.toast(crate::share::WEBHOOK_HELP.into(), true);
+            return;
+        }
+        let name = match name.trim() {
+            "" => unique_name(
+                "Discord",
+                self.settings.share.webhooks.iter().map(|w| w.name.as_str()),
+            ),
+            n => n.to_owned(),
+        };
+        self.settings
+            .share
+            .webhooks
+            .push(crate::settings::DiscordWebhook::new(&name, url));
+        self.settings.save(&self.paths.settings());
+        if let Some(w) = self.window() {
+            w.set_share_new_name(SharedString::new());
+            w.set_share_new_url(SharedString::new());
+        }
+        self.refresh_settings_form();
+        self.toast(format!("Added {name}. Send test to check it posts."), false);
+    }
+
+    /// Posts to a webhook on a worker thread; the result comes back through `share_rx`.
+    fn spawn_post(&self, hook: &crate::settings::DiscordWebhook, text: String, auto: bool) {
+        let tx = self.share_tx.clone();
+        let (name, url, mention) = (hook.name.clone(), hook.url.clone(), hook.mention_everyone);
+        if url.is_empty() {
+            let _ = tx.send(ShareResult {
+                webhook: name,
+                auto,
+                result: Err("its URL wasn't saved; add the webhook again".into()),
+            });
+            return;
+        }
+        let spawned = std::thread::Builder::new()
+            .name("estream-discord".into())
+            .spawn(move || {
+                let result = crate::share::post(&url, &text, mention);
+                let _ = tx.send(ShareResult {
+                    webhook: name,
+                    auto,
+                    result,
+                });
+            });
+        if let Err(e) = spawned {
+            tracing::warn!(error = %e, "couldn't start the Discord post");
+        }
+    }
+
+    /// Discord posts that finished.
+    fn poll_share(&mut self) {
+        while let Ok(r) = self.share_rx.try_recv() {
+            match r.result {
+                Ok(()) if r.auto => {
+                    self.toast(format!("Announced on Discord ({})", r.webhook), false)
+                }
+                Ok(()) => self.toast(format!("Posted to Discord ({})", r.webhook), false),
+                Err(e) => self.toast(
+                    format!("Couldn't post to Discord ({}): {e}", r.webhook),
+                    true,
+                ),
+            }
+        }
+    }
+
+    /// Announces the stream to the Discord webhooks set to post on go-live, once it's on the
+    /// air: a destination is live, and a connected YouTube's broadcast has started (or 90 s have
+    /// passed, in case YouTube never says so).
+    fn announce_if_live(&mut self, rows: &[LiveRow]) {
+        if self.stream.is_none() {
+            if self.share_live_since.take().is_some() {
+                self.announcer.stream_ended();
+                self.share_youtube.clear();
+            }
+            return;
+        }
+        let youtube_started = self.yt_watch.as_ref().is_none_or(|w| w.seen_live);
+        let mut sending = false;
+        let mut on_air = false;
+        for (d, row) in self.settings.destinations.iter().zip(rows) {
+            if row.state == 2 {
+                sending = true;
+                on_air |= d.stream.service != Service::YouTube || youtube_started;
+            }
+        }
+        if !sending {
+            return;
+        }
+        let since = *self.share_live_since.get_or_insert_with(Instant::now);
+        if !on_air && since.elapsed() < Duration::from_secs(90) {
+            return;
+        }
+        let hooks: Vec<(&str, bool)> = self
+            .settings
+            .share
+            .webhooks
+            .iter()
+            .map(|w| (w.url.as_str(), w.on_go_live))
+            .collect();
+        let due = self.announcer.due(&hooks, Instant::now());
+        if due.is_empty() {
+            return;
+        }
+        let text = self.share_message();
+        for i in due {
+            if let Some(hook) = self.settings.share.webhooks.get(i) {
+                self.spawn_post(hook, text.clone(), true);
+            }
+        }
+    }
+
     /// Puts the Go live window's sections on screen.
     fn show_details(&mut self) {
         let (Some(w), Some(d)) = (self.window(), &self.details) else {
@@ -5371,6 +5712,9 @@ impl App {
             }
             if let Some(id) = a.created {
                 self.yt_created = Some((id, Instant::now()));
+            }
+            if let Some(url) = &a.link {
+                self.share_youtube.insert(config, url.clone());
             }
             link = link.or(a.link);
             lines.push(a.message);
@@ -6759,6 +7103,7 @@ impl App {
             }
         }
         self.youtube_status(&mut rows);
+        self.announce_if_live(&rows);
         // Viewer counts for the live destinations (where the platform reports them).
         let targets = self
             .settings
@@ -6893,6 +7238,31 @@ impl App {
                 .and_then(|i| self.settings.destinations.get(i))
                 .map_or(0, |d| index_of(d.stream.canvas)),
             ask_details: self.settings.ask_details,
+            share_template: self.settings.share.template.clone().into(),
+            share_placeholders: crate::share::PLACEHOLDERS.into(),
+            share_webhooks: ModelRc::new(VecModel::from(
+                self.settings
+                    .share
+                    .webhooks
+                    .iter()
+                    .map(|w| crate::ui::ShareWebhookRow {
+                        name: w.name.clone().into(),
+                        go_live: w.on_go_live,
+                        mention: w.mention_everyone,
+                    })
+                    .collect::<Vec<_>>(),
+            )),
+            share_storage: {
+                let note = crate::secret::storage_note();
+                let mut chars = note.chars();
+                let first = chars.next().map(|c| c.to_lowercase().to_string());
+                format!(
+                    "Webhook URLs: {}{}",
+                    first.unwrap_or_default(),
+                    chars.as_str()
+                )
+                .into()
+            },
             game_audio: match self.settings.game_audio {
                 GameAudio::Ask => 0,
                 GameAudio::Capture => 1,
@@ -7661,6 +8031,29 @@ impl App {
                 r.canvas = ids.get(i).copied();
             }
             "ask-details" => self.settings.ask_details = value > 0.5,
+            "share-webhook-go-live" => {
+                if let Some(w) = self.settings.share.webhooks.get_mut(i) {
+                    w.on_go_live = !w.on_go_live;
+                }
+            }
+            "share-webhook-mention" => {
+                if let Some(w) = self.settings.share.webhooks.get_mut(i) {
+                    w.mention_everyone = !w.mention_everyone;
+                }
+            }
+            "share-webhook-remove" if i < self.settings.share.webhooks.len() => {
+                self.settings.share.webhooks.remove(i);
+            }
+            "share-webhook-test" => {
+                if let Some(w) = self.settings.share.webhooks.get(i) {
+                    let text = format!(
+                        "Test from Clutch. When you go live, this channel gets:\n\n{}",
+                        self.share_message()
+                    );
+                    self.spawn_post(w, text, false);
+                }
+                return;
+            }
             "game-audio" => {
                 self.settings.game_audio = match i {
                     1 => GameAudio::Capture,
@@ -7784,6 +8177,12 @@ impl App {
         match (field, selected) {
             ("dest-name", Some(d)) if !value.is_empty() => d.name = value.to_owned(),
             ("dest-channel", Some(d)) => d.channel = value.to_owned(),
+            ("share-template", _) => {
+                self.settings.share.template = value.to_owned();
+                // Saved without rebuilding the form, which would interrupt typing.
+                self.settings.save(&self.paths.settings());
+                return;
+            }
             ("stream-server", Some(d)) => d.stream.server = value.to_owned(),
             ("stream-key", Some(d)) => d.set_key(value),
             ("folder", _) if !value.is_empty() => {
@@ -10994,6 +11393,7 @@ impl App {
             }
             Action::GoLiveSetup => self.open_golive(),
             Action::EditStreamDetails => self.edit_details(),
+            Action::ShareStream => self.open_share(),
             Action::OpenSettings => {
                 self.refresh_settings_form();
                 w.set_settings_open(true);
@@ -12416,6 +12816,13 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
         .canvas_menu(&id, &action, preset));
     on!(on_canvas_rename, |a, id, name| a.canvas_rename(&id, &name));
     on!(on_settings_browse, |a| a.settings_browse());
+    on!(on_share_copy_link, |a, i| a
+        .share_copy_link(i.max(0) as usize));
+    on!(on_share_copy, |a, t| a.share_copy(&t));
+    on!(on_share_site, |a, s, t| a.share_site(&s, &t));
+    on!(on_share_discord, |a, i, t| a
+        .share_discord(i.max(0) as usize, &t));
+    on!(on_share_add_webhook, |a, n, u| a.share_add_webhook(&n, &u));
     on!(on_toast_act, |a| a.toast_act());
 
     {
