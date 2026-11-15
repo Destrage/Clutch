@@ -11229,9 +11229,12 @@ impl App {
         }
         let canvas_size = self
             .canvas_and_scene()
-            .and_then(|(s, _, _)| {
+            .and_then(|(s, id, _)| {
+                // The canvas being edited, not the first one: quick placements on a vertical
+                // canvas must use its own size.
                 s.canvases
-                    .first()
+                    .iter()
+                    .find(|c| c.id == id)
                     .map(|c| Vec2::new(c.width as f32, c.height as f32))
             })
             .unwrap_or(Vec2::new(1920.0, 1080.0));
