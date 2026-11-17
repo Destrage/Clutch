@@ -94,12 +94,20 @@ impl StereoConsumer {
 
     /// Reads up to `out.len() / 2` frames into an interleaved buffer.
     pub fn read_interleaved(&mut self, out: &mut [f32]) -> usize {
+        let n = self.peek_interleaved(out);
+        self.skip(n);
+        n
+    }
+
+    /// Copies up to `out.len() / 2` frames into an interleaved buffer without taking them
+    /// (follow with [`skip`](Self::skip) for the frames actually used).
+    pub fn peek_interleaved(&mut self, out: &mut [f32]) -> usize {
         let n = (out.len() / 2).min(self.available());
         if let Ok(chunk) = self.inner.read_chunk(n * 2) {
             let (a, b) = chunk.as_slices();
             out[..a.len()].copy_from_slice(a);
             out[a.len()..a.len() + b.len()].copy_from_slice(b);
-            chunk.commit_all();
+            // Dropped uncommitted: the frames stay in the ring.
         }
         n
     }
@@ -118,6 +126,20 @@ mod tests {
         assert_eq!(c.read_block(&mut block), BLOCK);
         assert_eq!((block.l[1], block.r[1]), (2.0, 3.0));
         assert_eq!(c.read_block(&mut block), 0);
+    }
+
+    #[test]
+    fn peek_leaves_the_frames_in_the_ring() {
+        let (mut p, mut c) = stereo_ring(100);
+        p.push(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        let mut out = [0.0; 4];
+        assert_eq!(c.peek_interleaved(&mut out), 2);
+        assert_eq!(out, [1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(c.available(), 3);
+        c.skip(1);
+        assert_eq!(c.read_interleaved(&mut out), 2);
+        assert_eq!(out, [3.0, 4.0, 5.0, 6.0]);
+        assert_eq!(c.available(), 0);
     }
 
     #[test]
