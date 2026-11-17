@@ -293,6 +293,7 @@ fn push_items<'a>(
     sources: &'a HashMap<SourceId, SourceSlot>,
     filters: &'a Filters,
     fills: &'a crate::fill::Fills,
+    masks: &'a crate::masks::Masks,
     flats: &[FlatItem],
     out: &mut Vec<DrawItem<'a>>,
 ) {
@@ -304,18 +305,51 @@ fn push_items<'a>(
         if layout.size.x <= 0.0 || layout.size.y <= 0.0 {
             continue;
         }
+        let drawn = match flat.mask {
+            Some(_) => match masks.get(flat.item) {
+                Some(drawn) => Some(drawn),
+                None => continue, // the first mask is still baking
+            },
+            None => None,
+        };
+        let matrix = flat.parent * layout.matrix;
+        // An effect layer covers the item grown by `pad` on each side.
+        let effect = |(tex, pad): &'a (crate::masks::Tex, Vec2)| DrawItem {
+            binding: &tex.binding,
+            matrix: matrix
+                * glam::Affine2::from_translation(-*pad)
+                * glam::Affine2::from_scale(Vec2::ONE + 2.0 * *pad),
+            uv_min: Vec2::ZERO,
+            uv_max: Vec2::ONE,
+            opacity: flat.opacity,
+            blend: estream_core::BlendMode::Normal,
+            mask: None,
+        };
         if let Some(fill) = fills.item(flat) {
             out.push(fill);
         }
+        if let Some(under) = drawn.and_then(|d| d.under.as_ref()) {
+            out.push(effect(under));
+        }
         out.push(DrawItem {
             binding,
-            matrix: flat.parent * layout.matrix,
+            matrix,
             uv_min: layout.uv_min,
             uv_max: layout.uv_max,
             opacity: flat.opacity,
             blend: flat.blend,
+            mask: drawn.and_then(|d| d.mask.as_ref()).map(|m| &m.binding),
         });
+        if let Some(over) = drawn.and_then(|d| d.over.as_ref()) {
+            out.push(effect(over));
+        }
     }
+}
+
+/// An item's size on the canvas in pixels (group scaling included).
+fn item_size(flat: &FlatItem, source: estream_core::Size) -> Vec2 {
+    let m = flat.parent * flat.transform.layout(flat.crop, source).matrix;
+    Vec2::new(m.matrix2.x_axis.length(), m.matrix2.y_axis.length())
 }
 
 /// What to draw for a source: its filtered frame if it has filters, else its raw frame.
@@ -355,6 +389,7 @@ impl CanvasPaint {
             uv_max: Vec2::ONE,
             opacity: 1.0,
             blend: estream_core::BlendMode::Normal,
+            mask: None,
         }
     }
 }
@@ -429,6 +464,8 @@ pub struct VideoCore {
     gradients: estream_gpu::GradientRenderer,
     /// Fills behind fitted items (Frosted, color, gradient).
     fills: crate::fill::Fills,
+    /// Masks and edge effects of masked items.
+    masks: crate::masks::Masks,
     registry: SourceRegistry,
     sources: HashMap<SourceId, SourceSlot>,
     canvases: Vec<CanvasSlot>,
@@ -454,6 +491,7 @@ impl VideoCore {
             converter: OutputConverter::new(&gpu),
             gradients: estream_gpu::GradientRenderer::new(&gpu),
             fills: crate::fill::Fills::default(),
+            masks: crate::masks::Masks::default(),
             transitions: TransitionRenderer::new(&gpu),
             gpu,
             registry,
@@ -617,6 +655,7 @@ impl VideoCore {
             self.filters.renderer_mut(),
             &graph,
         );
+        self.masks.sync(&graph);
         self.graph = graph;
     }
 
@@ -708,9 +747,12 @@ impl VideoCore {
         self.progress.enter(Stage::Filters);
         let Self {
             gpu,
+            compositor,
             sources,
             filters,
             fills,
+            masks,
+            graph,
             ..
         } = self;
         filters.run(gpu, encoder, now.0 as f32 / 1e9, |id| {
@@ -725,6 +767,11 @@ impl VideoCore {
         // Frosted fills blur this frame's (filtered) pictures.
         fills.run(gpu, encoder, filters.renderer(), |id| {
             source_frame(sources, filters, id)
+        });
+        // Masks bake for the size items have on the canvas now.
+        masks.update(gpu, compositor, graph, |flat| {
+            let (_, size) = source_frame(sources, filters, flat.source)?;
+            Some(item_size(flat, size))
         });
     }
 
@@ -748,6 +795,7 @@ impl VideoCore {
             transitions,
             filters,
             fills,
+            masks,
             preview_wanted,
             ..
         } = self;
@@ -777,6 +825,7 @@ impl VideoCore {
                     sources,
                     filters,
                     fills,
+                    masks,
                     if before { &t.from } else { &cg.items },
                     &mut items,
                 );
@@ -788,10 +837,11 @@ impl VideoCore {
                         uv_max: Vec2::ONE,
                         opacity: 1.0,
                         blend: estream_core::BlendMode::Normal,
+                        mask: None,
                     });
                 }
             }
-            None => push_items(sources, filters, fills, &cg.items, &mut items),
+            None => push_items(sources, filters, fills, masks, &cg.items, &mut items),
         }
         let running = if stinger.is_some() { None } else { running };
         match running {
@@ -810,7 +860,7 @@ impl VideoCore {
                 if let Some(p) = &canvas.paint {
                     from.push(p.item(size));
                 }
-                push_items(sources, filters, fills, &t.from, &mut from);
+                push_items(sources, filters, fills, masks, &t.from, &mut from);
                 from_renderer.render(
                     gpu,
                     encoder,
@@ -861,7 +911,7 @@ impl VideoCore {
             if let Some(p) = &canvas.paint {
                 items.push(p.item(size));
             }
-            push_items(sources, filters, fills, flats, &mut items);
+            push_items(sources, filters, fills, masks, flats, &mut items);
             preview.renderer.render(
                 gpu,
                 encoder,
@@ -889,6 +939,12 @@ impl VideoCore {
     pub fn render_now(&mut self, now: Timestamp) -> Vec<Arc<CanvasOutput>> {
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
         self.tick_sources(&mut encoder, now);
+        // Headless renders show masks right away rather than a frame later.
+        self.masks.settle(
+            &self.gpu,
+            &self.compositor,
+            std::time::Duration::from_secs(10),
+        );
         let slots: Vec<usize> = (0..self.canvases.len())
             .map(|i| self.render_canvas(i, &mut encoder, now))
             .collect();

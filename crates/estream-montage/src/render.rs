@@ -335,6 +335,7 @@ impl Renderer {
                             uv_max,
                             opacity: 1.0,
                             blend: BlendMode::Normal,
+                            mask: None,
                         }],
                     );
                 }
@@ -367,6 +368,7 @@ impl Renderer {
                         uv_max: p.2,
                         opacity: 1.0,
                         blend: BlendMode::Normal,
+                        mask: None,
                     };
                     self.from_pass.render(
                         &self.gpu,
@@ -448,6 +450,7 @@ impl Renderer {
                 uv_max: Vec2::ONE,
                 opacity: fade,
                 blend: BlendMode::Normal,
+                mask: None,
             });
         }
         for (id, matrix, opacity) in &title_items {
@@ -459,6 +462,7 @@ impl Renderer {
                     uv_max: Vec2::ONE,
                     opacity: *opacity,
                     blend: BlendMode::Normal,
+                    mask: None,
                 });
             }
         }

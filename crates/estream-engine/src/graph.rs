@@ -102,6 +102,8 @@ pub struct FlatItem {
     pub blend: BlendMode,
     /// What fills the rest of the bounding box (drawn only with Fit bounds).
     pub fill: estream_project::ItemFill,
+    /// The item's mask and effects, when they change how it's drawn.
+    pub mask: Option<estream_project::ItemMask>,
 }
 
 impl RenderGraph {
@@ -332,6 +334,7 @@ fn flatten(items: &[SceneItem], parent: Affine2, opacity: f32, out: &mut Vec<Fla
                 } else {
                     estream_project::ItemFill::None
                 },
+                mask: item.mask.clone().filter(|m| m.draws()),
             }),
             ItemContent::Group { items } => {
                 flatten(items, parent * item.transform.group_matrix(), opacity, out)

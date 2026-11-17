@@ -193,6 +193,9 @@ pub struct SceneItem {
     /// What fills the rest of the bounding box when the source is fitted inside it.
     #[serde(default, skip_serializing_if = "ItemFill::is_none")]
     pub fill: ItemFill,
+    /// Shapes that make parts of the item transparent, and edge effects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mask: Option<crate::ItemMask>,
 }
 
 /// Fills the part of an item's bounding box that a fitted source leaves empty (the bars above
@@ -259,6 +262,7 @@ impl SceneItem {
             opacity: 1.0,
             blend: BlendMode::Normal,
             fill: ItemFill::None,
+            mask: None,
         }
     }
 

@@ -23,6 +23,7 @@ pub enum Action {
     MoveUp,
     MoveDown,
     GroupSelected,
+    EditMask,
     FitToCanvas,
     StretchToCanvas,
     CenterOnCanvas,
@@ -171,6 +172,7 @@ actions! {
     MoveUp, "item.up", "Move item up", "Sources", Some(Shortcut::ctrl(']')), true;
     MoveDown, "item.down", "Move item down", "Sources", Some(Shortcut::ctrl('[')), true;
     GroupSelected, "item.group", "Group selected item", "Sources", Some(Shortcut::ctrl('g')), true;
+    EditMask, "item.mask", "Edit mask of selected item (shapes and cut-outs)", "Sources", None, true;
     FitToCanvas, "transform.fit", "Fit to canvas", "Transform", Some(Shortcut::ctrl('f')), true;
     StretchToCanvas, "transform.stretch", "Stretch to canvas", "Transform", Some(Shortcut::ctrl_shift('s')), true;
     CenterOnCanvas, "transform.center", "Center on canvas", "Transform", Some(Shortcut::ctrl('e')), true;

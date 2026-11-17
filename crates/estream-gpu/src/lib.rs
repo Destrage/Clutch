@@ -15,7 +15,7 @@ mod user_shader;
 pub mod yuv;
 
 pub use bridge::PreviewBridge;
-pub use compositor::{CANVAS_FORMAT, CanvasRenderer, Compositor, DrawItem};
+pub use compositor::{CANVAS_FORMAT, CanvasRenderer, Compositor, DrawItem, upload_texture};
 pub use context::{GpuContext, GpuError, GpuOptions};
 pub use convert::{
     ConvertInput, Nv12Target, OutputConverter, PREVIEW_FORMAT, PREVIEW_VIEW_FORMAT,

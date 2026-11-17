@@ -2,11 +2,16 @@
 //! its persistence (versioned JSON scene collections, migrations, recovery files).
 
 pub mod automation;
+pub mod mask;
 pub mod model;
 pub mod persist;
 pub mod transition;
 
 pub use automation::{Automation, Chord, GameEventKind, Macro, OutputKind, Step, Toggle, Trigger};
+pub use mask::{
+    Border, BorderPlacement, Glow, GlowPlacement, ItemMask, MaskEffects, MaskGeometry, MaskMode,
+    MaskShape, Shadow,
+};
 pub use model::{
     AudioConfig, AudioFilterDef, Canvas, FilterDef, ItemContent, ItemFill, Monitoring, Project,
     ProjectAudio, Scene, SceneItem, SourceDef,
