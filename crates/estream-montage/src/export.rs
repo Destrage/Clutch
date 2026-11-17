@@ -139,16 +139,8 @@ fn write(
     let mut video = VideoEncoder::open(chosen.name, width, height, fps, &settings)?;
     let mut audio = AudioEncoder::open(AudioCodec::Aac, 192)?;
     let specs = [
-        StreamSpec {
-            parameters: video.parameters(),
-            time_base: video.time_base,
-            is_video: true,
-        },
-        StreamSpec {
-            parameters: audio.parameters(),
-            time_base: audio.time_base,
-            is_video: false,
-        },
+        StreamSpec::new(video.parameters(), video.time_base, true),
+        StreamSpec::new(audio.parameters(), audio.time_base, false),
     ];
     let mut muxer = Muxer::create(part, Container::Mp4, &specs)?;
     let mut write_error = None;

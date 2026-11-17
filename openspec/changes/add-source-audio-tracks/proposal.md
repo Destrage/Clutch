@@ -22,7 +22,7 @@ recording should contain.
 - **Clip mode's own engine** (used when no program scene shows the game) mixes the studio's own
   microphone sources, with their filters and volume, instead of an unfiltered default mic. Game,
   desktop audio and each mic get their own source track.
-- **Clips player**: a Tracks menu lists the full mix and each source track; choosing source tracks
+- **Clips player**: a "Hear" row lists the full mix and each source track; choosing source tracks
   plays only those (for example the game without the mic). Trimming keeps every track and its name.
 
 Not in this change: per-track volume in the montage editor (it keeps using the mix), and

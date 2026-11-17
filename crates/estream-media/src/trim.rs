@@ -11,7 +11,7 @@
 use crate::MediaError;
 use crate::encode::{self, AudioEncoder, VideoEncoder};
 use crate::ffmpeg::{self, Rational as FfRational, codec, frame, media};
-use crate::mux::{Muxer, StreamSpec};
+use crate::mux::{Muxer, StreamSpec, stream_is_default, stream_name};
 use crate::player::{PixelLayout, convert_audio, convert_video};
 use crate::settings::{AudioCodec, Container, Preset, RateControl, RecordingSettings, VideoCodec};
 use estream_audio::{BLOCK, Block, SAMPLE_RATE};
@@ -129,6 +129,37 @@ struct Source {
     clocks: Vec<(FfRational, i64)>,
 }
 
+/// Whether an audio stream of `input` is a source track: not the default when the file marks
+/// one of its audio streams as default.
+fn is_source_track(
+    input: &ffmpeg::format::context::Input,
+    stream: &ffmpeg::format::stream::Stream<'_>,
+) -> bool {
+    stream.parameters().medium() == media::Type::Audio
+        && !stream_is_default(stream)
+        && input
+            .streams()
+            .any(|s| s.parameters().medium() == media::Type::Audio && stream_is_default(&s))
+}
+
+/// The output spec of an input stream, keeping its name and default flag.
+fn spec_like(
+    input: &ffmpeg::format::context::Input,
+    stream: &ffmpeg::format::stream::Stream<'_>,
+    parameters: codec::Parameters,
+    time_base: FfRational,
+) -> StreamSpec {
+    StreamSpec {
+        name: stream_name(stream),
+        source_track: is_source_track(input, stream),
+        ..StreamSpec::new(
+            parameters,
+            time_base,
+            stream.parameters().medium() == media::Type::Video,
+        )
+    }
+}
+
 fn source_streams(input: &ffmpeg::format::context::Input) -> Result<Source, MediaError> {
     let mut source = Source {
         map: Vec::new(),
@@ -142,11 +173,12 @@ fn source_streams(input: &ffmpeg::format::context::Input) -> Result<Source, Medi
             continue;
         }
         source.map.push(Some(source.specs.len()));
-        source.specs.push(StreamSpec {
-            parameters: stream.parameters(),
-            time_base: stream.time_base(),
-            is_video: medium == media::Type::Video,
-        });
+        source.specs.push(spec_like(
+            input,
+            &stream,
+            stream.parameters(),
+            stream.time_base(),
+        ));
         source
             .clocks
             .push((stream.time_base(), stream.start_time()));
@@ -342,11 +374,11 @@ fn precise(
     let mut video_encoder = VideoEncoder::open(chosen.name, width, height, fps, &settings)?;
 
     let wanted = ((to - from) * SAMPLE_RATE as f64).round() as usize;
-    let mut specs = vec![StreamSpec {
-        parameters: video_encoder.parameters(),
-        time_base: video_encoder.time_base,
-        is_video: true,
-    }];
+    let mut specs = vec![StreamSpec::new(
+        video_encoder.parameters(),
+        video_encoder.time_base,
+        true,
+    )];
     let mut audio: Vec<(usize, AudioTrack)> = Vec::new();
     for stream in ictx.streams() {
         let p = stream.parameters();
@@ -364,11 +396,12 @@ fn precise(
             continue; // an audio stream we can't decode is left out
         };
         let encoder = AudioEncoder::open(audio_codec, 192)?;
-        specs.push(StreamSpec {
-            parameters: encoder.parameters(),
-            time_base: encoder.time_base,
-            is_video: false,
-        });
+        specs.push(spec_like(
+            &ictx,
+            &stream,
+            encoder.parameters(),
+            encoder.time_base,
+        ));
         audio.push((
             stream.index(),
             AudioTrack {

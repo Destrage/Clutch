@@ -913,3 +913,43 @@ fn ui_on_its_own_device_shows_the_engine_frames() {
         assert_eq!(&pixels[..4], &[255, 0, 0, 255], "frame {n}");
     }
 }
+
+/// Source tracks cover every source the canvas can be heard with, not only the active scene.
+#[test]
+fn audio_sources_of_a_canvas_include_every_scene() {
+    let mut project = Project::new_default(640, 360, Rational::fps(30));
+    let canvas = project.canvases[0].id;
+    let tone = |name: &str| {
+        SourceDef::new(
+            name,
+            "audio_test_tone",
+            serde_json::json!({ "frequency": 1000.0 }),
+        )
+    };
+    let mut global = tone("Mic");
+    global.audio.global = true;
+    let active = tone("Music");
+    let inactive = tone("Game");
+    let mut monitored = tone("Cue");
+    monitored.audio.monitoring = estream_project::Monitoring::MonitorOnly;
+    let picture = SourceDef::new("Bars", "test_pattern", serde_json::json!({}));
+    project.scenes[0].items.extend([
+        SceneItem::source(active.id),
+        SceneItem::source(monitored.id),
+        SceneItem::source(picture.id),
+    ]);
+    let mut other = Scene::new("Game scene", canvas);
+    other.items.push(SceneItem::source(inactive.id));
+    other.items.push(SceneItem::source(active.id));
+    project.scenes.push(other);
+    project
+        .sources
+        .extend([global, active, inactive, monitored, picture]);
+    let engine = Engine::start(project, config()).unwrap();
+    let names: Vec<String> = engine
+        .audio_sources_of(canvas)
+        .into_iter()
+        .map(|(_, name)| name)
+        .collect();
+    assert_eq!(names, ["Mic", "Music", "Game"]);
+}

@@ -2,7 +2,8 @@
 
 ### Requirement: Source Audio Tracks
 Recordings and the replay buffer SHALL write, after the mixed tracks, one audio stream per audio
-source in the recorded canvas's mix, fixed when the output starts (at most 16, in mixer order).
+source that can be heard on the recorded canvas (global sources and sources placed in its
+scenes), fixed when the output starts (at most 16).
 Each source track SHALL hold what that source adds to the mix (after its filters, volume, mute
 and balance) and SHALL be named after the source. Monitor-only sources SHALL get no source track.
 The mixed tracks SHALL come first and be the default.

@@ -347,6 +347,8 @@ export struct SettingsForm {
     audio-codec: int,
     audio-bitrate: float,
     tracks: int,
+    /// Recordings and the replay buffer also write each source on its own track.
+    source-tracks: bool,
     replay-seconds: float,
     auto-remux: bool,
     /// Canvas names (current collection), for the recording and destination pickers.
@@ -673,6 +675,13 @@ export struct ClipTick {
     label: string,
 }
 
+/// One of a clip's audio tracks in the player.
+export struct ClipTrack {
+    name: string,
+    /// Chosen: played mixed with the other chosen tracks.
+    on: bool,
+}
+
 /// The in-app clip player, updated while it plays (kept out of `ClipsForm`, which is rebuilt
 /// only when the library changes).
 export struct ClipPlayerState {
@@ -686,6 +695,10 @@ export struct ClipPlayerState {
     muted: bool,
     frame: image,
     has-frame: bool,
+    /// The clip's audio tracks after the first (the full mix); empty when it has only one.
+    tracks: [ClipTrack],
+    /// Playing the full mix (no tracks chosen).
+    full-mix: bool,
 }
 
 export struct ClipsForm {

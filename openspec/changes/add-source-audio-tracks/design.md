@@ -17,10 +17,13 @@ so they get no source track.
 
 ## Which sources
 - Fixed when the output starts (a container can't add streams later): every source with audio
-  that is in the canvas's mix and not monitor-only, in mixer order, at most 16. Sources added
+  that can be heard on the canvas (global sources, then sources placed in any of its scenes,
+  groups included), not monitor-only, at most 16. Taking every scene, not just the active one,
+  means a buffer started on a "Starting soon" scene still gets the game's track once the game
+  scene is shown. A source track is silent while its source is not in the mix. Sources added
   later reach the mixed tracks only.
 - Stream metadata: `title` (MKV) and `handler_name` (MP4/MOV) = the source name. Mixed tracks are
-  named "Mix" / "Track N" and keep the default disposition; source tracks don't have it.
+  named "Track N"; the first one is the default stream, source tracks never are.
 
 ## Leaving out silent tracks
 - The encoder thread marks, per source track, the 1 s spans in which the source was heard (block
@@ -39,8 +42,9 @@ track automatically.
 ## Clips player
 - `Player` decodes one or more audio streams. By default it plays the first (mix) stream. With a
   selection of source tracks it decodes those and sums them (same 48 kHz conversion as today).
-- A Tracks button next to the volume opens a menu: "Full mix" plus one check item per source track
-  (names from stream metadata). The choice applies to the open clip only.
+- A "Hear" row under the player controls (only for clips with more than one audio stream):
+  "Full mix" plus a toggle per further stream (names from stream metadata). Turning the last
+  toggle off goes back to the full mix. The choice applies to the selected clip only.
 - Trim (lossless and precise) copies stream titles and dispositions; precise trim re-encodes each
   audio stream as it does now.
 

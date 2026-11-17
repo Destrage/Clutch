@@ -648,6 +648,36 @@ impl Engine {
         }
     }
 
+    /// The sources with sound that can be heard on `canvas`, with their names: global sources,
+    /// then the sources placed in the canvas's scenes (groups included), each once. Sources
+    /// that are only monitored are left out (they are never in a mix).
+    pub fn audio_sources_of(&self, canvas: CanvasId) -> Vec<(SourceId, String)> {
+        let project = self.snapshot();
+        let mut ids: Vec<SourceId> = project
+            .sources
+            .iter()
+            .filter(|s| s.audio.global)
+            .map(|s| s.id)
+            .collect();
+        for scene in project.scenes_of(canvas) {
+            scene.walk(&mut |item| {
+                if let Some(id) = item.source_id()
+                    && !ids.contains(&id)
+                {
+                    ids.push(id);
+                }
+            });
+        }
+        ids.into_iter()
+            .filter_map(|id| project.source(id))
+            .filter(|s| {
+                s.audio.monitoring != estream_project::Monitoring::MonitorOnly
+                    && self.registry.get(&s.kind).is_some_and(|t| t.has_audio())
+            })
+            .map(|s| (s.id, s.name.clone()))
+            .collect()
+    }
+
     pub fn source_infos(&self) -> Arc<HashMap<SourceId, SourceInfo>> {
         self.shared.statuses.load_full()
     }

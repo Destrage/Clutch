@@ -13,6 +13,64 @@ pub struct StreamSpec {
     /// Time base of the packets handed to [`Muxer::write`].
     pub time_base: FfRational,
     pub is_video: bool,
+    /// Stream title written to the file (`title`, and `handler_name` for MP4/MOV).
+    pub name: Option<String>,
+    /// One source's own sound: never the default audio stream, and left out of a saved clip
+    /// while that source made no sound.
+    pub source_track: bool,
+}
+
+impl StreamSpec {
+    pub fn new(parameters: codec::Parameters, time_base: FfRational, is_video: bool) -> Self {
+        Self {
+            parameters,
+            time_base,
+            is_video,
+            name: None,
+            source_track: false,
+        }
+    }
+
+    pub fn named(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+}
+
+/// Whether stream `index` of `specs` is a default stream: the video, and the first audio stream
+/// that isn't a source track (players play that one).
+fn is_default(specs: &[StreamSpec], index: usize) -> bool {
+    let spec = &specs[index];
+    spec.is_video
+        || (!spec.source_track
+            && specs
+                .iter()
+                .position(|s| !s.is_video && !s.source_track)
+                .is_some_and(|first| first == index))
+}
+
+/// Writes a stream's name and default flag.
+fn describe_stream(
+    stream: &mut ffmpeg::format::stream::StreamMut<'_>,
+    name: Option<&str>,
+    default: bool,
+) {
+    if let Some(name) = name {
+        let mut metadata = Dictionary::new();
+        metadata.set("title", name);
+        metadata.set("handler_name", name);
+        stream.set_metadata(metadata);
+    }
+    // SAFETY: the stream belongs to an output context that is still being set up (before its
+    // header is written), and `disposition` is a plain integer field.
+    unsafe {
+        let s = stream.as_mut_ptr();
+        if default {
+            (*s).disposition |= ffmpeg::ffi::AV_DISPOSITION_DEFAULT;
+        } else {
+            (*s).disposition &= !ffmpeg::ffi::AV_DISPOSITION_DEFAULT;
+        }
+    }
 }
 
 pub struct Muxer {
@@ -32,7 +90,7 @@ impl Muxer {
             std::fs::create_dir_all(dir).map_err(|e| MediaError::Io(e.to_string()))?;
         }
         let mut output = ffmpeg::format::output_as(path, container.format_name())?;
-        for spec in specs {
+        for (i, spec) in specs.iter().enumerate() {
             let mut stream = output.add_stream(ffmpeg::encoder::find(spec.parameters.id()))?;
             stream.set_parameters(spec.parameters.clone());
             stream.set_time_base(spec.time_base);
@@ -40,6 +98,7 @@ impl Muxer {
             unsafe {
                 (*stream.parameters().as_ptr().cast_mut()).codec_tag = 0;
             }
+            describe_stream(&mut stream, spec.name.as_deref(), is_default(specs, i));
         }
         let mut options = Dictionary::new();
         if container == Container::FragmentedMp4 {
@@ -77,22 +136,48 @@ impl Muxer {
     }
 }
 
+/// Spans closer than this (seconds) are merged into one.
+const HEARD_MERGE: f64 = 1.0;
+
 /// Keeps the most recent `seconds` of packets, always starting at a video keyframe.
 pub struct PacketRing {
     pub specs: Vec<StreamSpec>,
     seconds: f64,
     packets: VecDeque<(usize, ffmpeg::Packet, f64)>,
+    /// Per stream: when a source track's source was heard (seconds on the ring's clock).
+    heard: Vec<VecDeque<(f64, f64)>>,
     pub bytes: u64,
 }
 
 impl PacketRing {
     pub fn new(specs: Vec<StreamSpec>, seconds: f64) -> Self {
         Self {
+            heard: specs.iter().map(|_| VecDeque::new()).collect(),
             specs,
             seconds,
             packets: VecDeque::new(),
             bytes: 0,
         }
+    }
+
+    /// Notes that stream `stream`'s source made sound from `from` to `to` (seconds).
+    pub fn mark_heard(&mut self, stream: usize, from: f64, to: f64) {
+        let Some(spans) = self.heard.get_mut(stream) else {
+            return;
+        };
+        match spans.back_mut() {
+            Some(last) if from <= last.1 + HEARD_MERGE => last.1 = last.1.max(to),
+            _ => spans.push_back((from, to)),
+        }
+    }
+
+    /// Whether stream `stream` belongs in a file covering `from..=to`: always, unless it is a
+    /// source track whose source made no sound in that time.
+    fn keeps(&self, stream: usize, from: f64, to: f64) -> bool {
+        !self.specs[stream].source_track
+            || self.heard[stream]
+                .iter()
+                .any(|&(a, b)| a <= to && b >= from)
     }
 
     fn time_of(&self, stream: usize, packet: &ffmpeg::Packet) -> f64 {
@@ -121,6 +206,11 @@ impl PacketRing {
                 Some((i, t)) if newest - t >= self.seconds => {
                     for (_, p, _) in self.packets.drain(..i) {
                         self.bytes -= p.size() as u64;
+                    }
+                    for spans in &mut self.heard {
+                        while spans.front().is_some_and(|s| s.1 < t) {
+                            spans.pop_front();
+                        }
                     }
                 }
                 _ => break,
@@ -169,10 +259,22 @@ impl PacketRing {
         if to < t0 {
             return Err(MediaError::Io("that moment is no longer buffered".into()));
         }
-        let mut muxer = Muxer::create(path, container, &self.specs)?;
+        // Ring stream → file stream, leaving out source tracks that were silent throughout.
+        let mut map = vec![None; self.specs.len()];
+        let mut specs = Vec::new();
+        for (i, spec) in self.specs.iter().enumerate() {
+            if self.keeps(i, t0, to) {
+                map[i] = Some(specs.len());
+                specs.push(spec.clone());
+            }
+        }
+        let mut muxer = Muxer::create(path, container, &specs)?;
         let mut end = t0;
         let mut video_done = false;
         for (stream, packet, t) in self.packets.iter().skip(start) {
+            let Some(out) = map[*stream] else {
+                continue;
+            };
             let video = self.specs[*stream].is_video;
             if video && *t > to {
                 // Packets are in decode order: stop video at the first one past the end, so
@@ -190,7 +292,7 @@ impl PacketRing {
             let mut p = packet.clone();
             p.set_pts(p.pts().map(|v| v - offset));
             p.set_dts(p.dts().map(|v| v - offset));
-            muxer.write(*stream, p)?;
+            muxer.write(out, p)?;
         }
         muxer.finish()?;
         Ok((t0, end))
@@ -199,6 +301,37 @@ impl PacketRing {
 
 /// Copies all streams of `input` into `output` (e.g. MKV → MP4) without re-encoding.
 pub fn remux(input: &Path, output: &Path, container: Container) -> Result<(), MediaError> {
+    remux_without(input, output, container, &[])
+}
+
+/// A stream's title (`title`, or MP4's `handler_name` when it isn't a generic handler name).
+pub fn stream_name(stream: &ffmpeg::format::stream::Stream<'_>) -> Option<String> {
+    let metadata = stream.metadata();
+    metadata
+        .get("title")
+        .or_else(|| {
+            metadata
+                .get("handler_name")
+                .filter(|h| !matches!(*h, "SoundHandler" | "VideoHandler" | ""))
+        })
+        .map(str::to_owned)
+}
+
+/// Whether `stream` is marked as a default stream.
+pub fn stream_is_default(stream: &ffmpeg::format::stream::Stream<'_>) -> bool {
+    stream
+        .disposition()
+        .contains(ffmpeg::format::stream::Disposition::DEFAULT)
+}
+
+/// Like [`remux`], leaving out the input streams whose indexes are in `leave_out`. Stream
+/// names and default flags are kept.
+pub fn remux_without(
+    input: &Path,
+    output: &Path,
+    container: Container,
+    leave_out: &[usize],
+) -> Result<(), MediaError> {
     crate::init();
     let mut ictx = ffmpeg::format::input(input)?;
     let mut octx = ffmpeg::format::output_as(output, container.format_name())?;
@@ -208,7 +341,8 @@ pub fn remux(input: &Path, output: &Path, container: Container) -> Result<(), Me
         if !matches!(
             medium,
             ffmpeg::media::Type::Video | ffmpeg::media::Type::Audio
-        ) {
+        ) || leave_out.contains(&stream.index())
+        {
             map.push(None);
             continue;
         }
@@ -217,6 +351,11 @@ pub fn remux(input: &Path, output: &Path, container: Container) -> Result<(), Me
         unsafe {
             (*out.parameters().as_ptr().cast_mut()).codec_tag = 0;
         }
+        describe_stream(
+            &mut out,
+            stream_name(&stream).as_deref(),
+            stream_is_default(&stream),
+        );
         map.push(Some((out.index(), stream.time_base())));
     }
     octx.write_header()?;

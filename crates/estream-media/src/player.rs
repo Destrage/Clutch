@@ -50,6 +50,9 @@ pub struct PlayerSettings {
     pub shuffle: bool,
     /// How long still images stay up.
     pub image_seconds: f32,
+    /// Audio streams to play, by position among the file's audio streams, mixed together
+    /// (`None`: the file's main audio stream).
+    pub audio_streams: Option<Vec<usize>>,
 }
 
 impl Default for PlayerSettings {
@@ -59,6 +62,7 @@ impl Default for PlayerSettings {
             looping: true,
             shuffle: false,
             image_seconds: 5.0,
+            audio_streams: None,
         }
     }
 }
@@ -96,6 +100,7 @@ impl PlayerSettings {
                 .get("image_seconds")
                 .and_then(|v| v.as_f64())
                 .map_or(5.0, |v| v.clamp(0.5, 3600.0) as f32),
+            audio_streams: None,
         }
     }
 }
@@ -154,6 +159,7 @@ enum Command {
     Next,
     Previous,
     Seek(Duration),
+    AudioStreams(Option<Vec<usize>>),
 }
 
 struct Shared {
@@ -232,6 +238,18 @@ impl Player {
 
     pub fn seek(&self, position: Duration) {
         let _ = self.commands.send(Command::Seek(position));
+    }
+
+    /// Plays these audio streams (positions among the file's audio streams) mixed, or the main
+    /// one with `None`, carrying on from the current position.
+    pub fn set_audio_streams(&self, streams: Option<Vec<usize>>) {
+        if let Ok(mut current) = self.settings.lock() {
+            if current.audio_streams == streams {
+                return;
+            }
+            current.audio_streams = streams.clone();
+        }
+        let _ = self.commands.send(Command::AudioStreams(streams));
     }
 
     pub fn status(&self) -> PlayerStatus {
@@ -368,6 +386,31 @@ impl Clock {
     }
 }
 
+/// One audio stream being decoded.
+struct AudioIn {
+    index: usize,
+    decoder: ffmpeg::decoder::Audio,
+    /// Time base and start time.
+    clock: (ffmpeg::Rational, i64),
+    resampler: Option<software::resampling::Context>,
+    /// Samples (interleaved stereo, 48 kHz) waiting to be mixed with the other streams.
+    pending: VecDeque<f32>,
+}
+
+/// The names of a file's audio streams, in order (`Track N` for unnamed ones).
+pub fn audio_stream_names(path: &Path) -> Vec<String> {
+    crate::init();
+    let Ok(input) = format::input(path) else {
+        return Vec::new();
+    };
+    input
+        .streams()
+        .filter(|s| s.parameters().medium() == media::Type::Audio)
+        .enumerate()
+        .map(|(n, s)| crate::mux::stream_name(&s).unwrap_or_else(|| format!("Track {}", n + 1)))
+        .collect()
+}
+
 struct Decoder {
     shared: Arc<Shared>,
     commands: Receiver<Command>,
@@ -436,6 +479,11 @@ impl Decoder {
                 Command::Previous => return Some(Outcome::Previous),
                 Command::Seek(d) => return Some(Outcome::Seek(d)),
                 Command::Settings(s) => return Some(Outcome::Settings(s)),
+                Command::AudioStreams(streams) => {
+                    // Picks up where it is with the new streams.
+                    self.settings.audio_streams = streams;
+                    return Some(Outcome::Seek(self.clock.position()));
+                }
             }
         }
         None
@@ -626,14 +674,22 @@ impl Decoder {
         self.status(|s| s.duration = duration);
         let still = has_ext(path, IMAGE_EXTENSIONS);
         let video_index = input.streams().best(media::Type::Video).map(|s| s.index());
-        let audio_index = if still {
-            None
-        } else {
-            input.streams().best(media::Type::Audio).map(|s| s.index())
-        };
-        if video_index.is_none() && audio_index.is_none() {
+        let main_audio = input.streams().best(media::Type::Audio).map(|s| s.index());
+        if video_index.is_none() && main_audio.is_none() {
             return Outcome::Failed("no audio or video in this file".into());
         }
+        let audio_indexes: Vec<usize> = match (&self.settings.audio_streams, still) {
+            (_, true) => Vec::new(),
+            (None, false) => main_audio.into_iter().collect(),
+            (Some(chosen), false) => {
+                let all: Vec<usize> = input
+                    .streams()
+                    .filter(|s| s.parameters().medium() == media::Type::Audio)
+                    .map(|s| s.index())
+                    .collect();
+                chosen.iter().filter_map(|&k| all.get(k).copied()).collect()
+            }
+        };
         let open = |index: Option<usize>| -> Option<(ffmpeg::codec::decoder::Opened, ffmpeg::Rational, i64)> {
             let stream = input.stream(index?)?;
             let parameters = stream.parameters();
@@ -659,10 +715,26 @@ impl Decoder {
             ))
         };
         let mut video = open(video_index).and_then(|(d, tb, st)| Some((d.video().ok()?, tb, st)));
-        let mut audio = open(audio_index).and_then(|(d, tb, st)| Some((d.audio().ok()?, tb, st)));
-        if video.is_none() && audio.is_none() {
+        let mut audio: Vec<AudioIn> = audio_indexes
+            .iter()
+            .filter_map(|&index| {
+                let (d, tb, st) = open(Some(index))?;
+                Some(AudioIn {
+                    index,
+                    decoder: d.audio().ok()?,
+                    clock: (tb, st),
+                    resampler: None,
+                    pending: VecDeque::new(),
+                })
+            })
+            .collect();
+        if video.is_none() && audio.is_empty() && !audio_indexes.is_empty() {
             return Outcome::Failed("unsupported codec".into());
         }
+        // Several streams are summed: each collects samples until all have some.
+        let mixing = audio.len() > 1;
+        let mut mix_at: Option<Duration> = None;
+        let mut flushing = false;
         if video.is_none()
             && let Ok(mut p) = self.shared.picture.lock()
         {
@@ -693,7 +765,6 @@ impl Decoder {
             u32,
             PixelLayout,
         )> = None;
-        let mut resampler: Option<software::resampling::Context> = None;
         let mut last_video = Duration::ZERO;
         let mut packet = ffmpeg::Packet::empty();
         let mut eof = false;
@@ -728,25 +799,60 @@ impl Decoder {
             };
         }
         macro_rules! drain_audio {
-            () => {
-                if let Some((dec, tb, st)) = &mut audio {
-                    let mut decoded = frame::Audio::empty();
-                    while dec.receive_frame(&mut decoded).is_ok() {
-                        let t =
-                            seconds(decoded.timestamp().or(decoded.pts()).unwrap_or(0), *tb, *st);
-                        if t + Duration::from_millis(20) < start_at {
-                            continue;
-                        }
-                        if let Some(o) = self.wait_until(t.saturating_sub(AUDIO_LEAD)) {
-                            return o;
-                        }
-                        match convert_audio(&decoded, &mut resampler) {
-                            Ok(samples) => self.push_audio(&samples),
-                            Err(e) => return Outcome::Failed(e),
-                        }
+            ($k:expr) => {
+                let k = $k;
+                let mut decoded = frame::Audio::empty();
+                while audio[k].decoder.receive_frame(&mut decoded).is_ok() {
+                    let (tb, st) = audio[k].clock;
+                    let t = seconds(decoded.timestamp().or(decoded.pts()).unwrap_or(0), tb, st);
+                    if t + Duration::from_millis(20) < start_at {
+                        continue;
+                    }
+                    if !mixing && let Some(o) = self.wait_until(t.saturating_sub(AUDIO_LEAD)) {
+                        return o;
+                    }
+                    let samples = match convert_audio(&decoded, &mut audio[k].resampler) {
+                        Ok(samples) => samples,
+                        Err(e) => return Outcome::Failed(e),
+                    };
+                    if mixing {
+                        mix_at.get_or_insert(t);
+                        audio[k].pending.extend(samples);
+                    } else {
+                        self.push_audio(&samples);
                         if video.is_none() {
                             self.status(|s| s.position = t);
                         }
+                    }
+                }
+                // Mix what every stream has. A stream that stops producing (or the end of the
+                // file) doesn't hold the others back for more than a second.
+                while mixing {
+                    let fewest = audio.iter().map(|a| a.pending.len() / 2).min().unwrap_or(0);
+                    let most = audio.iter().map(|a| a.pending.len() / 2).max().unwrap_or(0);
+                    let n = if fewest == 0 && (flushing || most > SAMPLE_RATE as usize) {
+                        most
+                    } else {
+                        fewest
+                    };
+                    if n == 0 {
+                        break;
+                    }
+                    let mut mixed = vec![0.0f32; n * 2];
+                    for a in &mut audio {
+                        let take = a.pending.len().min(n * 2);
+                        for (m, s) in mixed.iter_mut().zip(a.pending.drain(..take)) {
+                            *m += s;
+                        }
+                    }
+                    let at = mix_at.unwrap_or(start_at);
+                    if let Some(o) = self.wait_until(at.saturating_sub(AUDIO_LEAD)) {
+                        return o;
+                    }
+                    self.push_audio(&mixed);
+                    mix_at = Some(at + Duration::from_secs_f64(n as f64 / SAMPLE_RATE as f64));
+                    if video.is_none() {
+                        self.status(|s| s.position = at);
                     }
                 }
             };
@@ -765,11 +871,9 @@ impl Decoder {
                         {
                             let _ = dec.send_packet(&packet);
                             drain_video!();
-                        } else if Some(index) == audio_index
-                            && let Some((dec, ..)) = &mut audio
-                        {
-                            let _ = dec.send_packet(&packet);
-                            drain_audio!();
+                        } else if let Some(k) = audio.iter().position(|a| a.index == index) {
+                            let _ = audio[k].decoder.send_packet(&packet);
+                            drain_audio!(k);
                         }
                     }
                     Err(ffmpeg::Error::Eof) => {
@@ -777,11 +881,14 @@ impl Decoder {
                         if let Some((dec, ..)) = &mut video {
                             let _ = dec.send_eof();
                         }
-                        if let Some((dec, ..)) = &mut audio {
-                            let _ = dec.send_eof();
+                        for a in &mut audio {
+                            let _ = a.decoder.send_eof();
                         }
                         drain_video!();
-                        drain_audio!();
+                        flushing = true;
+                        for k in 0..audio.len() {
+                            drain_audio!(k);
+                        }
                     }
                     Err(e) => return Outcome::Failed(e.to_string()),
                 }

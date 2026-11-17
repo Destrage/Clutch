@@ -1379,6 +1379,11 @@ export component SettingsDialog inherits Modal {
                             }
                         }
                     }
+                    SettingRow {
+                        label: "Separate track for each source";
+                        hint: "Recordings and clips also keep the game, mic, Discord… on tracks of their own";
+                        Toggle { checked: root.form.source-tracks; toggled(v) => { root.set("source-tracks", v ? 1 : 0); } }
+                    }
                 }
 
                 if root.page == 3: VerticalLayout {

@@ -23,6 +23,8 @@ struct Media {
     short: PathBuf,
     image: PathBuf,
     alpha: PathBuf,
+    /// Two audio streams: "Tone" (1 kHz) and "Silence".
+    tracks: PathBuf,
 }
 
 fn generate(exe: &Path, args: &[&str], out: &Path) {
@@ -48,6 +50,7 @@ fn media() -> Option<&'static Media> {
                 short: dir.join("short.mp4"),
                 image: dir.join("blue.png"),
                 alpha: dir.join("alpha.mov"),
+                tracks: dir.join("tracks.mkv"),
             };
             generate(
                 &exe,
@@ -105,6 +108,40 @@ fn media() -> Option<&'static Media> {
                     "argb",
                 ],
                 &m.alpha,
+            );
+            generate(
+                &exe,
+                &[
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc=size=160x120:rate=30:duration=3",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=frequency=1000:duration=3",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "anullsrc=r=48000:cl=stereo",
+                    "-map",
+                    "0",
+                    "-map",
+                    "1",
+                    "-map",
+                    "2",
+                    "-metadata:s:a:0",
+                    "title=Tone",
+                    "-metadata:s:a:1",
+                    "title=Silence",
+                    "-c:v",
+                    "libopenh264",
+                    "-c:a",
+                    "aac",
+                    "-t",
+                    "3",
+                ],
+                &m.tracks,
             );
             Some(m)
         })
@@ -263,4 +300,49 @@ fn players_are_shared_by_source_id() {
         estream_media::player::get("src-1").is_none(),
         "freed with its sources"
     );
+}
+
+/// Samples above a whisper in about `ms` of playback.
+fn loud_samples(player: &Player, ms: u64) -> usize {
+    let (mut l, mut r) = (vec![0.0f32; 4800], vec![0.0f32; 4800]);
+    let mut loud = 0;
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_millis(ms) {
+        std::thread::sleep(Duration::from_millis(10));
+        let n = player.read_audio(&mut l, &mut r);
+        loud += l[..n].iter().filter(|s| s.abs() > 0.05).count();
+    }
+    loud
+}
+
+#[test]
+fn audio_streams_are_named_and_chosen() {
+    let Some(m) = media() else { return };
+    assert_eq!(
+        estream_media::player::audio_stream_names(&m.tracks),
+        ["Tone", "Silence"]
+    );
+    // Only the silent stream: nothing heard.
+    let silent = Player::new(PlayerSettings {
+        looping: false,
+        audio_streams: Some(vec![1]),
+        ..settings(&[&m.tracks])
+    });
+    assert_eq!(loud_samples(&silent, 800), 0);
+    // Both mixed: the tone is heard.
+    let both = Player::new(PlayerSettings {
+        looping: false,
+        audio_streams: Some(vec![0, 1]),
+        ..settings(&[&m.tracks])
+    });
+    assert!(loud_samples(&both, 800) > 1000);
+    // Switching while playing carries on with the new streams from the same place.
+    both.set_audio_streams(Some(vec![1]));
+    std::thread::sleep(Duration::from_millis(300));
+    let position = both.status().position;
+    assert!(
+        position > Duration::from_millis(500),
+        "kept its place: {position:?}"
+    );
+    assert_eq!(loud_samples(&both, 600), 0, "now only the silent stream");
 }

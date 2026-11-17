@@ -564,6 +564,7 @@ fn run(player: Arc<Player>, state: Arc<Mutex<State>>, stop: Arc<AtomicBool>, cre
             looping: false,
             shuffle: false,
             image_seconds: 5.0,
+            audio_streams: None,
         });
         started = Instant::now();
         if !credit_file.as_os_str().is_empty() {
