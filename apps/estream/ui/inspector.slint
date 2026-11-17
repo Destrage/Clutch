@@ -3,10 +3,10 @@
 
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
-import { Inspect, PropRow, GradientStopRow, AudioInspect, VideoFilterRow, MediaInspect, InspectorFolds } from "types.slint";
+import { Inspect, PropRow, GradientStopRow, AudioInspect, VideoFilterRow, MediaInspect, InspectorFolds, MaskInspect } from "types.slint";
 import {
     Button, IconButton, Icon, TextField, TextArea, NumberField, Toggle, Select, Panel, Badge,
-    EmptyState, Hint, ValueSlider, FoldPanel, FieldRow, ParamEditor,
+    EmptyState, Hint, ValueSlider, FoldPanel, FieldRow, ParamEditor, Segmented,
 } from "widgets.slint";
 import { AudioSettings } from "sound.slint";
 import { KindIcon } from "panels.slint";
@@ -310,6 +310,8 @@ component InspectorTab inherits Rectangle {
 
 export component InspectorPanel inherits Panel {
     in property <Inspect> sel;
+    /// The selected item's mask and edge effects.
+    in property <MaskInspect> mask;
     in property <string> canvas-info;
     /// The edited canvas's size, for the shape of the Place panel's small canvas.
     in property <float> canvas-w: 1920;
@@ -829,6 +831,236 @@ export component InspectorPanel inherits Panel {
                             options: ["Normal", "Additive", "Multiply", "Screen"];
                             current-index: root.sel.blend;
                             selected(i) => { root.select-option("blend", i); }
+                        }
+                    }
+                }
+                // Shapes that cut the picture, so what's below shows through.
+                if root.mask.can: FoldPanel {
+                    title: "Mask";
+                    folded: root.folds.mask;
+                    note: root.folds.mask && root.mask.shapes.length > 0 ? root.mask.shapes.length : "";
+                    has-switch: root.mask.shapes.length > 0;
+                    switch-on: root.mask.on;
+                    toggle-fold => { root.folds.mask = !root.folds.mask; }
+                    switched(v) => { root.toggle("mask-on", v); }
+                    Button {
+                        text: root.mask.editing ? "Done editing" : "Edit mask on the preview";
+                        kind: root.mask.editing ? "primary" : "default";
+                        tooltip: "Draw rectangles, ellipses, polygons and freehand shapes on the picture";
+                        clicked => { root.action(root.mask.editing ? "mask.done" : "mask.edit"); }
+                    }
+                    HorizontalLayout {
+                        spacing: 4px;
+                        Button { text: "Circle"; kind: "ghost"; tooltip: "Keep a circle in the middle"; clicked => { root.action("mask.preset.circle"); } }
+                        Button { text: "Rounded"; kind: "ghost"; tooltip: "Round the corners"; clicked => { root.action("mask.preset.rounded"); } }
+                    }
+                    HorizontalLayout {
+                        spacing: 4px;
+                        Button { text: "Cut corner"; kind: "ghost"; tooltip: "Cut away the top right corner (a minimap or HUD)"; clicked => { root.action("mask.preset.corner"); } }
+                        Button { text: "Diagonal"; kind: "ghost"; tooltip: "Keep the left part up to a slanted line"; clicked => { root.action("mask.preset.diagonal"); } }
+                    }
+                    if root.mask.shapes.length == 0: Text {
+                        text: "No shapes: the whole picture shows. Edge effects follow its rectangle.";
+                        color: Theme.text-faint;
+                        font-size: Theme.font-xs;
+                        wrap: word-wrap;
+                    }
+                    // Listed top first: the last shape applies over the ones before it.
+                    for shape[k] in root.mask.shapes: FoldPanel {
+                        property <bool> closed;
+                        sub: true;
+                        title: shape.name;
+                        note: shape.cut ? "Cut" : "Keep";
+                        folded: self.closed;
+                        has-moves: true;
+                        background: shape.selected ? Theme.hover : Theme.surface;
+                        toggle-fold => { self.closed = !self.closed; }
+                        move(up) => { root.action((up ? "mask.shape.up:" : "mask.shape.down:") + (root.mask.shapes.length - 1 - k)); }
+                        remove => { root.action("mask.shape.remove:" + (root.mask.shapes.length - 1 - k)); }
+                        Segmented {
+                            label: shape.name + " keeps or cuts";
+                            options: ["Keep", "Cut"];
+                            current: shape.cut ? 1 : 0;
+                            selected(i) => { root.select-option("mask-mode:" + (root.mask.shapes.length - 1 - k), i); }
+                        }
+                        ValueSlider {
+                            label: "Feather";
+                            value: shape.feather;
+                            minimum: 0;
+                            maximum: 200;
+                            step: 1;
+                            decimals: 0;
+                            suffix: " px";
+                            changed(v) => { root.edit("mask-feather:" + (root.mask.shapes.length - 1 - k), v); }
+                            committed => { root.commit(); }
+                        }
+                        if shape.has-radius: ValueSlider {
+                            label: "Corner radius";
+                            value: shape.radius;
+                            minimum: 0;
+                            maximum: 400;
+                            step: 1;
+                            decimals: 0;
+                            suffix: " px";
+                            changed(v) => { root.edit("mask-radius:" + (root.mask.shapes.length - 1 - k), v); }
+                            committed => { root.commit(); }
+                        }
+                        Button {
+                            text: "Select on the preview";
+                            kind: "ghost";
+                            clicked => { root.action("mask.shape.select:" + (root.mask.shapes.length - 1 - k)); }
+                        }
+                    }
+                    if root.mask.shapes.length > 0: Toggle {
+                        label: "Invert";
+                        checked: root.mask.invert;
+                        toggled(v) => { root.toggle("mask-invert", v); }
+                    }
+                    if root.mask.shapes.length > 0: Button {
+                        text: "Remove all shapes";
+                        kind: "ghost";
+                        clicked => { root.action("mask.clear"); }
+                    }
+                }
+                // Border, glow and shadow along the visible edge.
+                if root.mask.can: FoldPanel {
+                    title: "Edge effects";
+                    folded: root.folds.edges;
+                    note: root.folds.edges ? (root.mask.border ? "Border " : "") + (root.mask.glow ? "Glow " : "") + (root.mask.shadow ? "Shadow" : "") : "";
+                    toggle-fold => { root.folds.edges = !root.folds.edges; }
+                    HorizontalLayout {
+                        spacing: 4px;
+                        Button { text: "Soft shadow"; kind: "ghost"; tooltip: "A dark shadow just below"; clicked => { root.action("mask.style.shadow"); } }
+                        Button { text: "Neon glow"; kind: "ghost"; tooltip: "A bright glow around the edge"; clicked => { root.action("mask.style.neon"); } }
+                    }
+                    HorizontalLayout {
+                        spacing: 4px;
+                        Button { text: "Thin border"; kind: "ghost"; tooltip: "A white line around the edge"; clicked => { root.action("mask.style.border"); } }
+                        Button { text: "None"; kind: "ghost"; tooltip: "Remove every edge effect"; clicked => { root.action("mask.style.none"); } }
+                    }
+                    FoldPanel {
+                        sub: true;
+                        title: "Border";
+                        folded: !root.mask.border;
+                        has-switch: true;
+                        switch-on: root.mask.border;
+                        toggle-fold => { root.toggle("mask-border", !root.mask.border); }
+                        switched(v) => { root.toggle("mask-border", v); }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            ColorSwatch { value: root.mask.border-color; target: "mask:border"; label: "Border color"; }
+                            Segmented {
+                                label: "Border placement";
+                                options: ["Inside", "Center", "Outside"];
+                                current: root.mask.border-place;
+                                selected(i) => { root.select-option("mask-border-place", i); }
+                            }
+                        }
+                        ValueSlider {
+                            label: "Width";
+                            value: root.mask.border-width;
+                            minimum: 0;
+                            maximum: 100;
+                            step: 1;
+                            decimals: 0;
+                            suffix: " px";
+                            changed(v) => { root.edit("mask-border-width", v); }
+                            committed => { root.commit(); }
+                        }
+                    }
+                    FoldPanel {
+                        sub: true;
+                        title: "Glow";
+                        folded: !root.mask.glow;
+                        has-switch: true;
+                        switch-on: root.mask.glow;
+                        toggle-fold => { root.toggle("mask-glow", !root.mask.glow); }
+                        switched(v) => { root.toggle("mask-glow", v); }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            ColorSwatch { value: root.mask.glow-color; target: "mask:glow"; label: "Glow color"; }
+                            Segmented {
+                                label: "Glow placement";
+                                options: ["Outside", "Inside", "Both"];
+                                current: root.mask.glow-place;
+                                selected(i) => { root.select-option("mask-glow-place", i); }
+                            }
+                        }
+                        ValueSlider {
+                            label: "Size";
+                            value: root.mask.glow-size;
+                            minimum: 0;
+                            maximum: 200;
+                            step: 1;
+                            decimals: 0;
+                            suffix: " px";
+                            changed(v) => { root.edit("mask-glow-size", v); }
+                            committed => { root.commit(); }
+                        }
+                        ValueSlider {
+                            label: "Strength";
+                            value: root.mask.glow-strength * 100;
+                            minimum: 0;
+                            maximum: 100;
+                            step: 1;
+                            decimals: 0;
+                            suffix: "%";
+                            changed(v) => { root.edit("mask-glow-strength", v / 100); }
+                            committed => { root.commit(); }
+                        }
+                    }
+                    FoldPanel {
+                        sub: true;
+                        title: "Shadow";
+                        folded: !root.mask.shadow;
+                        has-switch: true;
+                        switch-on: root.mask.shadow;
+                        toggle-fold => { root.toggle("mask-shadow", !root.mask.shadow); }
+                        switched(v) => { root.toggle("mask-shadow", v); }
+                        ColorSwatch { value: root.mask.shadow-color; target: "mask:shadow"; label: "Shadow color"; }
+                        ValueSlider {
+                            label: "Offset X";
+                            value: root.mask.shadow-x;
+                            minimum: -200;
+                            maximum: 200;
+                            step: 1;
+                            decimals: 0;
+                            suffix: " px";
+                            changed(v) => { root.edit("mask-shadow-x", v); }
+                            committed => { root.commit(); }
+                        }
+                        ValueSlider {
+                            label: "Offset Y";
+                            value: root.mask.shadow-y;
+                            minimum: -200;
+                            maximum: 200;
+                            step: 1;
+                            decimals: 0;
+                            suffix: " px";
+                            changed(v) => { root.edit("mask-shadow-y", v); }
+                            committed => { root.commit(); }
+                        }
+                        ValueSlider {
+                            label: "Softness";
+                            value: root.mask.shadow-softness;
+                            minimum: 0;
+                            maximum: 200;
+                            step: 1;
+                            decimals: 0;
+                            suffix: " px";
+                            changed(v) => { root.edit("mask-shadow-softness", v); }
+                            committed => { root.commit(); }
+                        }
+                        ValueSlider {
+                            label: "Opacity";
+                            value: root.mask.shadow-opacity * 100;
+                            minimum: 0;
+                            maximum: 100;
+                            step: 1;
+                            decimals: 0;
+                            suffix: "%";
+                            changed(v) => { root.edit("mask-shadow-opacity", v / 100); }
+                            committed => { root.commit(); }
                         }
                     }
                 }

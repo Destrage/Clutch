@@ -237,6 +237,7 @@ impl Fills {
                     uv_max,
                     opacity: 1.0,
                     blend: BlendMode::Normal,
+                    mask: None,
                 }],
             );
             let source = FilterOutput {
@@ -271,6 +272,7 @@ impl Fills {
             uv_max: Vec2::ONE,
             opacity: flat.opacity,
             blend: flat.blend,
+            mask: None,
         })
     }
 }

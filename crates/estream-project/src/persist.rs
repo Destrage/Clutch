@@ -265,7 +265,11 @@ mod tests {
     fn sample() -> Project {
         let mut p = Project::new_default(1920, 1080, Rational::fps(60));
         let src = SourceDef::new("Bars", "test_pattern", serde_json::json!({ "width": 640 }));
-        let item = SceneItem::source(src.id);
+        let mut item = SceneItem::source(src.id);
+        // A masked item with effects round-trips too.
+        let mut mask = crate::ItemMask::rounded(24.0);
+        mask.effects = crate::MaskEffects::neon_glow();
+        item.mask = Some(mask);
         p.scenes[0].items.push(item.clone());
         p.scenes[0]
             .items

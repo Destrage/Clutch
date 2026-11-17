@@ -33,6 +33,8 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+mod mask_ui;
+
 pub type Shared = Rc<RefCell<App>>;
 
 const BLEND_MODES: [BlendMode; 4] = BlendMode::ALL;
@@ -100,6 +102,9 @@ pub struct App {
     audio_doubles_at: Instant,
     hover: Option<ItemId>,
     drag: Option<Drag>,
+    /// The mask editor over the preview (while editing a mask).
+    mask_edit: Option<crate::mask_edit::Editor>,
+    mask_dim: Option<mask_ui::MaskDim>,
     /// Interactive browser sources: the page the left button went down on (and its item),
     /// the page under the pointer, and the page that has the keyboard.
     web_press: Option<(ItemId, String)>,
@@ -672,6 +677,8 @@ enum PickerTarget {
     /// The selected item's fill: its solid color, or one color of its gradient.
     Fill(ItemId),
     FillStop(ItemId, i32),
+    /// An edge effect's color on the selected item: `border`, `glow` or `shadow`.
+    Mask(ItemId, String),
 }
 
 /// How long the eyedropper waits for a click before giving up.
@@ -1056,6 +1063,8 @@ impl App {
             audio_doubles_at: Instant::now(),
             hover: None,
             drag: None,
+            mask_edit: None,
+            mask_dim: None,
             web_press: None,
             web_hover: None,
             web_focus: None,
@@ -3514,7 +3523,19 @@ impl App {
                 .is_some_and(|t| t.has_video())
                 && inspect.kind != "group";
         }
+        let mask_inspect = self
+            .selected()
+            .map(|(_, item)| self.mask_inspect(&item))
+            .unwrap_or_default();
+        let mask_view = self.mask_view();
+        let mut selection_box = selection_box;
+        if mask_view.visible {
+            // The mask editor has its own handles.
+            selection_box.handles = false;
+        }
         w.set_selection_box(selection_box);
+        w.set_mask_edit(mask_view);
+        w.set_mask_inspect(mask_inspect);
         w.set_inspect(inspect);
         w.set_audio_inspect(self.audio_inspect(&snapshot));
         self.refresh_props(&snapshot);
@@ -10250,6 +10271,9 @@ impl App {
         if target == "fill" {
             return Some(PickerTarget::Fill(self.selection?));
         }
+        if let Some(which) = target.strip_prefix("mask:") {
+            return Some(PickerTarget::Mask(self.selection?, which.into()));
+        }
         let source = self
             .canvas_and_scene()
             .and_then(|(snapshot, _, _)| self.current_source(&snapshot));
@@ -10324,7 +10348,9 @@ impl App {
             }
         }
         // An item's fill follows that item only.
-        if let PickerTarget::Fill(item) | PickerTarget::FillStop(item, _) = &target
+        if let PickerTarget::Fill(item)
+        | PickerTarget::FillStop(item, _)
+        | PickerTarget::Mask(item, _) = &target
             && self.selection != Some(*item)
         {
             self.picker_close();
@@ -10337,6 +10363,7 @@ impl App {
             PickerTarget::CanvasStop(i) => self.canvas_background_gradient_color(i, color),
             PickerTarget::Fill(_) => self.fill_color(color),
             PickerTarget::FillStop(_, i) => self.fill_gradient_color(i, color),
+            PickerTarget::Mask(_, which) => self.mask_color(&which, color),
         }
     }
 
@@ -10686,6 +10713,10 @@ impl App {
     }
 
     pub fn inspect_edit(&mut self, field: &str, value: f32) {
+        if let Some(field) = field.strip_prefix("mask-") {
+            self.mask_edit_field(field, value);
+            return;
+        }
         if let Some(field) = field.strip_prefix("fill-") {
             self.fill_edit(field, value);
             return;
@@ -10824,6 +10855,10 @@ impl App {
     }
 
     pub fn inspect_option(&mut self, field: &str, index: i32) {
+        if let Some(field) = field.strip_prefix("mask-") {
+            self.mask_option(field, index);
+            return;
+        }
         if field == "fill" {
             self.fill_kind(index);
             return;
@@ -10873,6 +10908,10 @@ impl App {
     }
 
     pub fn inspect_toggle(&mut self, field: &str, value: bool) {
+        if let Some(field) = field.strip_prefix("mask-") {
+            self.mask_toggle(field, value);
+            return;
+        }
         match field {
             "visible" => self.update_selected(ItemPatch {
                 visible: Some(value),
@@ -10896,6 +10935,9 @@ impl App {
 
     pub fn pointer(&mut self, kind: &str, x: f32, y: f32, px: f32, mods: Modifiers) {
         let p = Vec2::new(x, y);
+        if self.mask_pointer(kind, p, px, mods) {
+            return;
+        }
         // Interactive browser sources take the pointer, unless Alt is held (Alt edits them).
         if self.web_pointer(kind, p, mods) {
             return;
@@ -11165,6 +11207,9 @@ impl App {
             }
             return true;
         }
+        if self.mask_key(text, ctrl, alt) {
+            return true;
+        }
         // Without system-wide hotkeys, macro and clip hotkeys work while Clutch is in front.
         if let Some(chord) =
             estream_automation::hotkeys::chord_from_slint(text, ctrl, alt, shift, false)
@@ -11218,6 +11263,8 @@ impl App {
             self.scene_activate(scene);
         } else if let Some(item) = id.strip_prefix("item:") {
             self.layer_select(item);
+        } else if let Some(action) = id.strip_prefix("mask.") {
+            self.mask_action(action);
         } else if let Some(action) = actions::by_id(id) {
             self.run(action);
         }
@@ -11318,6 +11365,7 @@ impl App {
             }
             Action::MoveUp | Action::MoveDown => self.move_selected(action == Action::MoveUp),
             Action::GroupSelected => self.group_selected(),
+            Action::EditMask => self.mask_action("toggle-edit"),
             Action::FitToCanvas
             | Action::StretchToCanvas
             | Action::CenterOnCanvas
@@ -12261,7 +12309,7 @@ fn meter_position(level: f32) -> f32 {
 }
 
 /// The inspector's panels, by the names their folds are saved under.
-const INSPECTOR_PANELS: [&str; 14] = [
+const INSPECTOR_PANELS: [&str; 16] = [
     "settings",
     "page",
     "playback",
@@ -12270,6 +12318,8 @@ const INSPECTOR_PANELS: [&str; 14] = [
     "crop",
     "fill",
     "appearance",
+    "mask",
+    "edges",
     "effects",
     "volume",
     "hearing",
@@ -12288,6 +12338,8 @@ fn inspector_fold<'a>(folds: &'a mut InspectorFolds, panel: &str) -> Option<&'a 
         "crop" => &mut folds.crop,
         "fill" => &mut folds.fill,
         "appearance" => &mut folds.appearance,
+        "mask" => &mut folds.mask,
+        "edges" => &mut folds.edges,
         "effects" => &mut folds.effects,
         "volume" => &mut folds.volume,
         "hearing" => &mut folds.hearing,

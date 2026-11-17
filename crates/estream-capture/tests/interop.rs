@@ -88,6 +88,7 @@ fn center_pixel(
             uv_max: [1.0, 1.0].into(),
             opacity: 1.0,
             blend: estream_core::BlendMode::Normal,
+            mask: None,
         }],
     );
     let preview = estream_gpu::create_preview_texture(&gpu, 64, 32);

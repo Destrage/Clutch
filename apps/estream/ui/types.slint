@@ -55,6 +55,77 @@ export struct CanvasBox {
     locked: bool,
 }
 
+/// One mask shape's outline over the item (SVG commands in a 1000 × 1000 box).
+export struct MaskOutline {
+    commands: string,
+    selected: bool,
+    cut: bool,
+}
+
+/// A mask handle at item unit point (u, v).
+export struct MaskHandle {
+    u: float,
+    v: float,
+    active: bool,
+}
+
+/// The mask editor over the preview, drawn in the box of the item's visible picture.
+export struct MaskEditView {
+    visible: bool,
+    cx: float,
+    cy: float,
+    w: float,
+    h: float,
+    rotation: float,
+    /// Dims what the mask hides.
+    dim: image,
+    outlines: [MaskOutline],
+    /// A shape or polygon being drawn.
+    draft: string,
+    handles: [MaskHandle],
+    /// Select, Rectangle, Ellipse, Polygon, Freehand.
+    tool: int,
+    cut: bool,
+    hint: string,
+}
+
+/// One shape in the inspector's Mask panel.
+export struct MaskShapeRow {
+    name: string,
+    cut: bool,
+    feather: float,
+    has-radius: bool,
+    radius: float,
+    selected: bool,
+}
+
+/// The selected item's mask and edge effects, for the inspector.
+export struct MaskInspect {
+    /// A source item (groups have no mask).
+    can: bool,
+    on: bool,
+    invert: bool,
+    editing: bool,
+    shapes: [MaskShapeRow],
+    border: bool,
+    border-color: color,
+    border-width: float,
+    /// Inside, Center, Outside.
+    border-place: int,
+    glow: bool,
+    glow-color: color,
+    glow-size: float,
+    glow-strength: float,
+    /// Outside, Inside, Both.
+    glow-place: int,
+    shadow: bool,
+    shadow-color: color,
+    shadow-x: float,
+    shadow-y: float,
+    shadow-softness: float,
+    shadow-opacity: float,
+}
+
 export struct Guide {
     vertical: bool,
     pos: float,
@@ -139,6 +210,8 @@ export struct InspectorFolds {
     crop: bool,
     fill: bool,
     appearance: bool,
+    mask: bool,
+    edges: bool,
     effects: bool,
     volume: bool,
     hearing: bool,

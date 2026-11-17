@@ -53,11 +53,27 @@ pub struct ItemPatch {
     pub blend: Option<BlendMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fill: Option<estream_project::ItemFill>,
+    /// `Some(None)` removes the mask (written as `null`).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
+    pub mask: Option<Option<estream_project::ItemMask>>,
+}
+
+/// A field that is present (even as `null`) is `Some`, so `null` can clear a value.
+fn present<'de, T, D>(d: D) -> Result<Option<T>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    T::deserialize(d).map(Some)
 }
 
 impl ItemPatch {
     /// Bitmask of the fields this patch touches (used for undo coalescing).
-    pub fn fields(&self) -> u8 {
+    pub fn fields(&self) -> u16 {
         [
             self.name.is_some(),
             self.transform.is_some(),
@@ -67,10 +83,11 @@ impl ItemPatch {
             self.opacity.is_some(),
             self.blend.is_some(),
             self.fill.is_some(),
+            self.mask.is_some(),
         ]
         .iter()
         .enumerate()
-        .fold(0, |mask, (i, set)| mask | ((*set as u8) << i))
+        .fold(0, |mask, (i, set)| mask | ((*set as u16) << i))
     }
 }
 
@@ -255,7 +272,7 @@ pub enum Change {
 /// Identifies edits that merge into one undo step when repeated quickly (e.g. drags).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum CoalesceKey {
-    Item(ItemId, u8),
+    Item(ItemId, u16),
     Canvas(CanvasId),
     SourceSettings(SourceId),
     SourceAudio(SourceId),
@@ -697,6 +714,12 @@ impl Command {
                     .scene_mut(scene)
                     .ok_or(CommandError::NoScene(scene))?;
                 let it = s.find_item_mut(item).ok_or(CommandError::NoItem(item))?;
+                if let Some(Some(mask)) = &patch.mask {
+                    if it.source_id().is_none() {
+                        return Err(CommandError::Invalid("groups can't have masks".into()));
+                    }
+                    mask.validate().map_err(CommandError::Invalid)?;
+                }
                 let mut old = ItemPatch::default();
                 if let Some(v) = patch.name {
                     old.name = Some(std::mem::replace(&mut it.name, v));
@@ -721,6 +744,9 @@ impl Command {
                 }
                 if let Some(v) = patch.fill {
                     old.fill = Some(std::mem::replace(&mut it.fill, v));
+                }
+                if let Some(v) = patch.mask {
+                    old.mask = Some(std::mem::replace(&mut it.mask, v));
                 }
                 Ok(applied(
                     UpdateItem {
@@ -1133,6 +1159,83 @@ mod tests {
         assert_eq!(it.opacity, 0.5);
         a.inverse.apply(&mut p).unwrap();
         assert_eq!(p, before);
+    }
+
+    #[test]
+    fn masks_are_item_edits_that_undo_and_validate() {
+        use estream_project::ItemMask;
+        let (mut p, scene) = project();
+        let src = add_source(&mut p);
+        let item = SceneItem::source(src);
+        let id = item.id;
+        let group = SceneItem::group("G", Vec::new());
+        let group_id = group.id;
+        for (index, item) in [item, group].into_iter().enumerate() {
+            Command::AddItem {
+                scene,
+                parent: None,
+                index,
+                item,
+            }
+            .apply(&mut p)
+            .unwrap();
+        }
+        let before = p.clone();
+        let set = |item, mask: Option<ItemMask>| Command::UpdateItem {
+            scene,
+            item,
+            patch: ItemPatch {
+                mask: Some(mask),
+                ..Default::default()
+            },
+        };
+        let a = set(id, Some(ItemMask::circle(1.0))).apply(&mut p).unwrap();
+        let it = p.scene(scene).unwrap().find_item(id).unwrap();
+        assert_eq!(it.mask, Some(ItemMask::circle(1.0)));
+        a.inverse.apply(&mut p).unwrap();
+        assert_eq!(p, before);
+
+        // Bad numbers and groups are refused and change nothing.
+        let mut bad = ItemMask::rounded(10.0);
+        bad.shapes[0].feather = -1.0;
+        assert!(set(id, Some(bad)).apply(&mut p).is_err());
+        assert!(
+            set(group_id, Some(ItemMask::circle(1.0)))
+                .apply(&mut p)
+                .is_err()
+        );
+        assert_eq!(p, before);
+
+        // Over JSON, `null` removes the mask and a missing field leaves it alone.
+        let clear: ItemPatch = serde_json::from_str(r#"{"mask":null}"#).unwrap();
+        assert_eq!(clear.mask, Some(None));
+        let untouched: ItemPatch = serde_json::from_str(r#"{"opacity":0.5}"#).unwrap();
+        assert_eq!(untouched.mask, None);
+        let json = serde_json::to_string(&set(id, Some(ItemMask::cut_corner()))).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Command>(&json).unwrap(),
+            set(id, Some(ItemMask::cut_corner()))
+        );
+
+        // Mask drags merge with mask edits only.
+        let key = |patch: ItemPatch| {
+            Command::UpdateItem {
+                scene,
+                item: id,
+                patch,
+            }
+            .coalesce_key()
+        };
+        let mask_only = ItemPatch {
+            mask: Some(None),
+            ..Default::default()
+        };
+        let opacity_only = ItemPatch {
+            opacity: Some(1.0),
+            ..Default::default()
+        };
+        assert_eq!(key(mask_only.clone()), key(mask_only.clone()));
+        assert_ne!(key(mask_only), key(opacity_only));
     }
 
     #[test]

@@ -953,3 +953,186 @@ fn audio_sources_of_a_canvas_include_every_scene() {
         .collect();
     assert_eq!(names, ["Mic", "Music", "Game"]);
 }
+
+/// A white 100 × 100 item with `mask` covering x 30..130 and y 10..110, over a blue background
+/// item on a 160 × 120 canvas. `rotation` 90 turns it clockwise around its top-left corner, which
+/// then sits at (130, 10).
+fn render_masked(mask: Option<estream_project::ItemMask>, rotation: f32) -> Vec<u8> {
+    let mut project = Project::new_default(160, 120, Rational::fps(30));
+    let color = |name: &str, w: u32, h: u32, c: Rgba8| {
+        SourceDef::new(
+            name,
+            "color",
+            serde_json::json!({ "width": w, "height": h, "color": c }),
+        )
+    };
+    let blue = color("Blue", 160, 120, Rgba8::new(0, 0, 255, 255));
+    let white = color("White", 100, 100, Rgba8::WHITE);
+    let mut item = SceneItem::source(white.id);
+    item.transform.position = if rotation == 90.0 {
+        Vec2::new(130.0, 10.0)
+    } else {
+        Vec2::new(30.0, 10.0)
+    };
+    item.transform.rotation = rotation;
+    item.mask = mask;
+    project.scenes[0].items = vec![SceneItem::source(blue.id), item];
+    project.sources = vec![blue, white];
+    let pixels = render_once(&project);
+    // ESTREAM_MASK_PNG=<folder> writes every picture for a look.
+    if let Some(dir) = std::env::var_os("ESTREAM_MASK_PNG") {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = PathBuf::from(dir).join(format!("mask-{n}.png"));
+        readback::save_png(&path, 160, 120, &pixels).unwrap();
+    }
+    pixels
+}
+
+fn rgb(p: &[u8], x: u32, y: u32) -> [u8; 3] {
+    let i = ((y * 160 + x) * 4) as usize;
+    [p[i], p[i + 1], p[i + 2]]
+}
+
+fn near(a: [u8; 3], b: [u8; 3]) -> bool {
+    a.iter().zip(b).all(|(a, b)| a.abs_diff(b) <= 3)
+}
+
+const WHITE: [u8; 3] = [255, 255, 255];
+const BLUE: [u8; 3] = [0, 0, 255];
+
+#[track_caller]
+fn assert_px(p: &[u8], x: u32, y: u32, want: [u8; 3], what: &str) {
+    let got = rgb(p, x, y);
+    assert!(
+        near(got, want),
+        "{what}: ({x}, {y}) is {got:?}, not {want:?}"
+    );
+}
+
+#[test]
+fn masks_cut_items_into_shapes() {
+    use estream_project::{ItemMask, MaskGeometry, MaskShape};
+    let plain = render_masked(None, 0.0);
+    assert_px(&plain, 31, 11, WHITE, "unmasked corner");
+
+    let circle = render_masked(Some(ItemMask::circle(1.0)), 0.0);
+    assert_px(&circle, 80, 60, WHITE, "circle middle");
+    assert_px(&circle, 32, 12, BLUE, "circle leaves the corner");
+    assert_px(&circle, 127, 107, BLUE, "and the opposite corner");
+
+    // Rounded rectangle with a circle cut out of it.
+    let mut ring = ItemMask::rounded(20.0);
+    ring.shapes.push(MaskShape::cut(MaskGeometry::Ellipse {
+        center: Vec2::splat(0.5),
+        radii: Vec2::splat(0.2),
+    }));
+    let ring = render_masked(Some(ring), 0.0);
+    assert_px(&ring, 80, 60, BLUE, "cut circle");
+    assert_px(&ring, 80, 13, WHITE, "between the cut and the edge");
+    assert_px(&ring, 31, 11, BLUE, "rounded corner");
+
+    // Feathered right half: the edge at x = 80 is halfway.
+    let mut half = ItemMask::rounded(0.0);
+    half.shapes[0].geometry = MaskGeometry::Rect {
+        min: Vec2::new(0.5, -1.0),
+        max: Vec2::new(2.0, 2.0),
+        radius: 0.0,
+    };
+    half.shapes[0].feather = 20.0;
+    let soft = render_masked(Some(half), 0.0);
+    let edge = rgb(&soft, 80, 60);
+    assert!(
+        (100..235).contains(&edge[0]),
+        "half blend at the edge: {edge:?}"
+    );
+    assert_px(&soft, 95, 60, WHITE, "inside the feather");
+    assert_px(&soft, 65, 60, BLUE, "outside the feather");
+
+    let mut inverted = ItemMask::circle(1.0);
+    inverted.invert = true;
+    let inverted = render_masked(Some(inverted), 0.0);
+    assert_px(&inverted, 80, 60, BLUE, "inverted circle");
+    assert_px(&inverted, 32, 12, WHITE, "inverted keeps the corner");
+
+    let mut off = ItemMask::circle(1.0);
+    off.enabled = false;
+    assert_eq!(
+        render_masked(Some(off), 0.0),
+        plain,
+        "a mask that's off draws the whole item"
+    );
+
+    // The mask turns with the item: turned 90° clockwise, the item's top edge is at x = 130 and
+    // its top right corner lands at the bottom right.
+    let mut turned = ItemMask::cut_corner();
+    let rotated = render_masked(Some(turned.clone()), 90.0);
+    assert_px(&rotated, 120, 100, BLUE, "cut corner, turned");
+    assert_px(&rotated, 120, 20, WHITE, "unturned corner place stays");
+    turned.shapes.clear();
+    assert_eq!(
+        render_masked(Some(turned), 90.0),
+        render_masked(None, 90.0),
+        "an empty mask changes nothing"
+    );
+}
+
+#[test]
+fn edge_effects_follow_the_shape() {
+    use estream_project::{Border, BorderPlacement, Glow, GlowPlacement, ItemMask, Shadow};
+    let red = Rgba8::new(255, 0, 0, 255);
+    let green = Rgba8::new(0, 255, 0, 255);
+
+    // Outside border on a circle (center (80, 60), radius 50: top at y = 10).
+    let mut ringed = ItemMask::circle(1.0);
+    ringed.effects.border = Some(Border {
+        color: red,
+        width: 4.0,
+        placement: BorderPlacement::Outside,
+    });
+    let p = render_masked(Some(ringed), 0.0);
+    assert_px(&p, 80, 8, [255, 0, 0], "border above the circle");
+    assert_px(&p, 80, 30, WHITE, "inside stays");
+    assert_px(&p, 80, 3, BLUE, "beyond the border");
+    assert_px(&p, 33, 13, BLUE, "corner outside the border");
+
+    // An outer glow reaches past the item's rectangle (left edge x = 30).
+    let mut glowing = ItemMask::rounded(0.0);
+    glowing.effects.glow = Some(Glow {
+        color: red,
+        size: 20.0,
+        strength: 1.0,
+        placement: GlowPlacement::Outside,
+    });
+    let p = render_masked(Some(glowing), 0.0);
+    let glow = rgb(&p, 25, 60);
+    assert!(glow[0] > 120, "glow outside the item: {glow:?}");
+    assert!(rgb(&p, 15, 60)[0] < glow[0], "and fades");
+    assert_px(&p, 4, 60, BLUE, "gone past its size");
+
+    // Offset shadow below an item without shapes (bottom edge y = 110).
+    let mut shadowed = ItemMask::default();
+    shadowed.effects.shadow = Some(Shadow {
+        color: Rgba8::BLACK,
+        offset: Vec2::new(0.0, 6.0),
+        softness: 0.0,
+        opacity: 1.0,
+    });
+    let p = render_masked(Some(shadowed), 0.0);
+    assert_px(&p, 80, 113, [0, 0, 0], "shadow under the item");
+    assert_px(&p, 80, 7, BLUE, "nothing above");
+    assert_px(&p, 80, 60, WHITE, "item on top");
+
+    // A border on an item without shapes follows its rectangle.
+    let mut framed = ItemMask::default();
+    framed.effects.border = Some(Border {
+        color: green,
+        width: 4.0,
+        placement: BorderPlacement::Outside,
+    });
+    let p = render_masked(Some(framed), 0.0);
+    assert_px(&p, 28, 60, [0, 255, 0], "border left of the item");
+    assert_px(&p, 80, 112, [0, 255, 0], "border below the item");
+    assert_px(&p, 32, 60, WHITE, "item inside");
+    assert_px(&p, 24, 60, BLUE, "beyond the border");
+}

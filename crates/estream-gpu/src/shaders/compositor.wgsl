@@ -16,10 +16,14 @@ struct Item {
 @group(0) @binding(0) var<uniform> item: Item;
 @group(1) @binding(0) var source_tex: texture_2d<f32>;
 @group(1) @binding(1) var source_sampler: sampler;
+// Item mask (R8; a 1x1 white texture for unmasked items), over the quad's unit square.
+@group(2) @binding(0) var mask_tex: texture_2d<f32>;
+@group(2) @binding(1) var mask_sampler: sampler;
 
 struct VsOut {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
+    @location(1) unit: vec2<f32>,
 };
 
 @vertex
@@ -31,6 +35,7 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VsOut {
     var out: VsOut;
     out.position = vec4<f32>(ndc, 0.0, 1.0);
     out.uv = mix(item.uv_min, item.uv_max, unit);
+    out.unit = unit;
     return out;
 }
 
@@ -42,5 +47,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let lo = item.uv_min + half_texel;
     let hi = max(lo, item.uv_max - half_texel);
     let c = textureSample(source_tex, source_sampler, clamp(in.uv, lo, hi));
-    return vec4<f32>(c.rgb * c.a, c.a) * item.opacity;
+    let mask = textureSample(mask_tex, mask_sampler, in.unit).r;
+    return vec4<f32>(c.rgb * c.a, c.a) * (item.opacity * mask);
 }

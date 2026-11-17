@@ -18,6 +18,9 @@ pub struct DrawItem<'a> {
     pub uv_max: Vec2,
     pub opacity: f32,
     pub blend: BlendMode,
+    /// Alpha mask over the quad (from [`Compositor::create_source_binding`] on an R8 texture);
+    /// `None` draws the whole quad.
+    pub mask: Option<&'a wgpu::BindGroup>,
 }
 
 #[repr(C)]
@@ -42,6 +45,8 @@ pub struct Compositor {
     sampler: wgpu::Sampler,
     pipelines: [wgpu::RenderPipeline; 4],
     uniform_stride: u64,
+    /// The mask of unmasked items: one white texel.
+    no_mask: wgpu::BindGroup,
 }
 
 fn blend_state(mode: BlendMode) -> wgpu::BlendState {
@@ -116,7 +121,11 @@ impl Compositor {
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("compositor"),
-            bind_group_layouts: &[Some(&item_layout), Some(&source_layout)],
+            bind_group_layouts: &[
+                Some(&item_layout),
+                Some(&source_layout),
+                Some(&source_layout),
+            ],
             immediate_size: 0,
         });
         let pipelines = BlendMode::ALL.map(|mode| {
@@ -157,6 +166,13 @@ impl Compositor {
         });
         let align = device.limits().min_uniform_buffer_offset_alignment as u64;
         let uniform_stride = (size_of::<ItemUniform>() as u64).div_ceil(align) * align;
+        let white = upload_texture(gpu, "no mask", 1, 1, wgpu::TextureFormat::R8Unorm, &[255]);
+        let no_mask = source_binding(
+            gpu,
+            &source_layout,
+            &sampler,
+            &white.create_view(&Default::default()),
+        );
 
         Arc::new(Self {
             item_layout,
@@ -164,6 +180,7 @@ impl Compositor {
             sampler,
             pipelines,
             uniform_stride,
+            no_mask,
         })
     }
 
@@ -173,20 +190,7 @@ impl Compositor {
         gpu: &GpuContext,
         view: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
-        gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("compositor source"),
-            layout: &self.source_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-            ],
-        })
+        source_binding(gpu, &self.source_layout, &self.sampler, view)
     }
 
     /// Layout of a source binding (texture + sampler); filters read and produce this too.
@@ -317,7 +321,68 @@ impl CanvasRenderer {
             }
             pass.set_bind_group(0, &self.uniform_bind_group, &[(i * stride) as u32]);
             pass.set_bind_group(1, item.binding, &[]);
+            pass.set_bind_group(2, item.mask.unwrap_or(&self.shared.no_mask), &[]);
             pass.draw(0..4, 0..1);
         }
     }
+}
+
+fn source_binding(
+    gpu: &GpuContext,
+    layout: &wgpu::BindGroupLayout,
+    sampler: &wgpu::Sampler,
+    view: &wgpu::TextureView,
+) -> wgpu::BindGroup {
+    gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("compositor source"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+        ],
+    })
+}
+
+/// A sampled texture filled with `pixels` (tightly packed rows of `format`).
+pub fn upload_texture(
+    gpu: &GpuContext,
+    label: &str,
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+    pixels: &[u8],
+) -> wgpu::Texture {
+    let size = wgpu::Extent3d {
+        width: width.max(1),
+        height: height.max(1),
+        depth_or_array_layers: 1,
+    };
+    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let bytes = format.block_copy_size(None).unwrap_or(4);
+    gpu.queue.write_texture(
+        texture.as_image_copy(),
+        pixels,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(size.width * bytes),
+            rows_per_image: Some(size.height),
+        },
+        size,
+    );
+    texture
 }

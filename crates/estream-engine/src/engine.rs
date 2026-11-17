@@ -236,7 +236,8 @@ type Reply<T> = Sender<Result<T, EngineError>>;
 
 enum Request {
     Execute {
-        command: Command,
+        // Boxed: commands are much larger than the other requests.
+        command: Box<Command>,
         reply: Option<Reply<u64>>,
     },
     Undo(Reply<bool>),
@@ -464,7 +465,7 @@ impl Engine {
     /// Applies a command and waits for the result. Returns the new revision.
     pub fn execute(&self, command: Command) -> Result<u64, EngineError> {
         self.request(|reply| Request::Execute {
-            command,
+            command: Box::new(command),
             reply: Some(reply),
         })
     }
@@ -473,7 +474,7 @@ impl Engine {
     pub fn submit(&self, command: Command) -> Result<(), EngineError> {
         self.requests
             .send(Request::Execute {
-                command,
+                command: Box::new(command),
                 reply: None,
             })
             .map_err(|_| EngineError::Stopped)
@@ -777,7 +778,7 @@ impl Control {
             };
             match request {
                 Request::Execute { command, reply } => {
-                    let result = self.execute(command);
+                    let result = self.execute(*command);
                     match reply {
                         Some(reply) => {
                             let _ = reply.send(result);

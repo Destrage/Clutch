@@ -108,6 +108,7 @@ fn item<'a>(
         uv_max: l.uv_max,
         opacity,
         blend,
+        mask: None,
     }
 }
 

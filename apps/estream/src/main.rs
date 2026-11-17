@@ -13,6 +13,7 @@ mod http;
 mod interact;
 mod kick;
 mod livechat;
+mod mask_edit;
 mod montage;
 mod oauth;
 mod overlay;
