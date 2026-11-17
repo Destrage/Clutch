@@ -436,45 +436,11 @@ fn open_monitor(
     }
     let config = supported.config();
     let channels = config.channels as usize;
-    let ratio = SAMPLE_RATE as f64 / config.sample_rate as f64;
-    // Linear-interpolation resampler for monitoring (cheap; fine for headphones).
-    let mut src = vec![0.0f32; BLOCK * 8];
-    let mut pos = 0.0f64;
-    let mut prev = [0.0f32; 2];
+    let mut resampler = MonitorResampler::new(config.sample_rate);
     let stream = device
         .build_output_stream::<f32, _, _>(
             config,
-            move |out: &mut [f32], _| {
-                let frames = out.len() / channels;
-                let needed = ((frames as f64 * ratio).ceil() as usize + 2).min(src.len() / 2);
-                let got = consumer.read_interleaved(&mut src[..needed * 2]);
-                for f in 0..frames {
-                    let t = pos + f as f64 * ratio;
-                    let i = t.floor() as usize;
-                    let frac = (t - i as f64) as f32;
-                    let sample = |k: usize, ch: usize| -> f32 {
-                        if k == 0 {
-                            prev[ch]
-                        } else if k - 1 < got {
-                            src[(k - 1) * 2 + ch]
-                        } else {
-                            0.0
-                        }
-                    };
-                    for ch in 0..channels {
-                        out[f * channels + ch] = if ch < 2 {
-                            let a = sample(i, ch);
-                            a + (sample(i + 1, ch) - a) * frac
-                        } else {
-                            0.0
-                        };
-                    }
-                }
-                if got > 0 {
-                    prev = [src[(got - 1) * 2], src[(got - 1) * 2 + 1]];
-                }
-                pos = (pos + frames as f64 * ratio - got as f64).clamp(0.0, 1.0);
-            },
+            move |out: &mut [f32], _| resampler.fill(&mut consumer, out, channels),
             move |e| {
                 if is_fatal(&e) {
                     tracing::warn!(error = %e, "monitoring stream failed");
@@ -488,9 +454,182 @@ fn open_monitor(
     tracing::info!(device = %device_name(device), "monitoring started");
     Ok(stream)
 }
+
+/// Ring frames the monitor resampler looks at in one pass.
+const MONITOR_WINDOW: usize = BLOCK * 8;
+/// Output gain change per frame when fading in after the ring ran dry (~1.3 ms at 48 kHz).
+const MONITOR_FADE_STEP: f32 = 1.0 / 64.0;
+/// Per-frame decay of the last sound while the ring is dry, so it fades out instead of
+/// dropping to zero (which clicks).
+const MONITOR_DECAY: f32 = 0.9;
+
+/// Linear-interpolation resampler from the 48 kHz monitor ring to the device rate (cheap;
+/// fine for headphones). It takes from the ring exactly the frames it has played past, so
+/// the ring drains at the real rate and there are no seams between device callbacks.
+struct MonitorResampler {
+    /// Ring frames per device frame.
+    ratio: f64,
+    /// The last frame taken from the ring: index 0 of the next window.
+    prev: [f32; 2],
+    /// Read position past `prev`, in ring frames (0..=1).
+    pos: f64,
+    /// Peeked ring frames, interleaved: window index `k` is `src[k - 1]`.
+    src: Vec<f32>,
+    /// Output gain: drops to 0 when the ring runs dry and ramps back to 1.
+    gain: f32,
+    /// The last value written per channel, for fading out while the ring is dry.
+    last: [f32; 2],
+}
+
+impl MonitorResampler {
+    fn new(device_rate: u32) -> Self {
+        Self {
+            ratio: SAMPLE_RATE as f64 / device_rate.max(1) as f64,
+            prev: [0.0; 2],
+            pos: 0.0,
+            src: vec![0.0; MONITOR_WINDOW * 2],
+            gain: 1.0,
+            last: [0.0; 2],
+        }
+    }
+
+    /// Fills `out` (interleaved, `channels` per frame; channels past the first two stay
+    /// silent) from the ring.
+    fn fill(&mut self, consumer: &mut StereoConsumer, out: &mut [f32], channels: usize) {
+        let channels = channels.max(1);
+        // A pass needs at most `pos + frames * ratio` (rounded up) ring frames.
+        let per_pass = (((MONITOR_WINDOW - 2) as f64 / self.ratio) as usize).max(1);
+        for part in out.chunks_mut(per_pass * channels) {
+            self.pass(consumer, part, channels);
+        }
+    }
+
+    fn pass(&mut self, consumer: &mut StereoConsumer, out: &mut [f32], channels: usize) {
+        let frames = out.len() / channels;
+        let end = self.pos + frames as f64 * self.ratio;
+        let need = (end.ceil() as usize).min(MONITOR_WINDOW);
+        let got = consumer.peek_interleaved(&mut self.src[..need * 2]);
+        let (src, prev) = (&self.src, self.prev);
+        let sample = |k: usize, ch: usize| {
+            if k == 0 {
+                prev[ch]
+            } else {
+                src[(k - 1) * 2 + ch]
+            }
+        };
+        let mut played = frames;
+        for f in 0..frames {
+            let t = self.pos + f as f64 * self.ratio;
+            let i = t as usize;
+            if i + 1 > got {
+                played = f; // the ring ran dry
+                break;
+            }
+            let frac = (t - i as f64) as f32;
+            self.gain = (self.gain + MONITOR_FADE_STEP).min(1.0);
+            for ch in 0..channels {
+                out[f * channels + ch] = if ch < 2 {
+                    let a = sample(i, ch);
+                    let v = (a + (sample(i + 1, ch) - a) * frac) * self.gain;
+                    self.last[ch] = v;
+                    v
+                } else {
+                    0.0
+                };
+            }
+        }
+        for f in played..frames {
+            self.gain = 0.0;
+            for ch in 0..channels {
+                out[f * channels + ch] = if ch < 2 {
+                    self.last[ch] *= MONITOR_DECAY;
+                    self.last[ch]
+                } else {
+                    0.0
+                };
+            }
+        }
+        // Take what was played past; the frame under the read position becomes `prev`.
+        let t_end = self.pos + played as f64 * self.ratio;
+        let taken = (t_end as usize).min(got);
+        if taken > 0 {
+            self.prev = [src[(taken - 1) * 2], src[(taken - 1) * 2 + 1]];
+        }
+        consumer.skip(taken);
+        self.pos = (t_end - taken as f64).clamp(0.0, 1.0);
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Plays `sizes` device callbacks (stereo) and returns the left channel.
+    fn play(r: &mut MonitorResampler, c: &mut StereoConsumer, sizes: &[usize]) -> Vec<f32> {
+        let mut left = Vec::new();
+        for &n in sizes {
+            let mut out = vec![9.0; n * 2];
+            r.fill(c, &mut out, 2);
+            left.extend(out.iter().step_by(2));
+        }
+        left
+    }
+
+    #[test]
+    fn monitor_at_48k_plays_every_frame_once() {
+        let (mut p, mut c) = stereo_ring(20_000);
+        let input: Vec<f32> = (1..=10_000).flat_map(|i| [i as f32, -(i as f32)]).collect();
+        p.push(&input);
+        let mut r = MonitorResampler::new(SAMPLE_RATE);
+        // Uneven callback sizes, as devices use.
+        let sizes = [480, 441, 512, 7, 1000, 480, 333];
+        let left = play(&mut r, &mut c, &sizes);
+        let total: usize = sizes.iter().sum();
+        // The first frame is the silence before the ring; then every input frame in order.
+        let expected: Vec<f32> = (0..total).map(|i| i as f32).collect();
+        assert_eq!(left, expected);
+        // Exactly what was played was taken, plus the next frame (held as `prev`).
+        assert_eq!(c.available(), 10_000 - total);
+    }
+
+    #[test]
+    fn monitor_resamples_without_seams_or_drift() {
+        let (mut p, mut c) = stereo_ring(60_000);
+        let tone = |i: usize| (i as f32 * 2.0 * std::f32::consts::PI * 1000.0 / 48_000.0).sin();
+        let input: Vec<f32> = (0..50_000).flat_map(|i| [tone(i), tone(i)]).collect();
+        p.push(&input);
+        let mut r = MonitorResampler::new(44_100);
+        let left = play(&mut r, &mut c, &[441; 100]); // one second at 44.1 kHz
+        // A 1 kHz tone at 44.1 kHz moves at most 2π·1000/44100 ≈ 0.143 per frame; a dropped
+        // or repeated sample at a callback edge would show as a larger step.
+        let worst = left[1..]
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0f32, f32::max);
+        assert!(worst < 0.15, "seam of {worst}");
+        // One second of device time takes one second of ring audio.
+        let taken = 50_000 - c.available();
+        assert!((47_999..=48_001).contains(&taken), "took {taken} frames");
+    }
+
+    #[test]
+    fn monitor_fades_around_a_dry_ring() {
+        let (mut p, mut c) = stereo_ring(5_000);
+        let mut r = MonitorResampler::new(SAMPLE_RATE);
+        let mut left = play(&mut r, &mut c, &[480]); // device starts before any sound
+        p.push(&[0.5; 1_000]); // 500 frames
+        left.extend(play(&mut r, &mut c, &[480, 480])); // runs dry part-way
+        p.push(&[0.5; 1_000]);
+        left.extend(play(&mut r, &mut c, &[480]));
+        let worst = left
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0f32, f32::max);
+        assert!(worst < 0.06, "step of {worst}");
+        assert!(
+            left.iter().any(|&v| (v - 0.5).abs() < 1e-6),
+            "reaches full level"
+        );
+    }
 
     #[test]
     fn enumeration_does_not_crash() {
