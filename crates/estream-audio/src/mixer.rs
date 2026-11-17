@@ -44,6 +44,19 @@ pub type SourceFactory =
 pub trait TrackSink: Send {
     fn push(&mut self, timestamp: Timestamp, tracks: &[Block; TRACKS]);
 
+    /// Sources whose own sound this sink also takes, through [`push_source`]. Fixed for the
+    /// sink's life.
+    ///
+    /// [`push_source`]: TrackSink::push_source
+    fn sources(&self) -> &[SourceId] {
+        &[]
+    }
+
+    /// What `sources()[slot]` adds to this sink's mix in the coming block (after its filters,
+    /// volume, mute and balance), or silence while it isn't in that mix. Called for every slot
+    /// before each [`push`](TrackSink::push).
+    fn push_source(&mut self, _slot: usize, _block: &Block) {}
+
     /// Closed sinks are removed by the mixer.
     fn is_closed(&self) -> bool {
         false
@@ -353,14 +366,23 @@ impl AudioCore {
         }
         self.sinks.retain(|(_, s)| !s.is_closed());
         for (canvas, sink) in &mut self.sinks {
-            let tracks = match canvas {
-                None => &self.buses[0].tracks,
-                Some(c) => self
-                    .buses
-                    .iter()
-                    .find(|b| b.canvas == Some(*c))
-                    .map_or(&SILENT_TRACKS, |b| &b.tracks),
+            let bus = match canvas {
+                None => Some(0),
+                Some(c) => self.buses.iter().position(|b| b.canvas == Some(*c)),
             };
+            for slot in 0..sink.sources().len() {
+                let id = sink.sources()[slot];
+                let block = bus
+                    .and_then(|b| {
+                        self.channels.get(&id).filter(|ch| {
+                            ch.buses & (1 << b) != 0
+                                && ch.config.monitoring != Monitoring::MonitorOnly
+                        })
+                    })
+                    .map_or(&SILENT_BLOCK, |ch| &ch.block);
+                sink.push_source(slot, block);
+            }
+            let tracks = bus.map_or(&SILENT_TRACKS, |b| &self.buses[b].tracks);
             sink.push(now, tracks);
         }
         if let Some(m) = &mut self.monitor_sink {
@@ -418,6 +440,7 @@ impl AudioCore {
 }
 
 static SILENT_TRACKS: [Block; TRACKS] = [Block::SILENT; TRACKS];
+static SILENT_BLOCK: Block = Block::SILENT;
 
 /// Bus bits for a source heard on `canvases` (empty = every bus).
 fn bus_mask(buses: &[Bus], canvases: &[CanvasId]) -> u64 {
@@ -582,6 +605,103 @@ mod tests {
         assert_eq!(muted_meter.peak, [0.0, 0.0]);
         // Monitor-only is in the monitor mix but not in any track (checked above: only -6 dB present).
         assert!(core.monitor.peak()[0] > 0.9);
+    }
+
+    /// Records the peak of each subscribed source per block.
+    struct SourceCapture {
+        sources: Vec<SourceId>,
+        current: Vec<f32>,
+        blocks: Arc<Mutex<Vec<Vec<f32>>>>,
+    }
+    impl TrackSink for SourceCapture {
+        fn push(&mut self, _: Timestamp, _: &[Block; TRACKS]) {
+            if let Ok(mut v) = self.blocks.lock() {
+                v.push(self.current.clone());
+            }
+        }
+        fn sources(&self) -> &[SourceId] {
+            &self.sources
+        }
+        fn push_source(&mut self, slot: usize, block: &Block) {
+            self.current[slot] = block.peak()[0];
+        }
+    }
+
+    #[test]
+    fn source_sinks_get_each_source_as_mixed() {
+        let quiet = node(
+            0.0,
+            AudioConfig {
+                volume_db: -12.0,
+                tracks: 0b10, // not on track 1: a source track doesn't depend on routing
+                ..Default::default()
+            },
+        );
+        let muted = node(
+            0.0,
+            AudioConfig {
+                muted: true,
+                ..Default::default()
+            },
+        );
+        let monitor_only = node(
+            0.0,
+            AudioConfig {
+                monitoring: Monitoring::MonitorOnly,
+                ..Default::default()
+            },
+        );
+        let absent = SourceId::new();
+        let blocks = Arc::new(Mutex::new(Vec::new()));
+        let mut core = AudioCore::new(factory());
+        core.add_sink(
+            None,
+            Box::new(SourceCapture {
+                sources: vec![quiet.source, muted.source, monitor_only.source, absent],
+                current: vec![9.0; 4],
+                blocks: blocks.clone(),
+            }),
+        );
+        core.sync(&AudioGraph {
+            nodes: vec![quiet, muted, monitor_only],
+            ..Default::default()
+        });
+        run(&mut core, 5);
+        let last = blocks.lock().unwrap().last().unwrap().clone();
+        assert!(
+            (last[0] - db::to_gain(-12.0)).abs() < 0.01,
+            "volume applies: {}",
+            last[0]
+        );
+        assert_eq!(
+            &last[1..],
+            &[0.0, 0.0, 0.0],
+            "muted, monitor-only and absent are silent"
+        );
+    }
+
+    #[test]
+    fn source_sinks_follow_their_canvas_mix() {
+        let (a, b) = (CanvasId::new(), CanvasId::new());
+        let mut on_b = node(0.0, AudioConfig::default());
+        on_b.canvases = vec![b];
+        let blocks = Arc::new(Mutex::new(Vec::new()));
+        let mut core = AudioCore::new(factory());
+        core.add_sink(
+            Some(a),
+            Box::new(SourceCapture {
+                sources: vec![on_b.source],
+                current: vec![9.0],
+                blocks: blocks.clone(),
+            }),
+        );
+        core.sync(&AudioGraph {
+            nodes: vec![on_b],
+            canvases: vec![a, b],
+            ..Default::default()
+        });
+        run(&mut core, 3);
+        assert_eq!(blocks.lock().unwrap().last().unwrap()[0], 0.0);
     }
 
     #[test]

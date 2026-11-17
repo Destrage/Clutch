@@ -10,9 +10,9 @@ has none), together with the game capture's sound and desktop audio.
 - **THEN** the microphone in the clips is noise-suppressed as on the stream
 
 ### Requirement: Clip Player Tracks
-The clip player SHALL offer the full mix and each named source track of the open clip or
-recording. Choosing source tracks SHALL play only those, mixed; choosing the full mix SHALL play
-the first audio stream. The menu SHALL be usable from the keyboard and labelled for screen readers.
+The clip player SHALL offer the full mix and each further named audio track of the selected
+clip or recording. Choosing source tracks SHALL play only those, mixed; choosing the full mix SHALL play
+the first audio stream. The choice SHALL be usable from the keyboard and labelled for screen readers.
 
 #### Scenario: Game without the mic
 - **WHEN** the user opens a clip and selects only the "Game capture" track
@@ -20,7 +20,7 @@ the first audio stream. The menu SHALL be usable from the keyboard and labelled 
 
 #### Scenario: Clip without source tracks
 - **WHEN** the clip has a single audio stream
-- **THEN** the Tracks menu shows only the full mix
+- **THEN** no track choice is shown
 
 ### Requirement: Trim Keeps Tracks
 Trimming a clip (lossless or precise) SHALL keep every audio stream with its name and default

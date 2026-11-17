@@ -107,6 +107,9 @@ pub struct Probe {
     pub duration: f64,
     pub video: Option<(String, u32, u32)>,
     pub audio: Vec<String>,
+    /// Each audio stream's name (title or handler name) and default flag.
+    pub audio_names: Vec<Option<String>>,
+    pub audio_default: Vec<bool>,
     pub stream_durations: Vec<f64>,
     /// Whether the first video packet in the file is a keyframe.
     pub starts_with_key: bool,
@@ -124,6 +127,8 @@ pub fn probe(path: &Path) -> Probe {
     let mut video = None;
     let mut video_index = None;
     let mut audio = Vec::new();
+    let mut audio_names = Vec::new();
+    let mut audio_default = Vec::new();
     let mut tbs = Vec::new();
     for s in ictx.streams() {
         let p = s.parameters();
@@ -138,7 +143,11 @@ pub fn probe(path: &Path) -> Probe {
                 video = Some((format!("{:?}", p.id()), dec.width(), dec.height()));
                 video_index = Some(s.index());
             }
-            ffmpeg::media::Type::Audio => audio.push(format!("{:?}", p.id())),
+            ffmpeg::media::Type::Audio => {
+                audio.push(format!("{:?}", p.id()));
+                audio_names.push(estream_media::mux::stream_name(&s));
+                audio_default.push(estream_media::mux::stream_is_default(&s));
+            }
             _ => {}
         }
     }
@@ -166,6 +175,8 @@ pub fn probe(path: &Path) -> Probe {
         duration,
         video,
         audio,
+        audio_names,
+        audio_default,
         stream_durations,
         starts_with_key: starts_with_key.unwrap_or(false),
     }

@@ -45,10 +45,18 @@ pub struct ClipPlayer {
 impl ClipPlayer {
     /// Starts playing `path` from the beginning, with sound on `monitor_device` (empty for
     /// the default output).
-    pub fn open(path: &Path, monitor_device: &str, volume: f32, muted: bool) -> Self {
+    /// `audio_streams`: the audio streams to play mixed (see [`PlayerSettings::audio_streams`]).
+    pub fn open(
+        path: &Path,
+        monitor_device: &str,
+        volume: f32,
+        muted: bool,
+        audio_streams: Option<Vec<usize>>,
+    ) -> Self {
         let player = Player::new(PlayerSettings {
             items: vec![path.to_path_buf()],
             looping: false,
+            audio_streams,
             ..Default::default()
         });
         let gain = Arc::new(Gain {
@@ -113,6 +121,11 @@ impl ClipPlayer {
 
     pub fn set_muted(&self, muted: bool) {
         self.gain.muted.store(muted, Ordering::Relaxed);
+    }
+
+    /// Plays these audio streams mixed (`None`: the main one), carrying on from where it is.
+    pub fn set_audio_streams(&self, streams: Option<Vec<usize>>) {
+        self.player.set_audio_streams(streams);
     }
 }
 
@@ -191,7 +204,7 @@ mod tests {
         let Ok(path) = std::env::var("CLUTCH_TEST_CLIP") else {
             return;
         };
-        let clip = ClipPlayer::open(Path::new(&path), "", 1.0, true);
+        let clip = ClipPlayer::open(Path::new(&path), "", 1.0, true, None);
         std::thread::sleep(Duration::from_millis(1500));
         let status = clip.status();
         println!("{status:?} sequence={}", clip.player().sequence());

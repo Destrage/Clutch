@@ -305,6 +305,31 @@ export component ClipsDialog inherits Modal {
                     changed(v) => { root.action("volume", root.form.selected, v); }
                 }
             }
+            // Audio tracks: the full mix, or any of the clip's own tracks (each source's sound).
+            if root.player.tracks.length > 0: HorizontalLayout {
+                spacing: 6px;
+                alignment: start;
+                Text {
+                    text: "Hear";
+                    color: Theme.text-muted;
+                    font-size: Theme.font-xs;
+                    vertical-alignment: center;
+                }
+                Button {
+                    text: "Full mix";
+                    kind: root.player.full-mix ? "primary" : "ghost";
+                    tooltip: "Play every sound, as recorded";
+                    accessible-label: "Full mix" + (root.player.full-mix ? ", playing" : "");
+                    clicked => { root.action("audio-track", 0, 0); }
+                }
+                for t[i] in root.player.tracks: Button {
+                    text: t.name;
+                    kind: t.on ? "primary" : "ghost";
+                    tooltip: t.on ? "Stop playing " + t.name : "Play " + t.name + (root.player.full-mix ? " on its own" : " too");
+                    accessible-label: t.name + " track" + (t.on ? ", playing" : "");
+                    clicked => { root.action("audio-track", i, 1); }
+                }
+            }
             HorizontalLayout {
                 spacing: 8px;
                 TextField {

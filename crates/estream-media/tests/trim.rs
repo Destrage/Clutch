@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
 
-/// A 6 s MP4 (640x360@30, two audio tracks, keyframes every 2 s), recorded once.
+/// A 6 s MP4 (640x360@30, two mixed tracks and the tone's own track, keyframes every 2 s),
+/// recorded once.
 fn source() -> PathBuf {
     static SOURCE: OnceLock<PathBuf> = OnceLock::new();
     SOURCE
@@ -40,6 +41,16 @@ fn copy_of(name: &str) -> (PathBuf, PathBuf) {
     (dir, input)
 }
 
+/// The trimmed file keeps every audio track with its name and default flag.
+fn assert_tracks_kept(p: &common::Probe) {
+    let names: Vec<Option<String>> = ["Track 1", "Track 2", "Tone"]
+        .iter()
+        .map(|n| Some((*n).to_owned()))
+        .collect();
+    assert_eq!(p.audio_names, names);
+    assert_eq!(p.audio_default, [true, false, false]);
+}
+
 fn assert_in_sync(path: &Path) {
     let p = probe(path);
     let v = p.stream_durations[0];
@@ -67,7 +78,7 @@ fn lossless_trim_starts_at_a_keyframe() {
         "file {} vs kept {kept:?}",
         p.duration
     );
-    assert_eq!(p.audio_streams(), 2);
+    assert_tracks_kept(&p);
     assert_in_sync(&output);
 }
 
@@ -93,7 +104,7 @@ fn precise_trim_starts_at_the_in_point() {
     assert!((p.duration - 2.0).abs() < 0.1, "duration {}", p.duration);
     let (_, w, h) = p.video.clone().unwrap();
     assert_eq!((w, h), (640, 360));
-    assert_eq!(p.audio_streams(), 2);
+    assert_tracks_kept(&p);
     assert_in_sync(&output);
 }
 

@@ -626,7 +626,7 @@ impl Clipper {
             tracing::info!("clip mode buffering the studio canvas");
             return Ok(());
         }
-        let engine = clip_engine(ctx.gpu)?;
+        let engine = clip_engine(ctx.gpu, ctx.studio)?;
         let replay = ReplayBuffer::start(&engine, &settings).map_err(|e| e.to_string())?;
         self.buffer = Some(Buffer::Own {
             engine: Box::new(engine),
@@ -817,10 +817,31 @@ fn shows_game(engine: &Engine) -> bool {
 }
 
 /// A small engine that captures the fullscreen game with its sound, desktop audio (which then
-/// leaves the game out) and the default mic at 1080p60. It has no collection file, so nothing about it is ever saved.
-fn clip_engine(gpu: &GpuContext) -> Result<Engine, String> {
+/// leaves the game out) and the studio's microphones at 1080p60. It has no collection file, so
+/// nothing about it is ever saved.
+fn clip_engine(gpu: &GpuContext, studio: Option<&Engine>) -> Result<Engine, String> {
+    let project = clip_project(studio.map(|e| e.snapshot()).as_deref());
+    let mut registry = estream_engine::SourceRegistry::with_builtins();
+    estream_capture::register_all(&mut registry);
+    Engine::start(
+        project,
+        estream_engine::EngineConfig {
+            registry,
+            gpu: Some(gpu.clone()),
+            collection_path: None,
+            ..Default::default()
+        },
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// The clip engine's project: the game, desktop audio, and the studio's microphone sources as
+/// the user set them up (device, filters such as noise suppression, volume, mute, sync offset),
+/// or the default microphone when the studio has none. Each is heard on track 1 and none is
+/// monitored (the studio already does that).
+fn clip_project(studio: Option<&estream_project::Project>) -> estream_project::Project {
     use estream_core::{Alignment, BoundsMode, ItemTransform, Rational};
-    use estream_project::{Project, SceneItem, SourceDef};
+    use estream_project::{Monitoring, Project, SceneItem, SourceDef};
     let (w, h) = (1920, 1080);
     let mut project = Project::new_default(w, h, Rational::fps(60));
     let game = SourceDef::new(
@@ -842,23 +863,34 @@ fn clip_engine(gpu: &GpuContext) -> Result<Engine, String> {
     );
     desktop.audio.global = true;
     desktop.audio.tracks = 0b1;
-    let mut mic = SourceDef::new("Mic", "audio_input", serde_json::json!({ "device": "" }));
-    mic.audio.global = true;
-    mic.audio.tracks = 0b1;
+    let mut mics: Vec<SourceDef> = studio
+        .map(|p| {
+            p.sources
+                .iter()
+                // A monitor-only mic is never in the studio's outputs either.
+                .filter(|s| {
+                    s.kind == "audio_input" && s.audio.monitoring != Monitoring::MonitorOnly
+                })
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    if mics.is_empty() {
+        mics.push(SourceDef::new(
+            "Microphone",
+            "audio_input",
+            serde_json::json!({ "device": "" }),
+        ));
+    }
+    for mic in &mut mics {
+        mic.audio.global = true;
+        mic.audio.tracks = 0b1;
+        mic.audio.monitoring = Monitoring::Off;
+    }
     project.scenes[0].items.push(item);
-    project.sources.extend([game, desktop, mic]);
-    let mut registry = estream_engine::SourceRegistry::with_builtins();
-    estream_capture::register_all(&mut registry);
-    Engine::start(
-        project,
-        estream_engine::EngineConfig {
-            registry,
-            gpu: Some(gpu.clone()),
-            collection_path: None,
-            ..Default::default()
-        },
-    )
-    .map_err(|e| e.to_string())
+    project.sources.extend([game, desktop]);
+    project.sources.extend(mics);
+    project
 }
 
 fn spawn_thumbnail(clip: PathBuf, at: f64, done: Sender<PathBuf>) {
@@ -955,6 +987,10 @@ pub struct ClipsUi {
     playback: Option<Playback>,
     pub volume: f32,
     pub muted: bool,
+    /// Names of the selected clip's audio streams (the first is the full mix).
+    audio_tracks: Vec<String>,
+    /// The audio streams chosen to play mixed (`None`: the full mix).
+    audio_choice: Option<Vec<usize>>,
     yuv: Option<std::sync::Arc<estream_gpu::YuvConverter>>,
 }
 
@@ -1096,6 +1132,8 @@ impl Default for ClipsUi {
             playback: None,
             volume: 1.0,
             muted: false,
+            audio_tracks: Vec::new(),
+            audio_choice: None,
             yuv: None,
         }
     }
@@ -1123,6 +1161,13 @@ impl ClipsUi {
         if self.playback.as_ref().map(|p| p.clip.path()) != clip.map(|(p, _)| p) {
             self.stop_playback();
         }
+        if self.selected.as_deref() != clip.map(|(p, _)| p) {
+            // Another clip: its own tracks, starting with the full mix.
+            self.audio_tracks = clip
+                .map(|(p, _)| estream_media::player::audio_stream_names(p))
+                .unwrap_or_default();
+            self.audio_choice = None;
+        }
         self.selected = clip.map(|(p, _)| p.to_path_buf());
         self.trim_in = 0.0;
         self.trim_out = clip.map_or(0.0, |(_, d)| d);
@@ -1149,6 +1194,7 @@ impl ClipsUi {
             monitor_device,
             self.volume,
             self.muted,
+            self.audio_choice.clone(),
         );
         // A trimmed range plays from its start.
         if self.trim_in > 0.0 {
@@ -1287,6 +1333,31 @@ impl ClipsUi {
         upload_picture(p, gpu, &yuv) || toggled || p.target.is_some()
     }
 
+    /// Picks what to hear: `None` for the full mix, or toggles audio track `track` (1 = the
+    /// stream after the full mix). Turning the last chosen track off goes back to the full mix.
+    pub fn choose_audio_track(&mut self, track: Option<usize>) {
+        self.audio_choice = match (track, self.audio_choice.take()) {
+            (None, _) => None,
+            (Some(t), _) if t == 0 || t >= self.audio_tracks.len() => None,
+            (Some(t), None) => Some(vec![t]),
+            (Some(t), Some(mut chosen)) => {
+                match chosen.iter().position(|&c| c == t) {
+                    Some(i) => {
+                        chosen.remove(i);
+                    }
+                    None => {
+                        chosen.push(t);
+                        chosen.sort_unstable();
+                    }
+                }
+                (!chosen.is_empty()).then_some(chosen)
+            }
+        };
+        if let Some(p) = &self.playback {
+            p.clip.set_audio_streams(self.audio_choice.clone());
+        }
+    }
+
     /// What the player shows, for the Clips view.
     pub fn player_state(&self) -> crate::ui::ClipPlayerState {
         let playing = self
@@ -1302,6 +1373,19 @@ impl ClipsUi {
             muted: self.muted,
             has_frame: frame.is_some(),
             frame: frame.unwrap_or_default(),
+            tracks: std::rc::Rc::new(slint::VecModel::from(
+                self.audio_tracks
+                    .iter()
+                    .enumerate()
+                    .skip(1)
+                    .map(|(i, name)| crate::ui::ClipTrack {
+                        name: name.as_str().into(),
+                        on: self.audio_choice.as_ref().is_some_and(|c| c.contains(&i)),
+                    })
+                    .collect::<Vec<_>>(),
+            ))
+            .into(),
+            full_mix: self.audio_choice.is_none(),
         }
     }
 
@@ -1563,6 +1647,83 @@ mod tests {
         ui.seek(12.0, false, "");
         assert!(ui.player_state().active, "seeking opens the player");
         assert!((ui.position() - 12.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn choosing_tracks_toggles_and_falls_back_to_the_full_mix() {
+        let mut ui = ClipsUi {
+            audio_tracks: vec!["Track 1".into(), "Game".into(), "Mic".into()],
+            ..Default::default()
+        };
+        ui.choose_audio_track(Some(1));
+        assert_eq!(ui.audio_choice, Some(vec![1]));
+        ui.choose_audio_track(Some(2));
+        assert_eq!(ui.audio_choice, Some(vec![1, 2]));
+        ui.choose_audio_track(Some(1));
+        assert_eq!(ui.audio_choice, Some(vec![2]));
+        ui.choose_audio_track(Some(2));
+        assert_eq!(ui.audio_choice, None, "nothing chosen plays the full mix");
+        ui.choose_audio_track(Some(9));
+        assert_eq!(ui.audio_choice, None, "no such track");
+        ui.choose_audio_track(Some(2));
+        ui.choose_audio_track(None);
+        assert_eq!(ui.audio_choice, None);
+        let state = ui.player_state();
+        assert!(state.full_mix);
+        assert_eq!(
+            slint::Model::row_count(&state.tracks),
+            2,
+            "the mix isn't listed again"
+        );
+    }
+
+    #[test]
+    fn clip_engine_uses_the_studio_microphones_as_set_up() {
+        use estream_project::{AudioFilterDef, Monitoring, Project, SourceDef};
+        let mut studio = Project::new_default(1920, 1080, estream_core::Rational::fps(60));
+        let mut mic = SourceDef::new(
+            "Microphone",
+            "audio_input",
+            serde_json::json!({ "device": "headset" }),
+        );
+        mic.audio.volume_db = -3.0;
+        mic.audio.monitoring = Monitoring::MonitorAndOutput;
+        mic.audio.filters.push(AudioFilterDef {
+            id: "ns".into(),
+            kind: "noise_suppression".into(),
+            enabled: true,
+            settings: serde_json::json!({}),
+        });
+        studio.sources.push(mic.clone());
+
+        let project = clip_project(Some(&studio));
+        let mics: Vec<_> = project
+            .sources
+            .iter()
+            .filter(|s| s.kind == "audio_input")
+            .collect();
+        assert_eq!(mics.len(), 1);
+        assert_eq!(mics[0].settings, mic.settings, "same device");
+        assert_eq!(
+            mics[0].audio.filters, mic.audio.filters,
+            "noise suppression kept"
+        );
+        assert_eq!(mics[0].audio.volume_db, -3.0);
+        assert!(mics[0].audio.global);
+        assert_eq!(
+            mics[0].audio.monitoring,
+            Monitoring::Off,
+            "not monitored twice"
+        );
+
+        // Without studio microphones, the default one.
+        let project = clip_project(None);
+        let fallback = project
+            .sources
+            .iter()
+            .find(|s| s.kind == "audio_input")
+            .unwrap();
+        assert_eq!(fallback.settings, serde_json::json!({ "device": "" }));
     }
 
     #[test]

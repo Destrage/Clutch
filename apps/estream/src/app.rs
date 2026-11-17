@@ -6469,6 +6469,10 @@ impl App {
             }
             "volume" => self.clips_ui.set_volume(value),
             "mute" => self.clips_ui.toggle_mute(),
+            // value 0: the full mix; 1: toggle track `index` of the Hear row (after the mix).
+            "audio-track" => self
+                .clips_ui
+                .choose_audio_track((value > 0.5).then_some(index + 1)),
             _ => return false,
         }
         if let Some(w) = self.window() {
@@ -7212,6 +7216,7 @@ impl App {
             },
             audio_bitrate: r.audio_bitrate_kbps as f32,
             tracks: r.tracks as i32,
+            source_tracks: r.source_tracks,
             replay_seconds: r.replay_seconds as f32,
             auto_remux: r.auto_remux,
             theme: match self.settings.theme {
@@ -8025,6 +8030,7 @@ impl App {
             "tracks" => r.tracks = (value.round() as i32).clamp(1, 63) as u8,
             "replay-seconds" => r.replay_seconds = value.clamp(5.0, 300.0) as u32,
             "auto-remux" => r.auto_remux = value > 0.5,
+            "source-tracks" => r.source_tracks = value > 0.5,
             "rec-canvas" => {
                 let ids = &canvas_ids;
                 r.all_canvases = i >= ids.len();

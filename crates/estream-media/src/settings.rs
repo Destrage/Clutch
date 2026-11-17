@@ -118,6 +118,8 @@ pub struct RecordingSettings {
     pub audio_bitrate_kbps: u32,
     /// Bitmask of audio tracks to record (bit 0 = track 1).
     pub tracks: u8,
+    /// Also write each audio source on its own track (recordings and the replay buffer).
+    pub source_tracks: bool,
     pub replay_seconds: u32,
     /// Remux MKV recordings to MP4 after they stop.
     pub auto_remux: bool,
@@ -144,6 +146,7 @@ impl Default for RecordingSettings {
             audio_codec: AudioCodec::Aac,
             audio_bitrate_kbps: 192,
             tracks: 0b1,
+            source_tracks: true,
             replay_seconds: 30,
             auto_remux: false,
             canvas: None,
@@ -485,6 +488,7 @@ impl StreamSettings {
             audio_codec: protocol.audio_codec(),
             audio_bitrate_kbps: self.audio_bitrate_kbps,
             tracks: 1 << self.audio_track.min(5),
+            source_tracks: false,
             canvas: self.canvas,
             ..Default::default()
         }

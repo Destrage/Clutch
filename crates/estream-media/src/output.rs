@@ -4,12 +4,12 @@
 use crate::MediaError;
 use crate::encode::{self, AudioEncoder, VideoEncoder};
 use crate::ffmpeg;
-use crate::mux::{Muxer, PacketRing, StreamSpec, remux};
+use crate::mux::{Muxer, PacketRing, StreamSpec, remux_without};
 use crate::settings::{Container, RecordingSettings};
 use crate::stream::{Entry, NetSpec, NetTarget, share};
-use crossbeam_channel::{Receiver, Sender, bounded, select};
+use crossbeam_channel::{Receiver, Sender, TrySendError, bounded, select};
 use estream_audio::{BLOCK, Block, SAMPLE_RATE, TRACKS, TrackSink};
-use estream_core::{CanvasId, Rational, Timestamp};
+use estream_core::{CanvasId, Rational, SourceId, Timestamp};
 use estream_engine::{Engine, VideoFrame};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -36,20 +36,53 @@ pub struct OutputStats {
 struct AudioChunk {
     timestamp: Timestamp,
     tracks: [Block; TRACKS],
+    /// Each source track's block (`None` when no pooled buffer was free: encoded as silence).
+    sources: Option<Vec<Block>>,
 }
 
-/// Forwards mixer blocks to an output's thread.
+/// Audio chunks queued between the mixer and an output's thread.
+const AUDIO_QUEUE: usize = 64;
+/// At most this many source tracks per file; later sources are only in the mixed tracks.
+pub const MAX_SOURCE_TRACKS: usize = 16;
+/// A source counts as heard in a block whose peak is above this (−60 dBFS).
+const HEARD_PEAK: f32 = 0.001;
+
+/// Forwards mixer blocks to an output's thread. Source blocks travel in buffers from a fixed
+/// pool that the output's thread hands back, so the audio thread never allocates.
 struct ChannelSink {
     tx: Sender<AudioChunk>,
     closed: Arc<AtomicBool>,
+    sources: Vec<SourceId>,
+    pool: Receiver<Vec<Block>>,
+    pool_return: Sender<Vec<Block>>,
+    pending: Option<Vec<Block>>,
 }
 
 impl TrackSink for ChannelSink {
     fn push(&mut self, timestamp: Timestamp, tracks: &[Block; TRACKS]) {
-        let _ = self.tx.try_send(AudioChunk {
+        let chunk = AudioChunk {
             timestamp,
             tracks: tracks.clone(),
-        });
+            sources: self.pending.take(),
+        };
+        if let Err(TrySendError::Full(c) | TrySendError::Disconnected(c)) = self.tx.try_send(chunk)
+            && let Some(buffer) = c.sources
+        {
+            let _ = self.pool_return.try_send(buffer);
+        }
+    }
+
+    fn sources(&self) -> &[SourceId] {
+        &self.sources
+    }
+
+    fn push_source(&mut self, slot: usize, block: &Block) {
+        if self.pending.is_none() {
+            self.pending = self.pool.try_recv().ok();
+        }
+        if let Some(target) = self.pending.as_mut().and_then(|p| p.get_mut(slot)) {
+            target.clone_from(block);
+        }
     }
 
     fn is_closed(&self) -> bool {
@@ -99,7 +132,8 @@ pub(crate) struct Session {
     sink_closed: Arc<AtomicBool>,
     consumer: u64,
     control: Sender<Control>,
-    thread: Option<JoinHandle<Result<(), MediaError>>>,
+    /// Ends with the file's source tracks whose source was never heard.
+    thread: Option<JoinHandle<Result<Vec<usize>, MediaError>>>,
     pub stats: Arc<OutputStats>,
     pub(crate) started: Instant,
     canvas: CanvasId,
@@ -125,8 +159,24 @@ impl Session {
             *e = encoder.label.to_owned();
         }
 
+        // Each source the canvas can be heard with gets its own track (not for streams).
+        let sources: Vec<(SourceId, String)> =
+            if settings.source_tracks && !matches!(kind, Kind::Network(_)) {
+                let mut s = engine.audio_sources_of(canvas.id);
+                s.truncate(MAX_SOURCE_TRACKS);
+                s
+            } else {
+                Vec::new()
+            };
+        let (pool_return, pool) = bounded::<Vec<Block>>(AUDIO_QUEUE + 4);
+        if !sources.is_empty() {
+            for _ in 0..AUDIO_QUEUE + 4 {
+                let _ = pool_return.try_send(vec![Block::SILENT; sources.len()]);
+            }
+        }
+
         let (video_tx, video_rx) = bounded::<VideoFrame>(8);
-        let (audio_tx, audio_rx) = bounded::<AudioChunk>(64);
+        let (audio_tx, audio_rx) = bounded::<AudioChunk>(AUDIO_QUEUE);
         let (control_tx, control_rx) = bounded::<Control>(4);
         let stop = Arc::new(AtomicBool::new(false));
         let sink_closed = Arc::new(AtomicBool::new(false));
@@ -145,6 +195,10 @@ impl Session {
             Box::new(ChannelSink {
                 tx: audio_tx,
                 closed: sink_closed.clone(),
+                sources: sources.iter().map(|(id, _)| *id).collect(),
+                pool,
+                pool_return: pool_return.clone(),
+                pending: None,
             }),
         );
         let dropped_base = engine
@@ -154,6 +208,7 @@ impl Session {
         let thread = {
             let (settings, stats, stop) = (settings.clone(), stats.clone(), stop.clone());
             let encoder_name = encoder.name;
+            let source_names = sources.into_iter().map(|(_, name)| name).collect();
             std::thread::Builder::new()
                 .name("estream-encoder".into())
                 .spawn(move || {
@@ -168,6 +223,8 @@ impl Session {
                         stop,
                         stats: stats.clone(),
                         kind,
+                        source_names,
+                        pool_return,
                     });
                     if let Err(e) = &result {
                         tracing::error!(error = %e, "output failed");
@@ -209,12 +266,14 @@ impl Session {
         self.stop.store(true, Ordering::Release);
     }
 
-    pub(crate) fn stop(mut self, engine: &Engine) -> Result<(), MediaError> {
+    /// Stops and finishes the output. Returns the stream indexes of source tracks whose source
+    /// was never heard.
+    pub(crate) fn stop(mut self, engine: &Engine) -> Result<Vec<usize>, MediaError> {
         self.detach(engine);
         self.join()
     }
 
-    pub(crate) fn join(mut self) -> Result<(), MediaError> {
+    pub(crate) fn join(mut self) -> Result<Vec<usize>, MediaError> {
         match self.thread.take().map(|t| t.join()) {
             Some(Ok(result)) => result,
             _ => Err(MediaError::Engine("encoder thread panicked".into())),
@@ -258,6 +317,10 @@ struct Run {
     stop: Arc<AtomicBool>,
     stats: Arc<OutputStats>,
     kind: Kind,
+    /// Names of the source tracks, in order.
+    source_names: Vec<String>,
+    /// Hands source-block buffers back to the mixer's sink.
+    pool_return: Sender<Vec<Block>>,
 }
 
 /// The next frame (`gpu`: of that kind only), or `None` once the output is stopped.
@@ -318,33 +381,34 @@ fn open_video(
     Ok(Some((first, enc)))
 }
 
-fn run(r: Run) -> Result<(), MediaError> {
+fn run(r: Run) -> Result<Vec<usize>, MediaError> {
     // Wait for the first frame: it fixes the size and time zero.
     let Some(first) = next_frame(&r, None) else {
-        return Ok(());
+        return Ok(Vec::new());
     };
     let Some((first, mut video)) = open_video(&r, first)? else {
-        return Ok(());
+        return Ok(Vec::new());
     };
     let t0 = first.timestamp;
     let tracks: Vec<usize> = (0..TRACKS)
         .filter(|t| r.settings.tracks & (1 << t) != 0)
         .collect();
-    let mut audio = tracks
-        .iter()
+    // The mixed tracks' encoders, then one per source track.
+    let mut audio = (0..tracks.len() + r.source_names.len())
         .map(|_| AudioEncoder::open(r.settings.audio_codec, r.settings.audio_bitrate_kbps))
         .collect::<Result<Vec<_>, _>>()?;
 
-    let mut specs = vec![StreamSpec {
-        parameters: video.parameters(),
-        time_base: video.time_base,
-        is_video: true,
-    }];
-    specs.extend(audio.iter().map(|a| StreamSpec {
-        parameters: a.parameters(),
-        time_base: a.time_base,
-        is_video: false,
-    }));
+    let mut specs = vec![StreamSpec::new(video.parameters(), video.time_base, true)];
+    for (k, a) in audio.iter().enumerate() {
+        let spec = StreamSpec::new(a.parameters(), a.time_base, false);
+        specs.push(match tracks.get(k) {
+            Some(t) => spec.named(format!("Track {}", t + 1)),
+            None => StreamSpec {
+                source_track: true,
+                ..spec.named(r.source_names[k - tracks.len()].clone())
+            },
+        });
+    }
     let time_bases = specs.iter().map(|s| s.time_base).collect();
     // Kept for destinations that join a running stream session.
     let stream_specs = specs.clone();
@@ -370,8 +434,10 @@ fn run(r: Run) -> Result<(), MediaError> {
         ns_per_frame: 1e9 * r.fps.den as f64 / r.fps.num as f64,
         last_pts: -1,
         audio_started: false,
+        ever_heard: vec![false; r.source_names.len()],
         tracks,
         time_bases,
+        pool_return: r.pool_return.clone(),
     };
     state.video(first, &mut video)?;
 
@@ -435,6 +501,15 @@ fn run(r: Run) -> Result<(), MediaError> {
     if let Some(e) = state.write_error.take() {
         return Err(e);
     }
+    // File stream index of each source track never heard (video, mixed tracks, then sources).
+    let first_source = 1 + state.tracks.len();
+    let silent = state
+        .ever_heard
+        .iter()
+        .enumerate()
+        .filter(|(_, heard)| !**heard)
+        .map(|(i, _)| first_source + i)
+        .collect();
     match state.target {
         Target::File(m) => m.finish()?,
         Target::Network(nets) => {
@@ -444,7 +519,7 @@ fn run(r: Run) -> Result<(), MediaError> {
         }
         Target::Replay(_) => {}
     }
-    Ok(())
+    Ok(silent)
 }
 
 /// Encoder-thread state: timestamps and where packets go.
@@ -456,8 +531,12 @@ struct State {
     ns_per_frame: f64,
     last_pts: i64,
     audio_started: bool,
+    /// Per source track: whether its source was heard at all.
+    ever_heard: Vec<bool>,
+    /// The mixed tracks, in stream order.
     tracks: Vec<usize>,
     time_bases: Vec<ffmpeg::Rational>,
+    pool_return: Sender<Vec<Block>>,
 }
 
 impl State {
@@ -522,7 +601,21 @@ impl State {
 
     fn audio(
         &mut self,
-        chunk: AudioChunk,
+        mut chunk: AudioChunk,
+        encoders: &mut [AudioEncoder],
+    ) -> Result<(), MediaError> {
+        let sources = chunk.sources.take();
+        let result = self.audio_blocks(&chunk, sources.as_deref(), encoders);
+        if let Some(buffer) = sources {
+            let _ = self.pool_return.try_send(buffer);
+        }
+        result
+    }
+
+    fn audio_blocks(
+        &mut self,
+        chunk: &AudioChunk,
+        sources: Option<&[Block]>,
         encoders: &mut [AudioEncoder],
     ) -> Result<(), MediaError> {
         if chunk.timestamp < self.t0 {
@@ -545,12 +638,33 @@ impl State {
             }
             _ => 0,
         };
+        let mixed = self.tracks.len();
         for (k, enc) in encoders.iter_mut().enumerate() {
             if pad > 0 {
                 enc.pad_silence(pad, &mut |p| self.write(k + 1, p))?;
             }
-            let track = self.tracks[k];
-            enc.push(&chunk.tracks[track], &mut |p| self.write(k + 1, p))?;
+            let block = match self.tracks.get(k) {
+                Some(&track) => &chunk.tracks[track],
+                None => sources
+                    .and_then(|s| s.get(k - mixed))
+                    .unwrap_or(&Block::SILENT),
+            };
+            enc.push(block, &mut |p| self.write(k + 1, p))?;
+        }
+        // Note when each source was heard, so silent source tracks can be left out.
+        if let Some(sources) = sources {
+            let at = encoders.first().map_or(0, |a| a.next_sample()) as f64 / SAMPLE_RATE as f64;
+            let from = at - BLOCK as f64 / SAMPLE_RATE as f64;
+            for (i, block) in sources.iter().enumerate() {
+                if block.peak().iter().any(|p| *p > HEARD_PEAK) {
+                    if let Some(h) = self.ever_heard.get_mut(i) {
+                        *h = true;
+                    }
+                    if let Target::Replay(ring) = &mut self.target {
+                        ring.mark_heard(1 + mixed + i, from, at);
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -694,14 +808,19 @@ impl Recording {
         let mut result = Ok(());
         let mut paths = Vec::new();
         for (session, path) in self.sessions {
-            if let Err(e) = session.stop(engine) {
-                result = Err(e);
-            }
+            let silent = match session.stop(engine) {
+                Ok(silent) => silent,
+                Err(e) => {
+                    result = Err(e);
+                    Vec::new()
+                }
+            };
             tracing::info!(path = %path.display(), "recording stopped");
             let mut final_path = path.clone();
             if self.settings.auto_remux && self.settings.container == Container::Mkv {
                 let mp4 = path.with_extension("mp4");
-                match remux(&path, &mp4, Container::Mp4) {
+                // The MP4 leaves out source tracks whose source was never heard.
+                match remux_without(&path, &mp4, Container::Mp4, &silent) {
                     Ok(()) => final_path = mp4,
                     Err(e) => tracing::warn!(error = %e, "remux to MP4 failed; keeping MKV"),
                 }
@@ -763,7 +882,7 @@ impl ReplayBuffer {
     }
 
     pub fn stop(self, engine: &Engine) -> Result<(), MediaError> {
-        self.session.stop(engine)
+        self.session.stop(engine).map(|_| ())
     }
 }
 
