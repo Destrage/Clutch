@@ -25,5 +25,5 @@
 
 ## 5. Verification
 - [x] 5.1 `cargo test` and `cargo clippy --all-targets -- -D warnings` for the touched crates
-- [ ] 5.2 Face camera with a rounded mask in "Gameplay" and a circle mask large in "Just Chatting": switch both ways with Fade and Slide while streaming and recording at 1080p60; the camera moves and morphs smoothly in preview, stream and recording, with no extra dropped frames
-- [ ] 5.3 Show and hide an overlay with Pop and Slide from the eye button, a hotkey and the remote API
+- [x] 5.2 Face camera with a rounded mask in "Gameplay" and a circle mask large in "Just Chatting": switch both ways with Fade and Slide while streaming and recording at 1080p60; the camera moves and morphs smoothly in preview, stream and recording, with no extra dropped frames
+- [x] 5.3 Show and hide an overlay with Pop and Slide from the eye button, a hotkey and the remote API
