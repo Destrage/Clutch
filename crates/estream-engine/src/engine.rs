@@ -521,6 +521,11 @@ impl Engine {
         let _ = self.requests.send(Request::SetPreview { canvas, scene });
     }
 
+    /// The render graph the video thread draws now (project plus view state).
+    pub fn render_graph(&self) -> Arc<RenderGraph> {
+        self.shared.graph.load_full()
+    }
+
     /// True while a program transition is running on `canvas`.
     pub fn is_transitioning(&self, canvas: CanvasId) -> bool {
         let now = self.clock.now();
@@ -743,13 +748,15 @@ struct Control {
 }
 
 impl Control {
-    /// When the earliest running transition ends, as an `Instant`.
+    /// When the earliest running transition or item animation ends, as an `Instant`.
     fn transition_deadline(&self) -> Option<Instant> {
         let now = self.clock.now();
         self.view
             .transitions
             .values()
-            .map(|t| Instant::now() + Duration::from_nanos(t.end().0.saturating_sub(now.0)))
+            .map(|t| t.end())
+            .chain(self.view.item_animations.values().map(|r| r.end()))
+            .map(|end| Instant::now() + Duration::from_nanos(end.0.saturating_sub(now.0)))
             .min()
     }
 
@@ -935,13 +942,55 @@ impl Control {
         result
     }
 
-    /// Drops finished transitions so the graph (and audio mix) no longer include them.
+    /// Drops finished transitions and item animations so the graph (and audio mix) no longer include them.
     fn expire_transitions(&mut self) {
         let now = self.clock.now();
         let before = self.view.transitions.len();
         self.view.transitions.retain(|_, t| t.end() > now);
-        if self.view.transitions.len() != before {
+        let animations = self.view.item_animations.len();
+        self.view.item_animations.retain(|_, r| r.end() > now);
+        if self.view.transitions.len() != before || self.view.item_animations.len() != animations {
             self.publish_graph();
+        }
+    }
+
+    /// Starts the show or hide animation of every item whose visibility `changes` flipped
+    /// (compared with the last published snapshot). Flipping back during an animation
+    /// continues from the item's current state instead of jumping.
+    fn start_item_animations(&mut self, changes: &[Change]) {
+        let before = self.shared.snapshot.load();
+        let now = self.clock.now();
+        for change in changes {
+            let Change::ItemChanged { scene, item } = change else {
+                continue;
+            };
+            let Some(new) = self.project.scene(*scene).and_then(|s| s.find_item(*item)) else {
+                continue;
+            };
+            let was = before
+                .scene(*scene)
+                .and_then(|s| s.find_item(*item))
+                .map(|i| i.visible);
+            if was.is_none_or(|v| v == new.visible) {
+                continue;
+            }
+            let running = self.view.item_animations.remove(item);
+            let Some(animation) = new.animations.for_visibility(new.visible).copied() else {
+                continue;
+            };
+            // Back-date the start so the new animation picks up where the old one is.
+            let already = match running.filter(|r| r.end() > now) {
+                Some(r) => ((1.0 - r.progress(now)) as f64 * animation.duration_ns() as f64) as u64,
+                None => 0,
+            };
+            self.view.item_animations.insert(
+                *item,
+                crate::graph::ItemAnimationRun {
+                    showing: new.visible,
+                    animation,
+                    start: estream_core::Timestamp(now.0.saturating_sub(already)),
+                },
+            );
         }
     }
 
@@ -978,6 +1027,7 @@ impl Control {
             .can_redo
             .store(self.history.can_redo(), Ordering::Release);
         let revision = self.shared.revision.fetch_add(1, Ordering::AcqRel) + 1;
+        self.start_item_animations(&changes);
         self.shared.snapshot.store(Arc::new(self.project.clone()));
         // A program change that isn't the transition just started (plain command, undo)
         // is a cut: drop any transition running on that canvas.

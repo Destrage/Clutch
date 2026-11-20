@@ -34,6 +34,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 mod mask_ui;
+mod motion_ui;
 
 pub type Shared = Rc<RefCell<App>>;
 
@@ -3632,6 +3633,7 @@ impl App {
             ..Default::default()
         };
         fill_fields(&mut inspect, &item.fill, self.fill_stop);
+        motion_ui::animation_fields(&mut inspect, &item.animations);
         (selection_box, inspect)
     }
 
@@ -4864,6 +4866,7 @@ impl App {
             "fade" => Some(estream_project::Transition {
                 kind: estream_project::TransitionKind::Fade,
                 duration_ms: snapshot.transition.duration_ms.max(100),
+                moves: snapshot.transition.moves,
             }),
             _ => None,
         };
@@ -4906,6 +4909,15 @@ impl App {
         };
         w.set_transition_file(file.into());
         w.set_transition_point(point);
+        w.set_transition_moves(t.moves.is_some());
+        let moves = t.moves.unwrap_or_default();
+        w.set_transition_move_ease(
+            estream_project::Ease::ALL
+                .iter()
+                .position(|e| *e == moves.ease)
+                .unwrap_or(0) as i32,
+        );
+        w.set_transition_move_curved(moves.curved);
         w.set_transition_label(
             if t.is_instant() {
                 "Cut".to_owned()
@@ -4965,6 +4977,7 @@ impl App {
                     } else {
                         current.duration_ms
                     },
+                    moves: current.moves,
                 }
             }
             "duration" => Transition {
@@ -4984,6 +4997,25 @@ impl App {
             "stinger-file" => {
                 self.choose_stinger();
                 return;
+            }
+            "moves" => Transition {
+                moves: (value > 0.5).then(|| current.moves.unwrap_or_default()),
+                ..current.clone()
+            },
+            "move-ease" | "move-curved" => {
+                let mut moves = current.moves.unwrap_or_default();
+                if field == "move-ease" {
+                    moves.ease = estream_project::Ease::ALL
+                        .get(i)
+                        .copied()
+                        .unwrap_or_default();
+                } else {
+                    moves.curved = value > 0.5;
+                }
+                Transition {
+                    moves: Some(moves),
+                    ..current.clone()
+                }
             }
             "direction" => {
                 let d = Direction::ALL.get(i).copied().unwrap_or_default();
@@ -5035,6 +5067,7 @@ impl App {
                     point_ms,
                 },
                 duration_ms,
+                moves: current.moves,
             },
         });
     }
@@ -5079,11 +5112,13 @@ impl App {
                     0 => 800,
                     d => d,
                 };
+                let moves = engine.snapshot().transition.moves;
                 let transition = estream_project::Transition {
                     kind: estream_project::TransitionKind::Shader {
                         code: code.to_owned(),
                     },
                     duration_ms,
+                    moves,
                 };
                 (
                     Command::SetTransition { transition },
@@ -10713,6 +10748,10 @@ impl App {
     }
 
     pub fn inspect_edit(&mut self, field: &str, value: f32) {
+        if let Some(field) = field.strip_prefix("anim.") {
+            self.animation_set(field, value);
+            return;
+        }
         if let Some(field) = field.strip_prefix("mask-") {
             self.mask_edit_field(field, value);
             return;
@@ -10855,6 +10894,10 @@ impl App {
     }
 
     pub fn inspect_option(&mut self, field: &str, index: i32) {
+        if let Some(field) = field.strip_prefix("anim.") {
+            self.animation_set(field, index as f32);
+            return;
+        }
         if let Some(field) = field.strip_prefix("mask-") {
             self.mask_option(field, index);
             return;
@@ -10908,6 +10951,10 @@ impl App {
     }
 
     pub fn inspect_toggle(&mut self, field: &str, value: bool) {
+        if let Some(field) = field.strip_prefix("anim.") {
+            self.animation_set(field, if value { 1.0 } else { 0.0 });
+            return;
+        }
         if let Some(field) = field.strip_prefix("mask-") {
             self.mask_toggle(field, value);
             return;
@@ -12309,7 +12356,7 @@ fn meter_position(level: f32) -> f32 {
 }
 
 /// The inspector's panels, by the names their folds are saved under.
-const INSPECTOR_PANELS: [&str; 16] = [
+const INSPECTOR_PANELS: [&str; 17] = [
     "settings",
     "page",
     "playback",
@@ -12321,6 +12368,7 @@ const INSPECTOR_PANELS: [&str; 16] = [
     "mask",
     "edges",
     "effects",
+    "motion",
     "volume",
     "hearing",
     "voice",
@@ -12341,6 +12389,7 @@ fn inspector_fold<'a>(folds: &'a mut InspectorFolds, panel: &str) -> Option<&'a 
         "mask" => &mut folds.mask,
         "edges" => &mut folds.edges,
         "effects" => &mut folds.effects,
+        "motion" => &mut folds.motion,
         "volume" => &mut folds.volume,
         "hearing" => &mut folds.hearing,
         "voice" => &mut folds.voice,

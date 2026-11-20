@@ -169,6 +169,9 @@ export component SceneStrip inherits Rectangle {
     in property <float> transition-duration;
     in property <string> transition-file;
     in property <float> transition-point;
+    in property <bool> transition-moves;
+    in property <int> transition-move-ease;
+    in property <bool> transition-move-curved;
     callback activate(string);
     callback add();
     callback duplicate(string);
@@ -269,6 +272,9 @@ export component SceneStrip inherits Rectangle {
                                     duration: root.transition-duration;
                                     file: root.transition-file;
                                     point: root.transition-point;
+                                    moves: root.transition-moves;
+                                    move-ease: root.transition-move-ease;
+                                    move-curved: root.transition-move-curved;
                                     set(k, v) => { root.transition-set(k, v); }
                                     edit-shader => { root.edit-shader(); }
                                 }

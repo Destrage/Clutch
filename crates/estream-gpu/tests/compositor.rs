@@ -109,6 +109,8 @@ fn item<'a>(
         opacity,
         blend,
         mask: None,
+        clip: DrawItem::FULL,
+        morph: None,
     }
 }
 

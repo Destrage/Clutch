@@ -1064,6 +1064,99 @@ export component InspectorPanel inherits Panel {
                         }
                     }
                 }
+                // Show and hide animations, and moving to the item's place in the next scene.
+                if !root.sel.group: FoldPanel {
+                    title: "Transitions";
+                    folded: root.folds.motion;
+                    note: root.folds.motion && (root.sel.anim-show > 0 || root.sel.anim-hide > 0) ? "on" : "";
+                    toggle-fold => { root.folds.motion = !root.folds.motion; }
+                    FieldRow {
+                        label: "Show";
+                        Select {
+                            label: "Show animation";
+                            options: ["None", "Fade", "Zoom", "Pop", "Slide", "Wipe"];
+                            current-index: root.sel.anim-show;
+                            selected(i) => { root.select-option("anim.show.kind", i); }
+                        }
+                    }
+                    if root.sel.anim-show >= 4: FieldRow {
+                        label: "";
+                        Select {
+                            label: "Show direction";
+                            // Directions run left, right, up, down; a wipe's edge travels that way.
+                            options: root.sel.anim-show == 4
+                                ? ["From the left", "From the right", "From the top", "From the bottom"]
+                                : ["Right to left", "Left to right", "Bottom to top", "Top to bottom"];
+                            current-index: root.sel.anim-show-dir;
+                            selected(i) => { root.select-option("anim.show.dir", i); }
+                        }
+                    }
+                    if root.sel.anim-show > 0: ValueSlider {
+                        label: "Duration";
+                        value: root.sel.anim-show-ms;
+                        minimum: 50;
+                        maximum: 3000;
+                        step: 50;
+                        decimals: 0;
+                        suffix: " ms";
+                        changed(v) => { root.edit("anim.show.ms", v); }
+                        committed => { root.commit(); }
+                    }
+                    if root.sel.anim-show > 0: Segmented {
+                        label: "Show movement";
+                        options: ["Smooth", "Spring", "Linear"];
+                        current: root.sel.anim-show-ease;
+                        selected(i) => { root.select-option("anim.show.ease", i); }
+                    }
+                    FieldRow {
+                        label: "Hide";
+                        Select {
+                            label: "Hide animation";
+                            options: ["None", "Fade", "Zoom", "Pop", "Slide", "Wipe"];
+                            current-index: root.sel.anim-hide;
+                            selected(i) => { root.select-option("anim.hide.kind", i); }
+                        }
+                    }
+                    if root.sel.anim-hide >= 4: FieldRow {
+                        label: "";
+                        Select {
+                            label: "Hide direction";
+                            options: root.sel.anim-hide == 4
+                                ? ["To the left", "To the right", "To the top", "To the bottom"]
+                                : ["Right to left", "Left to right", "Bottom to top", "Top to bottom"];
+                            current-index: root.sel.anim-hide-dir;
+                            selected(i) => { root.select-option("anim.hide.dir", i); }
+                        }
+                    }
+                    if root.sel.anim-hide > 0: ValueSlider {
+                        label: "Duration";
+                        value: root.sel.anim-hide-ms;
+                        minimum: 50;
+                        maximum: 3000;
+                        step: 50;
+                        decimals: 0;
+                        suffix: " ms";
+                        changed(v) => { root.edit("anim.hide.ms", v); }
+                        committed => { root.commit(); }
+                    }
+                    if root.sel.anim-hide > 0: Segmented {
+                        label: "Hide movement";
+                        options: ["Smooth", "Spring", "Linear"];
+                        current: root.sel.anim-hide-ease;
+                        selected(i) => { root.select-option("anim.hide.ease", i); }
+                    }
+                    Toggle {
+                        label: "Move between scenes";
+                        checked: root.sel.anim-moves;
+                        toggled(v) => { root.toggle("anim.moves", v); }
+                    }
+                    Text {
+                        text: "When the scene transition has \"Move matching items\" on, this item glides to its place in the next scene.";
+                        color: Theme.text-faint;
+                        font-size: Theme.font-xs;
+                        wrap: word-wrap;
+                    }
+                }
                 if !root.sel.group && root.video-filter-kinds.length > 0: FoldPanel {
                     title: "Filters";
                     folded: root.folds.effects;

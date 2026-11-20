@@ -336,6 +336,8 @@ impl Renderer {
                             opacity: 1.0,
                             blend: BlendMode::Normal,
                             mask: None,
+                            clip: estream_gpu::DrawItem::FULL,
+                            morph: None,
                         }],
                     );
                 }
@@ -369,6 +371,8 @@ impl Renderer {
                         opacity: 1.0,
                         blend: BlendMode::Normal,
                         mask: None,
+                        clip: estream_gpu::DrawItem::FULL,
+                        morph: None,
                     };
                     self.from_pass.render(
                         &self.gpu,
@@ -451,6 +455,8 @@ impl Renderer {
                 opacity: fade,
                 blend: BlendMode::Normal,
                 mask: None,
+                clip: estream_gpu::DrawItem::FULL,
+                morph: None,
             });
         }
         for (id, matrix, opacity) in &title_items {
@@ -463,6 +469,8 @@ impl Renderer {
                     opacity: *opacity,
                     blend: BlendMode::Normal,
                     mask: None,
+                    clip: estream_gpu::DrawItem::FULL,
+                    morph: None,
                 });
             }
         }

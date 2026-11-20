@@ -26,6 +26,8 @@ pub(crate) struct Drawn {
     pub mask: Option<Tex>,
     pub under: Option<(Tex, Vec2)>,
     pub over: Option<(Tex, Vec2)>,
+    /// The shape's distance field, for morphs (`None` when the mask doesn't cut the item).
+    pub field: Option<Tex>,
 }
 
 struct Job {
@@ -241,19 +243,25 @@ impl Masks {
                     .map(|m| tex(m, wgpu::TextureFormat::R8Unorm)),
                 under: baked.under.as_ref().map(layer),
                 over: baked.over.as_ref().map(layer),
+                field: baked
+                    .field
+                    .as_ref()
+                    .map(|f| tex(f, wgpu::TextureFormat::R16Float)),
             });
         }
         any
     }
 }
 
-/// Every item list of every canvas: program, Preview and the scene a transition leaves.
+/// Every item list of every canvas: program, Preview, the scene a transition leaves, and the
+/// masked items of other scenes (baked ahead).
 fn flats(graph: &RenderGraph) -> impl Iterator<Item = &FlatItem> {
     graph.canvases.iter().flat_map(|cg| {
         [Some(&cg.items), cg.preview.as_ref()]
             .into_iter()
             .flatten()
             .chain(cg.transition.as_ref().map(|t| &t.from))
+            .chain(std::iter::once(&cg.standby))
             .flatten()
     })
 }

@@ -10,6 +10,8 @@ use tiny_skia::{FillRule, PathBuilder, Transform};
 
 /// Longest side of a baked image (the item plus its effects).
 pub const MAX_SIDE: f32 = 2048.0;
+/// Long side of a mask's distance field (used to morph between shapes).
+pub const FIELD_SIDE: f32 = 256.0;
 
 /// A baked image, rows top to bottom.
 #[derive(Debug, Clone, PartialEq)]
@@ -33,6 +35,9 @@ pub struct Baked {
     pub mask: Option<Image>,
     pub under: Option<Layer>,
     pub over: Option<Layer>,
+    /// Signed distance from the shape's edge (R16Float, little endian) over the item, in units
+    /// of the field's long side, negative inside; `None` when the shapes don't cut the item.
+    pub field: Option<Image>,
 }
 
 /// Bakes `mask` for an item drawn `size` canvas pixels large.
@@ -63,6 +68,9 @@ pub fn bake_with(mask: &ItemMask, size: Vec2, max_side: f32) -> Baked {
         }),
         ..Baked::default()
     };
+    if mask.cuts() {
+        baked.field = Some(field(mask, size));
+    }
     if effects.is_empty() {
         return baked;
     }
@@ -429,6 +437,42 @@ fn refs(list: &[(Rgba8, Vec<f32>)]) -> Vec<(Rgba8, &[f32])> {
     list.iter().map(|(c, a)| (*c, a.as_slice())).collect()
 }
 
+/// The mask's signed distance field on a grid [`FIELD_SIDE`] pixels on its long side.
+fn field(mask: &ItemMask, size: Vec2) -> Image {
+    let s = FIELD_SIDE / size.max_element();
+    let w = ((size.x * s).round() as usize).max(1);
+    let h = ((size.y * s).round() as usize).max(1);
+    let d = signed_distance(&shapes(mask, w, h, s), w, h);
+    let long = w.max(h) as f32;
+    Image {
+        width: w as u32,
+        height: h as u32,
+        pixels: d
+            .iter()
+            .flat_map(|v| f16_bits(v / long).to_le_bytes())
+            .collect(),
+    }
+}
+
+/// `v` as an IEEE half float (round to nearest; tiny values become zero, huge ones infinity).
+fn f16_bits(v: f32) -> u16 {
+    if v.is_nan() {
+        return 0x7e00;
+    }
+    let bits = v.to_bits();
+    let sign = ((bits >> 16) & 0x8000) as u16;
+    let exp = ((bits >> 23) & 0xff) as i32 - 127 + 15;
+    if exp >= 31 {
+        return sign | 0x7c00;
+    }
+    if exp <= 0 {
+        return sign;
+    }
+    let mantissa = ((bits & 0x7f_ffff) + 0x1000) >> 13;
+    // A rounded-up mantissa of 0x400 carries into the exponent, which the addition does.
+    sign | ((((exp as u32) << 10) + mantissa).min(0x7c00) as u16)
+}
+
 fn to_byte(v: f32) -> u8 {
     (v.clamp(0.0, 1.0) * 255.0).round() as u8
 }
@@ -459,6 +503,56 @@ mod tests {
         // The edge is anti-aliased: something between at the rim.
         let rim: Vec<u8> = (0..100).map(|i| at(&m, i, i)).collect();
         assert!(rim.iter().any(|v| *v > 0 && *v < 255), "{rim:?}");
+    }
+
+    #[test]
+    fn half_floats() {
+        assert_eq!(f16_bits(0.0), 0);
+        assert_eq!(f16_bits(1.0), 0x3c00);
+        assert_eq!(f16_bits(-2.0), 0xc000);
+        assert_eq!(f16_bits(0.5), 0x3800);
+        assert_eq!(f16_bits(0.333_333), 0x3555);
+        assert_eq!(f16_bits(1e9), 0x7c00);
+        assert_eq!(f16_bits(1e-9), 0);
+    }
+
+    #[test]
+    fn circle_field_is_negative_inside_and_scaled_to_the_long_side() {
+        let f = bake(&ItemMask::circle(2.0), Vec2::new(800.0, 400.0))
+            .field
+            .unwrap();
+        assert_eq!((f.width, f.height), (256, 128));
+        let value = |x: usize, y: usize| {
+            let i = (y * f.width as usize + x) * 2;
+            let bits = u16::from_le_bytes([f.pixels[i], f.pixels[i + 1]]);
+            // Decode the normal halves the field holds.
+            let sign = if bits & 0x8000 != 0 { -1.0 } else { 1.0 };
+            let exp = ((bits >> 10) & 0x1f) as i32;
+            let man = (bits & 0x3ff) as f32 / 1024.0;
+            if exp == 0 {
+                0.0
+            } else {
+                sign * (1.0 + man) * 2f32.powi(exp - 15)
+            }
+        };
+        // A circle of radius 64 field pixels in the middle of a 256×128 grid.
+        let center = value(128, 64);
+        assert!((center + 64.0 / 256.0).abs() < 0.01, "{center}");
+        let corner = value(0, 0);
+        let expected = ((128.0f32.powi(2) + 64.0f32.powi(2)).sqrt() - 64.0) / 256.0;
+        assert!((corner - expected).abs() < 0.01, "{corner} vs {expected}");
+        assert!(
+            bake(
+                &ItemMask {
+                    effects: MaskEffects::thin_border(),
+                    ..ItemMask::default()
+                },
+                Vec2::splat(50.0)
+            )
+            .field
+            .is_none(),
+            "effects alone keep the item's rectangle"
+        );
     }
 
     #[test]

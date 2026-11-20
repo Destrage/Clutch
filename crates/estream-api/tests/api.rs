@@ -533,6 +533,71 @@ fn transitions_and_outputs() {
 }
 
 #[test]
+fn item_transitions_over_the_api() {
+    let mut s = studio();
+    let mut ctx = Ctx::default();
+    let t = call(&mut ctx, &mut s, "GetCurrentSceneTransition", json!({})).unwrap();
+    assert_eq!(t["transitionSettings"]["moveMatchingItems"], Value::Null);
+    call(
+        &mut ctx,
+        &mut s,
+        "SetCurrentSceneTransitionSettings",
+        json!({ "transitionSettings": { "moveMatchingItems": { "ease": "spring", "curved": true } } }),
+    )
+    .unwrap();
+    let moves = s.engine.snapshot().transition.moves.unwrap();
+    assert_eq!(moves.ease, estream_project::Ease::Spring);
+    assert!(moves.curved);
+    let t = call(&mut ctx, &mut s, "GetCurrentSceneTransition", json!({})).unwrap();
+    assert_eq!(
+        t["transitionSettings"]["moveMatchingItems"]["ease"],
+        "spring"
+    );
+    let err = call(
+        &mut ctx,
+        &mut s,
+        "SetCurrentSceneTransitionSettings",
+        json!({ "transitionSettings": { "moveMatchingItems": { "ease": "wobbly" } } }),
+    )
+    .unwrap_err();
+    assert_eq!(err.0, status::INVALID_REQUEST_FIELD);
+
+    let list = call(
+        &mut ctx,
+        &mut s,
+        "GetSceneItemList",
+        json!({ "sceneName": "Scene" }),
+    )
+    .unwrap();
+    let id = list["sceneItems"][0]["sceneItemId"].as_i64().unwrap();
+    let item = json!({ "sceneName": "Scene", "sceneItemId": id });
+    let got = call(
+        &mut ctx,
+        &mut s,
+        "GetSceneItemPrivateSettings",
+        item.clone(),
+    )
+    .unwrap();
+    assert_eq!(got["sceneItemSettings"]["animations"]["moves"], true);
+    let mut set = item.clone();
+    set["sceneItemSettings"] = json!({
+        "animations": { "hide": { "kind": { "type": "pop" }, "duration_ms": 250 } }
+    });
+    call(&mut ctx, &mut s, "SetSceneItemPrivateSettings", set).unwrap();
+    let hide = s.engine.snapshot().scenes[0].items[0]
+        .animations
+        .hide
+        .unwrap();
+    assert_eq!(hide.kind, estream_project::AnimationKind::Pop);
+    assert_eq!(hide.duration_ms, 250);
+    let mut bad = item;
+    bad["sceneItemSettings"] = json!({
+        "animations": { "show": { "kind": { "type": "fade" }, "duration_ms": 1 } }
+    });
+    assert!(call(&mut ctx, &mut s, "SetSceneItemPrivateSettings", bad).is_err());
+}
+
+#[test]
 fn snapshot_diffs_become_events() {
     let mut s = studio();
     let mut ctx = Ctx::default();

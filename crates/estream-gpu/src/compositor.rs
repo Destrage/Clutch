@@ -21,6 +21,37 @@ pub struct DrawItem<'a> {
     /// Alpha mask over the quad (from [`Compositor::create_source_binding`] on an R8 texture);
     /// `None` draws the whole quad.
     pub mask: Option<&'a wgpu::BindGroup>,
+    /// The part of the quad that is drawn, in its unit square: `[u_min, v_min, u_max, v_max]`
+    /// ([`DrawItem::FULL`] draws all of it).
+    pub clip: [f32; 4],
+    /// Draws the quad's outline as a blend of two shapes (replaces `mask`).
+    pub morph: Option<Morph<'a>>,
+}
+
+impl DrawItem<'_> {
+    /// A clip that keeps the whole quad.
+    pub const FULL: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+}
+
+/// One end of a shape morph.
+#[derive(Clone, Copy, Debug)]
+pub enum MorphEnd<'a> {
+    /// The quad's own rectangle.
+    Rect,
+    /// A signed distance field over the quad's unit square (R16Float, bound with
+    /// [`Compositor::create_source_binding`]): distance from the edge in units of the item's
+    /// long side, negative inside.
+    Field(&'a wgpu::BindGroup),
+}
+
+/// An outline between two shapes: their distance fields mixed by `t`.
+#[derive(Clone, Copy, Debug)]
+pub struct Morph<'a> {
+    pub from: MorphEnd<'a>,
+    pub to: MorphEnd<'a>,
+    pub t: f32,
+    /// Width of the soft edge in canvas pixels (at least one).
+    pub feather: f32,
 }
 
 #[repr(C)]
@@ -35,6 +66,9 @@ struct ItemUniform {
     opacity: f32,
     _pad0: f32,
     _pad1: [f32; 2],
+    clip: [f32; 4],
+    /// `t`, feather, from kind, to kind (kinds: 0 = no morph, 1 = field, 2 = rectangle).
+    morph: [f32; 4],
 }
 
 /// Shared, immutable GPU state (pipelines, layouts, sampler). One per device.
@@ -123,6 +157,7 @@ impl Compositor {
             label: Some("compositor"),
             bind_group_layouts: &[
                 Some(&item_layout),
+                Some(&source_layout),
                 Some(&source_layout),
                 Some(&source_layout),
             ],
@@ -266,6 +301,37 @@ impl CanvasRenderer {
         background: wgpu::Color,
         items: &[DrawItem<'_>],
     ) {
+        self.draw(
+            gpu,
+            encoder,
+            target,
+            canvas_size,
+            wgpu::LoadOp::Clear(background),
+            items,
+        );
+    }
+
+    /// Like [`render`](Self::render), but draws over what `target` already holds.
+    pub fn render_over(
+        &mut self,
+        gpu: &GpuContext,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        canvas_size: Vec2,
+        items: &[DrawItem<'_>],
+    ) {
+        self.draw(gpu, encoder, target, canvas_size, wgpu::LoadOp::Load, items);
+    }
+
+    fn draw(
+        &mut self,
+        gpu: &GpuContext,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        canvas_size: Vec2,
+        load: wgpu::LoadOp<wgpu::Color>,
+        items: &[DrawItem<'_>],
+    ) {
         if items.len() > self.capacity {
             // Grows rarely (only when a scene gets bigger than ever before).
             self.capacity = items.len().next_power_of_two();
@@ -288,6 +354,8 @@ impl CanvasRenderer {
                 opacity: item.opacity.clamp(0.0, 1.0),
                 _pad0: 0.0,
                 _pad1: [0.0; 2],
+                clip: item.clip,
+                morph: morph_uniform(item.morph.as_ref()),
             };
             let offset = i * stride;
             self.staging[offset..offset + size_of::<ItemUniform>()]
@@ -304,7 +372,7 @@ impl CanvasRenderer {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(background),
+                    load,
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -321,9 +389,45 @@ impl CanvasRenderer {
             }
             pass.set_bind_group(0, &self.uniform_bind_group, &[(i * stride) as u32]);
             pass.set_bind_group(1, item.binding, &[]);
-            pass.set_bind_group(2, item.mask.unwrap_or(&self.shared.no_mask), &[]);
+            let no_mask = &self.shared.no_mask;
+            let (shape, other) = match &item.morph {
+                Some(m) => {
+                    let field = |end| match end {
+                        MorphEnd::Field(b) => b,
+                        MorphEnd::Rect => no_mask,
+                    };
+                    (field(m.from), field(m.to))
+                }
+                None => (item.mask.unwrap_or(no_mask), no_mask),
+            };
+            pass.set_bind_group(2, shape, &[]);
+            pass.set_bind_group(3, other, &[]);
             pass.draw(0..4, 0..1);
         }
+    }
+}
+
+fn morph_uniform(morph: Option<&Morph<'_>>) -> [f32; 4] {
+    let kind = |end: &MorphEnd<'_>| match end {
+        MorphEnd::Field(_) => 1.0,
+        MorphEnd::Rect => 2.0,
+    };
+    match morph {
+        Some(m) => [
+            if m.t.is_finite() {
+                m.t.clamp(0.0, 1.0)
+            } else {
+                0.0
+            },
+            if m.feather.is_finite() {
+                m.feather.max(1.0)
+            } else {
+                1.0
+            },
+            kind(&m.from),
+            kind(&m.to),
+        ],
+        None => [0.0; 4],
     }
 }
 

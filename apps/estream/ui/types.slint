@@ -197,6 +197,18 @@ export struct Inspect {
     fill-color: color,
     fill-hex: string,
     fill-gradient: PropRow,
+    // Show and hide animations: kind 0 none, 1 fade, 2 zoom, 3 pop, 4 slide, 5 wipe;
+    // direction 0 left, 1 right, 2 up, 3 down; ease 0 smooth, 1 spring, 2 linear.
+    anim-show: int,
+    anim-show-dir: int,
+    anim-show-ms: float,
+    anim-show-ease: int,
+    anim-hide: int,
+    anim-hide-dir: int,
+    anim-hide-ms: float,
+    anim-hide-ease: int,
+    // Moves to its place in the next scene.
+    anim-moves: bool,
 }
 
 /// Which inspector panels are folded (true = folded). Kept on the window so it survives the
@@ -213,6 +225,7 @@ export struct InspectorFolds {
     mask: bool,
     edges: bool,
     effects: bool,
+    motion: bool,
     volume: bool,
     hearing: bool,
     voice: bool,
