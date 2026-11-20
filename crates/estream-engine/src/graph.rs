@@ -5,7 +5,10 @@ use estream_audio::{AudioGraph, AudioNode};
 use estream_core::{
     BlendMode, CanvasId, Crop, ItemTransform, Rational, Rgba8, SceneId, SourceId, Timestamp,
 };
-use estream_project::{ItemContent, Project, SceneItem, SourceDef, Transition, TransitionKind};
+use estream_project::{
+    ItemAnimation, ItemAnimations, ItemContent, MoveSettings, Project, SceneItem, SourceDef,
+    Transition, TransitionKind,
+};
 use glam::Affine2;
 use std::collections::HashMap;
 
@@ -16,6 +19,57 @@ pub struct ViewState {
     /// Studio-mode Preview scene per canvas (absent = studio mode off).
     pub preview: HashMap<CanvasId, SceneId>,
     pub transitions: HashMap<CanvasId, ActiveTransition>,
+    /// Show and hide animations started by visibility changes.
+    pub item_animations: HashMap<estream_core::ItemId, ItemAnimationRun>,
+}
+
+/// A show or hide animation in progress.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ItemAnimationRun {
+    pub showing: bool,
+    pub animation: ItemAnimation,
+    pub start: Timestamp,
+    /// Linear progress at `start` (0..1): above 0 when this run reverses another one midway,
+    /// so it carries on from where that one was.
+    pub from: f32,
+}
+
+impl ItemAnimationRun {
+    /// A run from the beginning.
+    pub fn new(showing: bool, animation: ItemAnimation, start: Timestamp) -> Self {
+        Self {
+            showing,
+            animation,
+            start,
+            from: 0.0,
+        }
+    }
+
+    pub fn end(&self) -> Timestamp {
+        let left =
+            (1.0 - f64::from(self.from.clamp(0.0, 1.0))) * self.animation.duration_ns() as f64;
+        Timestamp(self.start.0.saturating_add(left as u64))
+    }
+
+    /// Linear progress at `t`: `from` until the start, 1 from the end on.
+    pub fn progress(&self, t: Timestamp) -> f32 {
+        let from = f64::from(self.from.clamp(0.0, 1.0));
+        let d = self.animation.duration_ns();
+        if t <= self.start {
+            from as f32
+        } else if d == 0 {
+            1.0
+        } else {
+            (from + (t.0 - self.start.0) as f64 / d as f64).min(1.0) as f32
+        }
+    }
+
+    /// How much of the item is there at `t`: 0 gone, 1 fully shown (eased, so a spring can
+    /// go past 1).
+    pub fn presence(&self, t: Timestamp) -> f32 {
+        let e = self.animation.ease.apply(self.progress(t));
+        if self.showing { e } else { 1.0 - e }
+    }
 }
 
 /// A program transition in progress.
@@ -63,6 +117,9 @@ pub struct CanvasGraph {
     pub transition: Option<TransitionGraph>,
     /// Studio-mode Preview scene items (`None` = studio mode off).
     pub preview: Option<Vec<FlatItem>>,
+    /// Masked items of every scene on this canvas, hidden ones too, so their masks are baked
+    /// before a switch or a show animation needs them. Never drawn from this list.
+    pub standby: Vec<FlatItem>,
 }
 
 /// What the video thread needs to draw a transition.
@@ -75,6 +132,14 @@ pub struct TransitionGraph {
     pub duration_ns: u64,
     /// Stinger: the helper media source drawn on top, and when the scene switches.
     pub overlay: Option<(SourceId, u64)>,
+    /// "Move matching items" (`None` = off).
+    pub moves: Option<MoveSettings>,
+    /// Items that travel to their new place: (index in `from`, index in the program items).
+    pub pairs: Vec<(usize, usize)>,
+    /// Items only in the scene being left that play their hide animation (index in `from`).
+    pub leaving: Vec<(usize, ItemAnimationRun)>,
+    /// Items only in the new scene that play their show animation (index in the program items).
+    pub arriving: Vec<(usize, ItemAnimationRun)>,
 }
 
 impl TransitionGraph {
@@ -104,6 +169,9 @@ pub struct FlatItem {
     pub fill: estream_project::ItemFill,
     /// The item's mask and effects, when they change how it's drawn.
     pub mask: Option<estream_project::ItemMask>,
+    pub animations: ItemAnimations,
+    /// A running show or hide animation.
+    pub run: Option<ItemAnimationRun>,
 }
 
 impl RenderGraph {
@@ -113,10 +181,16 @@ impl RenderGraph {
 
     /// Builds the graph including view state. Transitions that ended before `now` are left out.
     pub fn build_with(project: &Project, revision: u64, view: &ViewState, now: Timestamp) -> Self {
+        let runs = &view.item_animations;
         let scene_items = |id: Option<SceneId>| {
             let mut items = Vec::new();
             if let Some(scene) = id.and_then(|id| project.scene(id)) {
-                flatten(&scene.items, Affine2::IDENTITY, 1.0, &mut items);
+                let mut f = Flatten {
+                    runs,
+                    now,
+                    out: &mut items,
+                };
+                f.items(&scene.items, Affine2::IDENTITY, 1.0);
             }
             items
         };
@@ -136,14 +210,25 @@ impl RenderGraph {
                             helpers.push((def, canvas.id));
                             (id, point)
                         });
+                        let from = scene_items(t.from);
+                        let to = scene_items(canvas.active_scene);
+                        let (pairs, leaving, arriving) = choreograph(&from, &to, t);
                         TransitionGraph {
-                            from: scene_items(t.from),
+                            from,
                             kind: t.transition.kind.clone(),
                             start: t.start,
                             duration_ns: t.transition.duration_ms as u64 * 1_000_000,
                             overlay,
+                            moves: t.transition.moves,
+                            pairs,
+                            leaving,
+                            arriving,
                         }
                     });
+                let mut standby = Vec::new();
+                for scene in project.scenes_of(canvas.id) {
+                    masked(&scene.items, Affine2::IDENTITY, &mut standby);
+                }
                 CanvasGraph {
                     id: canvas.id,
                     width: canvas.width,
@@ -157,6 +242,7 @@ impl RenderGraph {
                         .preview
                         .get(&canvas.id)
                         .map(|scene| scene_items(Some(*scene))),
+                    standby,
                 }
             })
             .collect();
@@ -317,30 +403,138 @@ pub fn runtime_settings(def: &SourceDef) -> serde_json::Value {
     settings
 }
 
-fn flatten(items: &[SceneItem], parent: Affine2, opacity: f32, out: &mut Vec<FlatItem>) {
-    for item in items.iter().filter(|i| i.visible && i.opacity > 0.0) {
-        let opacity = opacity * item.opacity;
-        match &item.content {
-            ItemContent::Source { source } => out.push(FlatItem {
-                item: item.id,
-                source: *source,
-                parent,
-                transform: item.transform,
-                crop: item.crop,
-                opacity,
-                blend: item.blend,
-                fill: if item.transform.bounds_mode == estream_core::BoundsMode::Fit {
-                    item.fill.clone()
-                } else {
-                    estream_project::ItemFill::None
-                },
-                mask: item.mask.clone().filter(|m| m.draws()),
-            }),
-            ItemContent::Group { items } => {
-                flatten(items, parent * item.transform.group_matrix(), opacity, out)
+/// Flattens a scene into the items to draw: visible ones, and hidden ones still playing their
+/// hide animation.
+struct Flatten<'a> {
+    runs: &'a HashMap<estream_core::ItemId, ItemAnimationRun>,
+    now: Timestamp,
+    out: &'a mut Vec<FlatItem>,
+}
+
+impl Flatten<'_> {
+    fn items(&mut self, items: &[SceneItem], parent: Affine2, opacity: f32) {
+        for item in items.iter().filter(|i| i.opacity > 0.0) {
+            let run = self
+                .runs
+                .get(&item.id)
+                .filter(|r| r.end() > self.now)
+                .copied();
+            let opacity = opacity * item.opacity;
+            match &item.content {
+                ItemContent::Source { source }
+                    if item.visible || run.is_some_and(|r| !r.showing) =>
+                {
+                    self.out.push(flat(item, *source, parent, opacity, run))
+                }
+                ItemContent::Source { .. } => {}
+                ItemContent::Group { items } if item.visible => {
+                    self.items(items, parent * item.transform.group_matrix(), opacity)
+                }
+                ItemContent::Group { .. } => {}
             }
         }
     }
+}
+
+fn flat(
+    item: &SceneItem,
+    source: SourceId,
+    parent: Affine2,
+    opacity: f32,
+    run: Option<ItemAnimationRun>,
+) -> FlatItem {
+    FlatItem {
+        item: item.id,
+        source,
+        parent,
+        transform: item.transform,
+        crop: item.crop,
+        opacity,
+        blend: item.blend,
+        fill: if item.transform.bounds_mode == estream_core::BoundsMode::Fit {
+            item.fill.clone()
+        } else {
+            estream_project::ItemFill::None
+        },
+        mask: item.mask.clone().filter(|m| m.draws()),
+        animations: item.animations,
+        run,
+    }
+}
+
+/// Every masked source item, visible or not, with its group transforms.
+fn masked(items: &[SceneItem], parent: Affine2, out: &mut Vec<FlatItem>) {
+    for item in items {
+        match &item.content {
+            ItemContent::Source { source } => {
+                if item.mask.as_ref().is_some_and(|m| m.draws()) {
+                    out.push(flat(item, *source, parent, item.opacity, None));
+                }
+            }
+            ItemContent::Group { items } => {
+                masked(items, parent * item.transform.group_matrix(), out)
+            }
+        }
+    }
+}
+
+type Choreography = (
+    Vec<(usize, usize)>,
+    Vec<(usize, ItemAnimationRun)>,
+    Vec<(usize, ItemAnimationRun)>,
+);
+
+/// What each item does during scene transition `t` from `from` to `to`: the pairs that move
+/// (when moves are on), and the items only on one side that play their own animation.
+///
+/// Pairs share a source and are matched from the top of the list down. Hide animations start
+/// with the transition; show animations end with it; both last at most as long as it does.
+fn choreograph(from: &[FlatItem], to: &[FlatItem], t: &ActiveTransition) -> Choreography {
+    let mut pairs = Vec::new();
+    if t.transition.moves.is_some() {
+        let mut taken = vec![false; from.len()];
+        for (j, b) in to.iter().enumerate().rev() {
+            if !b.animations.moves {
+                continue;
+            }
+            if let Some(i) = (0..from.len())
+                .rev()
+                .find(|&i| !taken[i] && from[i].source == b.source && from[i].animations.moves)
+            {
+                taken[i] = true;
+                pairs.push((i, j));
+            }
+        }
+        pairs.reverse(); // drawn bottom first
+    }
+    let total = t.transition.duration_ms;
+    let clamp = |a: &ItemAnimation| ItemAnimation {
+        duration_ms: a.duration_ms.min(total),
+        ..*a
+    };
+    let leaving = from
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| !to.iter().any(|b| b.source == a.source))
+        .filter_map(|(i, a)| {
+            let animation = clamp(a.animations.hide.as_ref()?);
+            Some((i, ItemAnimationRun::new(false, animation, t.start)))
+        })
+        .collect();
+    let arriving = to
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| !from.iter().any(|a| a.source == b.source))
+        .filter_map(|(j, b)| {
+            let animation = clamp(b.animations.show.as_ref()?);
+            let delay = u64::from(total - animation.duration_ms) * 1_000_000;
+            Some((
+                j,
+                ItemAnimationRun::new(true, animation, Timestamp(t.start.0.saturating_add(delay))),
+            ))
+        })
+        .collect();
+    (pairs, leaving, arriving)
 }
 
 #[cfg(test)]
@@ -473,5 +667,167 @@ mod tests {
         assert_eq!(g.audio.canvases, vec![main, vertical]);
         assert_eq!(g.canvases.len(), 2);
         assert_eq!(g.canvases[1].items.len(), 2);
+    }
+
+    fn animated(kind: estream_project::AnimationKind, ms: u32) -> Option<ItemAnimation> {
+        Some(ItemAnimation {
+            kind,
+            duration_ms: ms,
+            ease: estream_project::Ease::Linear,
+        })
+    }
+
+    /// Scene A (program) and B; `from_items` and `to_items` go into A and B, then the program
+    /// switches to B with a 1000 ms Fade (moves on or off).
+    fn switched(
+        from_items: Vec<SceneItem>,
+        to_items: Vec<SceneItem>,
+        moves: bool,
+    ) -> (RenderGraph, Vec<SourceDef>) {
+        let mut p = Project::new_default(1920, 1080, Rational::fps(60));
+        let canvas = p.canvases[0].id;
+        let a = p.scenes[0].id;
+        let mut b = estream_project::Scene::new("B", canvas);
+        p.scenes[0].items = from_items;
+        b.items = to_items;
+        let b_id = b.id;
+        p.scenes.push(b);
+        p.canvas_mut(canvas).unwrap().active_scene = Some(b_id);
+        let mut view = ViewState::default();
+        view.transitions.insert(
+            canvas,
+            ActiveTransition {
+                from: Some(a),
+                transition: Transition {
+                    kind: TransitionKind::Fade,
+                    duration_ms: 1000,
+                    moves: moves.then(MoveSettings::default),
+                },
+                start: Timestamp(1_000_000_000),
+            },
+        );
+        (
+            RenderGraph::build_with(&p, 1, &view, Timestamp(1_000_000_000)),
+            p.sources.clone(),
+        )
+    }
+
+    #[test]
+    fn matching_sources_pair_from_the_top_and_opted_out_items_dont() {
+        let [cam, overlay, other] = [1u128, 2, 3].map(SourceId::from_u128);
+        let mut grouped = SceneItem::source(cam);
+        grouped.transform.position = Vec2::new(5.0, 5.0);
+        let from = vec![
+            SceneItem::source(overlay),
+            SceneItem::group("G", vec![grouped]),
+        ];
+        // B: two cameras (the upper one, last in the list, pairs) and a different overlay.
+        let mut fixed = SceneItem::source(other);
+        fixed.animations.moves = false;
+        let to = vec![
+            SceneItem::source(cam),
+            SceneItem::source(other),
+            SceneItem::source(cam),
+            fixed,
+        ];
+        let (g, _) = switched(from, to, true);
+        let t = g.canvases[0].transition.as_ref().unwrap();
+        assert_eq!(t.from.len(), 2);
+        assert_eq!(
+            t.pairs,
+            vec![(1, 2)],
+            "the grouped camera moves to B's upper camera"
+        );
+        assert!(t.moves.is_some());
+
+        let (off, _) = switched(
+            vec![SceneItem::source(cam)],
+            vec![SceneItem::source(cam)],
+            false,
+        );
+        assert!(
+            off.canvases[0]
+                .transition
+                .as_ref()
+                .unwrap()
+                .pairs
+                .is_empty()
+        );
+
+        let mut stays = SceneItem::source(cam);
+        stays.animations.moves = false;
+        let (opted, _) = switched(vec![stays], vec![SceneItem::source(cam)], true);
+        assert!(
+            opted.canvases[0]
+                .transition
+                .as_ref()
+                .unwrap()
+                .pairs
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn items_on_one_side_play_their_animations_within_the_transition() {
+        use estream_project::AnimationKind as K;
+        let [cam, alert, title] = [1u128, 2, 3].map(SourceId::from_u128);
+        let mut leaving = SceneItem::source(alert);
+        leaving.animations.hide = animated(K::Fade, 400);
+        let mut cam_a = SceneItem::source(cam);
+        cam_a.animations.hide = animated(K::Fade, 400); // in both scenes: not leaving
+        let mut arriving = SceneItem::source(title);
+        arriving.animations.show = animated(K::Zoom, 5000);
+        let (g, _) = switched(
+            vec![cam_a, leaving],
+            vec![SceneItem::source(cam), arriving],
+            true,
+        );
+        let t = g.canvases[0].transition.as_ref().unwrap();
+        assert_eq!(t.leaving.len(), 1);
+        let (i, run) = t.leaving[0];
+        assert_eq!(
+            (i, run.showing, run.start),
+            (1, false, Timestamp(1_000_000_000))
+        );
+        assert_eq!(t.arriving.len(), 1);
+        let (j, run) = t.arriving[0];
+        assert_eq!(j, 1);
+        assert_eq!(run.animation.duration_ms, 1000, "clamped to the transition");
+        assert_eq!(
+            run.end(),
+            Timestamp(2_000_000_000),
+            "ends with the transition"
+        );
+    }
+
+    #[test]
+    fn hiding_items_stay_until_their_animation_ends() {
+        let mut p = Project::new_default(1920, 1080, Rational::fps(60));
+        let mut item = SceneItem::source(SourceId::from_u128(9));
+        item.visible = false;
+        let id = item.id;
+        p.scenes[0].items.push(item);
+        let mut masked = SceneItem::source(SourceId::from_u128(8));
+        masked.visible = false;
+        masked.mask = Some(estream_project::ItemMask::circle(1.0));
+        p.scenes[0].items.push(masked);
+        let mut view = ViewState::default();
+        let run = ItemAnimationRun::new(
+            false,
+            animated(estream_project::AnimationKind::Fade, 400).unwrap(),
+            Timestamp(0),
+        );
+        view.item_animations.insert(id, run);
+        let during = RenderGraph::build_with(&p, 1, &view, Timestamp(200_000_000));
+        assert_eq!(during.canvases[0].items.len(), 1);
+        assert_eq!(during.canvases[0].items[0].run, Some(run));
+        assert!((run.presence(Timestamp(200_000_000)) - 0.5).abs() < 1e-6);
+        let after = RenderGraph::build_with(&p, 2, &view, Timestamp(400_000_000));
+        assert!(after.canvases[0].items.is_empty());
+        assert_eq!(
+            after.canvases[0].standby.len(),
+            1,
+            "hidden masked items are baked ahead"
+        );
     }
 }

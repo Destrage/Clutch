@@ -5,15 +5,15 @@ use crate::feed::{GpuRing, ReadbackRing, VideoConsumer};
 use crate::filters::Filters;
 use crate::frame_clock::{FrameClock, FrameTick, wait_until};
 use crate::gpu_export::GpuExport;
-use crate::graph::{CanvasGraph, FlatItem, RenderGraph};
+use crate::graph::{CanvasGraph, FlatItem, ItemAnimationRun, RenderGraph, TransitionGraph};
 use crate::source::{SourceContext, SourceRegistry, SourceStatus, VideoSource};
 use crate::watchdog::{FinishGuard, Stage, VideoProgress};
 use estream_core::color::srgb_to_linear;
 use estream_core::{CanvasId, EngineClock, Rgba8, SourceId, Timestamp};
 use estream_gpu::{
     BuiltinKind, CANVAS_FORMAT, CanvasRenderer, Compositor, ConvertInput, DrawItem, FilterOutput,
-    GpuContext, OutputConverter, PreviewBridge, TransitionParams, TransitionRenderer,
-    TransitionShader, TransitionTargets, wgpu,
+    GpuContext, Morph, MorphEnd, OutputConverter, PreviewBridge, TransitionParams,
+    TransitionRenderer, TransitionShader, TransitionTargets, wgpu,
 };
 use estream_project::TransitionKind;
 use glam::Vec2;
@@ -255,6 +255,8 @@ struct CanvasSlot {
     gpu_ring: Option<GpuRing>,
     /// Renders the outgoing scene during transitions (separate uniform buffer).
     from_renderer: Option<CanvasRenderer>,
+    /// Draws moving and animated items over a running transition (own uniform buffer).
+    over_renderer: Option<CanvasRenderer>,
     /// Outgoing / incoming scratch canvases, allocated on the first transition.
     transition_targets: Option<TransitionTargets>,
     /// Studio-mode Preview render (only while studio mode is on).
@@ -288,62 +290,239 @@ impl StudioPreview {
     }
 }
 
-/// Collects drawable items for `flats` into `out` (sources without a frame draw nothing).
-fn push_items<'a>(
+/// What items are drawn from this frame.
+#[derive(Clone, Copy)]
+struct Ctx<'a> {
     sources: &'a HashMap<SourceId, SourceSlot>,
     filters: &'a Filters,
     fills: &'a crate::fill::Fills,
     masks: &'a crate::masks::Masks,
+    /// Canvas size in pixels.
+    canvas: Vec2,
+    now: Timestamp,
+}
+
+/// An effect layer (covering the item grown by `pad` on each side) for an item at `matrix`.
+fn effect_item<'a>(
+    (tex, pad): &'a (crate::masks::Tex, Vec2),
+    matrix: glam::Affine2,
+    opacity: f32,
+    clip: [f32; 4],
+) -> DrawItem<'a> {
+    DrawItem {
+        binding: &tex.binding,
+        matrix: matrix
+            * glam::Affine2::from_translation(-*pad)
+            * glam::Affine2::from_scale(Vec2::ONE + 2.0 * *pad),
+        uv_min: Vec2::ZERO,
+        uv_max: Vec2::ONE,
+        opacity,
+        blend: estream_core::BlendMode::Normal,
+        mask: None,
+        clip: crate::motion::padded_clip(clip, *pad),
+        morph: None,
+    }
+}
+
+/// Collects drawable items for `flats` into `out`, except those `skip` picks (by index).
+/// Sources without a frame draw nothing.
+fn push_items<'a>(
+    ctx: Ctx<'a>,
     flats: &[FlatItem],
+    skip: impl Fn(usize) -> bool,
     out: &mut Vec<DrawItem<'a>>,
 ) {
-    for flat in flats {
-        let Some((binding, size)) = source_frame(sources, filters, flat.source) else {
-            continue;
-        };
-        let layout = flat.transform.layout(flat.crop, size);
-        if layout.size.x <= 0.0 || layout.size.y <= 0.0 {
-            continue;
-        }
-        let drawn = match flat.mask {
-            Some(_) => match masks.get(flat.item) {
-                Some(drawn) => Some(drawn),
-                None => continue, // the first mask is still baking
-            },
-            None => None,
-        };
-        let matrix = flat.parent * layout.matrix;
-        // An effect layer covers the item grown by `pad` on each side.
-        let effect = |(tex, pad): &'a (crate::masks::Tex, Vec2)| DrawItem {
-            binding: &tex.binding,
-            matrix: matrix
-                * glam::Affine2::from_translation(-*pad)
-                * glam::Affine2::from_scale(Vec2::ONE + 2.0 * *pad),
-            uv_min: Vec2::ZERO,
-            uv_max: Vec2::ONE,
-            opacity: flat.opacity,
-            blend: estream_core::BlendMode::Normal,
-            mask: None,
-        };
-        if let Some(fill) = fills.item(flat) {
-            out.push(fill);
-        }
-        if let Some(under) = drawn.and_then(|d| d.under.as_ref()) {
-            out.push(effect(under));
-        }
-        out.push(DrawItem {
-            binding,
-            matrix,
-            uv_min: layout.uv_min,
-            uv_max: layout.uv_max,
-            opacity: flat.opacity,
-            blend: flat.blend,
-            mask: drawn.and_then(|d| d.mask.as_ref()).map(|m| &m.binding),
-        });
-        if let Some(over) = drawn.and_then(|d| d.over.as_ref()) {
-            out.push(effect(over));
+    for (i, flat) in flats.iter().enumerate() {
+        if !skip(i) {
+            push_item(ctx, flat, flat.run, out);
         }
     }
+}
+
+/// Draws one item (its fill, effects and itself), changed by a show or hide animation `run`.
+fn push_item<'a>(
+    ctx: Ctx<'a>,
+    flat: &FlatItem,
+    run: Option<ItemAnimationRun>,
+    out: &mut Vec<DrawItem<'a>>,
+) {
+    let Some((binding, size)) = source_frame(ctx.sources, ctx.filters, flat.source) else {
+        return;
+    };
+    let layout = flat.transform.layout(flat.crop, size);
+    if layout.size.x <= 0.0 || layout.size.y <= 0.0 {
+        return;
+    }
+    let drawn = match flat.mask {
+        Some(_) => match ctx.masks.get(flat.item) {
+            Some(drawn) => Some(drawn),
+            None => return, // the first mask is still baking
+        },
+        None => None,
+    };
+    let matrix = flat.parent * layout.matrix;
+    let look = match run {
+        Some(r) => {
+            let presence = r.presence(ctx.now);
+            if presence <= 0.0 {
+                return;
+            }
+            crate::motion::animate(r.animation.kind, r.showing, presence, matrix, ctx.canvas)
+        }
+        None => crate::motion::Look::NONE,
+    };
+    let opacity = flat.opacity * look.opacity;
+    if let Some(mut fill) = ctx.fills.item(flat) {
+        fill.matrix = look.delta * fill.matrix;
+        fill.opacity *= look.opacity;
+        fill.clip = look.clip;
+        out.push(fill);
+    }
+    let matrix = look.delta * matrix;
+    if let Some(under) = drawn.and_then(|d| d.under.as_ref()) {
+        out.push(effect_item(under, matrix, opacity, look.clip));
+    }
+    out.push(DrawItem {
+        binding,
+        matrix,
+        uv_min: layout.uv_min,
+        uv_max: layout.uv_max,
+        opacity,
+        blend: flat.blend,
+        mask: drawn.and_then(|d| d.mask.as_ref()).map(|m| &m.binding),
+        clip: look.clip,
+        morph: None,
+    });
+    if let Some(over) = drawn.and_then(|d| d.over.as_ref()) {
+        out.push(effect_item(over, matrix, opacity, look.clip));
+    }
+}
+
+/// Draws an item on its way from its place `a` in the old scene to `b` in the new one, at
+/// eased progress `t`: placement, crop and opacity in between, its outline morphing between
+/// the two masks, and fills and edge effects crossfading.
+fn push_pair<'a>(
+    ctx: Ctx<'a>,
+    a: &FlatItem,
+    b: &FlatItem,
+    t: f32,
+    curved: bool,
+    out: &mut Vec<DrawItem<'a>>,
+) {
+    let Some((binding, size)) = source_frame(ctx.sources, ctx.filters, b.source) else {
+        return;
+    };
+    let (la, lb) = (
+        a.transform.layout(a.crop, size),
+        b.transform.layout(b.crop, size),
+    );
+    if la.size.min_element() <= 0.0 || lb.size.min_element() <= 0.0 {
+        push_item(ctx, b, None, out);
+        return;
+    }
+    let (ma, mb) = (a.parent * la.matrix, b.parent * lb.matrix);
+    let matrix = crate::motion::between(ma, mb, t, curved);
+    let w = t.clamp(0.0, 1.0);
+    let drawn = |f: &FlatItem| f.mask.as_ref().and_then(|_| ctx.masks.get(f.item));
+    let (da, db) = (drawn(a), drawn(b));
+    let ends = [
+        (a, crate::motion::delta(ma, matrix), 1.0 - w, da),
+        (b, crate::motion::delta(mb, matrix), w, db),
+    ];
+    for (flat, delta, weight, _) in ends {
+        if let Some(mut fill) = ctx.fills.item(flat) {
+            fill.matrix = delta * fill.matrix;
+            fill.opacity *= weight;
+            out.push(fill);
+        }
+    }
+    for (flat, _, weight, d) in ends {
+        if let Some(under) = d.and_then(|d| d.under.as_ref()) {
+            out.push(effect_item(
+                under,
+                matrix,
+                flat.opacity * weight,
+                DrawItem::FULL,
+            ));
+        }
+    }
+    let cuts = |f: &FlatItem| f.mask.as_ref().is_some_and(|m| m.cuts());
+    let end = |f: &FlatItem, d: Option<&'a crate::masks::Drawn>| match d
+        .and_then(|d| d.field.as_ref())
+        .filter(|_| cuts(f))
+    {
+        Some(field) => MorphEnd::Field(&field.binding),
+        None => MorphEnd::Rect,
+    };
+    let feather = |f: &FlatItem| {
+        f.mask.as_ref().filter(|m| m.cuts()).map_or(0.0, |m| {
+            m.shapes.iter().map(|s| s.feather).fold(0.0, f32::max)
+        })
+    };
+    out.push(DrawItem {
+        binding,
+        matrix,
+        uv_min: la.uv_min.lerp(lb.uv_min, w),
+        uv_max: la.uv_max.lerp(lb.uv_max, w),
+        opacity: a.opacity + (b.opacity - a.opacity) * w,
+        blend: if w < 0.5 { a.blend } else { b.blend },
+        mask: None,
+        clip: DrawItem::FULL,
+        morph: (cuts(a) || cuts(b)).then(|| Morph {
+            from: end(a, da),
+            to: end(b, db),
+            t: w,
+            feather: feather(a) + (feather(b) - feather(a)) * w,
+        }),
+    });
+    for (flat, _, weight, d) in ends {
+        if let Some(over) = d.and_then(|d| d.over.as_ref()) {
+            out.push(effect_item(
+                over,
+                matrix,
+                flat.opacity * weight,
+                DrawItem::FULL,
+            ));
+        }
+    }
+}
+
+/// The items a running scene transition draws over the blended scenes: those leaving with
+/// their hide animation, then, in the new scene's order, those moving to their new place and
+/// those arriving with their show animation.
+fn push_transition_items<'a>(
+    ctx: Ctx<'a>,
+    t: &TransitionGraph,
+    items: &[FlatItem],
+    progress: f32,
+    out: &mut Vec<DrawItem<'a>>,
+) {
+    for (i, run) in &t.leaving {
+        if let Some(flat) = t.from.get(*i) {
+            push_item(ctx, flat, Some(*run), out);
+        }
+    }
+    let eased = t.moves.map_or(progress, |m| m.ease.apply(progress));
+    let curved = t.moves.is_some_and(|m| m.curved);
+    for (j, b) in items.iter().enumerate() {
+        if let Some((i, _)) = t.pairs.iter().find(|p| p.1 == j) {
+            if let Some(a) = t.from.get(*i) {
+                push_pair(ctx, a, b, eased, curved, out);
+            }
+        } else if let Some((_, run)) = t.arriving.iter().find(|a| a.0 == j) {
+            push_item(ctx, b, Some(*run), out);
+        }
+    }
+}
+
+/// Whether item `i` of the scene being left is drawn over the transition instead of in it.
+fn drawn_over_from(t: &TransitionGraph, i: usize) -> bool {
+    t.pairs.iter().any(|p| p.0 == i) || t.leaving.iter().any(|l| l.0 == i)
+}
+
+/// Whether item `j` of the new scene is drawn over the transition instead of in it.
+fn drawn_over_to(t: &TransitionGraph, j: usize) -> bool {
+    t.pairs.iter().any(|p| p.1 == j) || t.arriving.iter().any(|a| a.0 == j)
 }
 
 /// An item's size on the canvas in pixels (group scaling included).
@@ -390,6 +569,8 @@ impl CanvasPaint {
             opacity: 1.0,
             blend: estream_core::BlendMode::Normal,
             mask: None,
+            clip: estream_gpu::DrawItem::FULL,
+            morph: None,
         }
     }
 }
@@ -472,6 +653,8 @@ pub struct VideoCore {
     graph: Arc<RenderGraph>,
     scratch: Vec<DrawItem<'static>>,
     scratch_extra: Vec<DrawItem<'static>>,
+    /// Items drawn over a running scene transition (moving and animated ones).
+    scratch_over: Vec<DrawItem<'static>>,
     transitions: TransitionRenderer,
     filters: Filters,
     progress: Arc<VideoProgress>,
@@ -500,6 +683,7 @@ impl VideoCore {
             graph: Arc::new(RenderGraph::default()),
             scratch: Vec::new(),
             scratch_extra: Vec::new(),
+            scratch_over: Vec::new(),
             progress: Arc::new(VideoProgress::new(EngineClock::new())),
         }
     }
@@ -718,6 +902,7 @@ impl VideoCore {
             readback: None,
             gpu_ring: None,
             from_renderer: None,
+            over_renderer: None,
             transition_targets: None,
             preview: None,
             drawn: false,
@@ -792,6 +977,7 @@ impl VideoCore {
             graph,
             scratch,
             scratch_extra,
+            scratch_over,
             transitions,
             filters,
             fills,
@@ -807,6 +993,14 @@ impl VideoCore {
         let size = Vec2::new(cg.width as f32, cg.height as f32);
         let slot = ((canvas.sequence + 1) % OUTPUT_RING as u64) as usize;
 
+        let ctx = Ctx {
+            sources,
+            filters,
+            fills,
+            masks,
+            canvas: size,
+            now,
+        };
         let mut items = reuse(scratch);
         if let Some(p) = &canvas.paint {
             items.push(p.item(size));
@@ -815,20 +1009,23 @@ impl VideoCore {
             .transition
             .as_ref()
             .and_then(|t| t.progress(now).map(|p| (t, p)));
+        // Items that move or play their own animation are drawn over the scene transition.
+        let mut over = reuse(scratch_over);
+        if let Some((t, progress)) = running {
+            push_transition_items(ctx, t, &cg.items, progress, &mut over);
+        }
         // Stinger: the outgoing scene until the switch point, then the program scene, with
         // the stinger video stretched over the canvas on top. One normal render pass.
         let stinger = running.and_then(|(t, _)| t.overlay.map(|o| (t, o)));
         match stinger {
             Some((t, (overlay, point))) => {
                 let before = now.0.saturating_sub(t.start.0) < point;
-                push_items(
-                    sources,
-                    filters,
-                    fills,
-                    masks,
-                    if before { &t.from } else { &cg.items },
-                    &mut items,
-                );
+                if before {
+                    push_items(ctx, &t.from, |i| drawn_over_from(t, i), &mut items);
+                } else {
+                    push_items(ctx, &cg.items, |j| drawn_over_to(t, j), &mut items);
+                }
+                items.append(&mut over); // under the stinger
                 if let Some((binding, _)) = source_frame(sources, filters, overlay) {
                     items.push(DrawItem {
                         binding,
@@ -838,10 +1035,15 @@ impl VideoCore {
                         opacity: 1.0,
                         blend: estream_core::BlendMode::Normal,
                         mask: None,
+                        clip: estream_gpu::DrawItem::FULL,
+                        morph: None,
                     });
                 }
             }
-            None => push_items(sources, filters, fills, masks, &cg.items, &mut items),
+            None => match running {
+                Some((t, _)) => push_items(ctx, &cg.items, |j| drawn_over_to(t, j), &mut items),
+                None => push_items(ctx, &cg.items, |_| false, &mut items),
+            },
         }
         let running = if stinger.is_some() { None } else { running };
         match running {
@@ -860,7 +1062,7 @@ impl VideoCore {
                 if let Some(p) = &canvas.paint {
                     from.push(p.item(size));
                 }
-                push_items(sources, filters, fills, masks, &t.from, &mut from);
+                push_items(ctx, &t.from, |i| drawn_over_from(t, i), &mut from);
                 from_renderer.render(
                     gpu,
                     encoder,
@@ -887,6 +1089,12 @@ impl VideoCore {
                     &shader,
                     &params,
                 );
+                if !over.is_empty() {
+                    canvas
+                        .over_renderer
+                        .get_or_insert_with(|| CanvasRenderer::new(gpu, compositor.clone()))
+                        .render_over(gpu, encoder, &canvas.canvas_views[slot], size, &over);
+                }
             }
             None => canvas.renderer.render(
                 gpu,
@@ -897,6 +1105,7 @@ impl VideoCore {
                 &items,
             ),
         }
+        recycle(over, scratch_over);
         // Left alone while no UI shows it, or while the UI is still copying this slot.
         canvas.drawn = preview_wanted && canvas.output.preview_free(slot);
         if canvas.drawn {
@@ -911,7 +1120,7 @@ impl VideoCore {
             if let Some(p) = &canvas.paint {
                 items.push(p.item(size));
             }
-            push_items(sources, filters, fills, masks, flats, &mut items);
+            push_items(ctx, flats, |_| false, &mut items);
             preview.renderer.render(
                 gpu,
                 encoder,

@@ -172,6 +172,7 @@ fn stinger_overlays_and_switches_at_the_point() {
                     point_ms: 500,
                 },
                 duration_ms: 2000,
+                moves: None,
             },
             start,
         },

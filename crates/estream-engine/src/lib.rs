@@ -15,6 +15,7 @@ mod fill;
 mod filters;
 pub mod mask;
 mod masks;
+mod motion;
 /// Drift-free frame scheduling (re-exported from stream-core).
 pub mod frame_clock {
     pub use estream_core::frame_clock::*;

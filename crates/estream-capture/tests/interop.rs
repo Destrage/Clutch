@@ -89,6 +89,8 @@ fn center_pixel(
             opacity: 1.0,
             blend: estream_core::BlendMode::Normal,
             mask: None,
+            clip: estream_gpu::DrawItem::FULL,
+            morph: None,
         }],
     );
     let preview = estream_gpu::create_preview_texture(&gpu, 64, 32);

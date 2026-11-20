@@ -60,6 +60,8 @@ pub struct ItemPatch {
         deserialize_with = "present"
     )]
     pub mask: Option<Option<estream_project::ItemMask>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub animations: Option<estream_project::ItemAnimations>,
 }
 
 /// A field that is present (even as `null`) is `Some`, so `null` can clear a value.
@@ -84,6 +86,7 @@ impl ItemPatch {
             self.blend.is_some(),
             self.fill.is_some(),
             self.mask.is_some(),
+            self.animations.is_some(),
         ]
         .iter()
         .enumerate()
@@ -720,6 +723,14 @@ impl Command {
                     }
                     mask.validate().map_err(CommandError::Invalid)?;
                 }
+                if let Some(animations) = &patch.animations {
+                    if it.source_id().is_none() {
+                        return Err(CommandError::Invalid(
+                            "groups can't have show or hide animations".into(),
+                        ));
+                    }
+                    animations.validate().map_err(CommandError::Invalid)?;
+                }
                 let mut old = ItemPatch::default();
                 if let Some(v) = patch.name {
                     old.name = Some(std::mem::replace(&mut it.name, v));
@@ -747,6 +758,9 @@ impl Command {
                 }
                 if let Some(v) = patch.mask {
                     old.mask = Some(std::mem::replace(&mut it.mask, v));
+                }
+                if let Some(v) = patch.animations {
+                    old.animations = Some(std::mem::replace(&mut it.animations, v));
                 }
                 Ok(applied(
                     UpdateItem {

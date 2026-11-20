@@ -3,7 +3,7 @@ import { Icons } from "icons.slint";
 import { CanvasTab, SceneRow, LayerRow, MixerStrip } from "types.slint";
 import {
     Button, IconButton, Icon, TextField, NumberField, Slider, Select, Panel, PanelHeader, Badge,
-    EmptyState, Hint,
+    EmptyState, Hint, Toggle, Segmented,
 } from "widgets.slint";
 
 /// One row of a popup menu.
@@ -508,6 +508,10 @@ export component TransitionBar inherits Rectangle {
     /// Stinger video file name and switch point (ms).
     in property <string> file;
     in property <float> point;
+    /// "Move matching items", its movement (0 smooth, 1 spring, 2 linear) and curved path.
+    in property <bool> moves;
+    in property <int> move-ease;
+    in property <bool> move-curved;
     callback set(string, float);
     callback edit-shader();
 
@@ -576,6 +580,22 @@ export component TransitionBar inherits Rectangle {
                 changed(v) => { root.set("point", v); }
             }
         }
+        if root.kind != 0: Toggle {
+            label: "Move matching items";
+            checked: root.moves;
+            toggled(on) => { root.set("moves", on ? 1 : 0); }
+        }
+        if root.kind != 0 && root.moves: Segmented {
+            label: "Movement";
+            options: ["Smooth", "Spring", "Linear"];
+            current: root.move-ease;
+            selected(i) => { root.set("move-ease", i); }
+        }
+        if root.kind != 0 && root.moves: Toggle {
+            label: "Curved path";
+            checked: root.move-curved;
+            toggled(on) => { root.set("move-curved", on ? 1 : 0); }
+        }
     }
 }
 
@@ -593,6 +613,9 @@ export component ScenesPanel inherits Panel {
     in property <float> transition-duration;
     in property <string> transition-file;
     in property <float> transition-point;
+    in property <bool> transition-moves;
+    in property <int> transition-move-ease;
+    in property <bool> transition-move-curved;
     callback transition-set(string, float);
     callback edit-shader();
 
@@ -703,6 +726,9 @@ export component ScenesPanel inherits Panel {
         duration: root.transition-duration;
         file: root.transition-file;
         point: root.transition-point;
+        moves: root.transition-moves;
+        move-ease: root.transition-move-ease;
+        move-curved: root.transition-move-curved;
         set(k, v) => { root.transition-set(k, v); }
         edit-shader => { root.edit-shader(); }
     }

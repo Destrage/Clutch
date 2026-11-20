@@ -70,6 +70,7 @@ pub const REQUESTS: &[&str] = &[
     "GetCurrentSceneTransition",
     "SetCurrentSceneTransition",
     "SetCurrentSceneTransitionDuration",
+    "SetCurrentSceneTransitionSettings",
     "TriggerStudioModeTransition",
     "GetSourceActive",
     "GetSourceFilterList",
@@ -92,6 +93,8 @@ pub const REQUESTS: &[&str] = &[
     "SetSceneItemIndex",
     "GetSceneItemBlendMode",
     "SetSceneItemBlendMode",
+    "GetSceneItemPrivateSettings",
+    "SetSceneItemPrivateSettings",
     "GetVirtualCamStatus",
     "StartVirtualCam",
     "StopVirtualCam",
@@ -501,6 +504,10 @@ fn transition_json(t: &Transition) -> Value {
     let mut settings = serde_json::to_value(&t.kind).unwrap_or_default();
     if let Some(map) = settings.as_object_mut() {
         map.remove("type");
+        map.insert(
+            "moveMatchingItems".into(),
+            serde_json::to_value(t.moves).unwrap_or_default(),
+        );
     }
     json!({
         "transitionName": name,
@@ -1102,6 +1109,50 @@ pub fn handle(
             let p = engine(studio)?.snapshot();
             Ok(transition_json(&p.transition))
         }
+        "SetCurrentSceneTransitionSettings" => {
+            let engine = engine(studio)?;
+            let p = engine.snapshot();
+            let settings = a.object("transitionSettings")?;
+            let overlay = a.opt_bool("overlay")?.unwrap_or(true);
+            // The kind's own fields (as GetCurrentSceneTransition lists them) and
+            // "moveMatchingItems" (an object, or null for off).
+            let mut kind = serde_json::to_value(&p.transition.kind).unwrap_or_default();
+            let mut moves = p.transition.moves;
+            if !overlay {
+                kind = json!({ "type": kind.get("type").cloned().unwrap_or_default() });
+                moves = None;
+            }
+            for (key, value) in settings {
+                match key.as_str() {
+                    "type" => {}
+                    "moveMatchingItems" => {
+                        moves = serde_json::from_value(value.clone()).map_err(|e| {
+                            RequestError::new(
+                                st::INVALID_REQUEST_FIELD,
+                                format!("`moveMatchingItems`: {e}"),
+                            )
+                        })?;
+                    }
+                    _ => kind[key.as_str()] = value.clone(),
+                }
+            }
+            let kind: TransitionKind = serde_json::from_value(kind).map_err(|e| {
+                RequestError::new(
+                    st::INVALID_REQUEST_FIELD,
+                    format!("`transitionSettings`: {e}"),
+                )
+            })?;
+            exec(
+                engine,
+                Command::SetTransition {
+                    transition: Transition {
+                        kind,
+                        duration_ms: p.transition.duration_ms,
+                        moves,
+                    },
+                },
+            )
+        }
         "SetCurrentSceneTransition" => {
             let engine = engine(studio)?;
             let p = engine.snapshot();
@@ -1130,6 +1181,7 @@ pub fn handle(
                     transition: Transition {
                         kind,
                         duration_ms: p.transition.duration_ms,
+                        moves: p.transition.moves,
                     },
                 },
             )
@@ -1144,6 +1196,7 @@ pub fn handle(
                     transition: Transition {
                         kind: p.transition.kind.clone(),
                         duration_ms: ms,
+                        moves: p.transition.moves,
                     },
                 },
             )
@@ -1510,6 +1563,39 @@ pub fn handle(
                 item,
                 ItemPatch {
                     blend: Some(mode),
+                    ..Default::default()
+                },
+            )
+        }
+        // Clutch keeps an item's show and hide animations here, under "animations".
+        "GetSceneItemPrivateSettings" => {
+            let p = engine(studio)?.snapshot();
+            let (_, item) = item(&p, &ctx.ids, &a)?;
+            Ok(json!({
+                "sceneItemSettings": { "animations": item.animations },
+            }))
+        }
+        "SetSceneItemPrivateSettings" => {
+            let engine = engine(studio)?;
+            let p = engine.snapshot();
+            let (scene, item) = item(&p, &ctx.ids, &a)?;
+            let settings = a.object("sceneItemSettings")?;
+            let Some(value) = settings.get("animations") else {
+                return Ok(Value::Null); // nothing Clutch keeps
+            };
+            let animations: estream_project::ItemAnimations = serde_json::from_value(value.clone())
+                .map_err(|e| {
+                    RequestError::new(
+                        st::INVALID_REQUEST_FIELD,
+                        format!("`sceneItemSettings.animations`: {e}"),
+                    )
+                })?;
+            update_item(
+                engine,
+                scene,
+                item,
+                ItemPatch {
+                    animations: Some(animations),
                     ..Default::default()
                 },
             )

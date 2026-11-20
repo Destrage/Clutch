@@ -93,6 +93,7 @@ fn fade_blends_in_linear_light_and_ends_on_the_new_scene() {
             transition: Transition {
                 kind: TransitionKind::Fade,
                 duration_ms: 1000,
+                moves: None,
             },
             start,
         },
@@ -131,6 +132,7 @@ fn slide_shows_both_scenes_halfway() {
                     direction: estream_project::Direction::Left,
                 },
                 duration_ms: 1000,
+                moves: None,
             },
             start: Timestamp::ZERO,
         },
@@ -192,6 +194,7 @@ fn graph_keeps_both_scenes_audio_until_the_transition_ends() {
             transition: Transition {
                 kind: TransitionKind::Fade,
                 duration_ms: 300,
+                moves: None,
             },
             start: Timestamp::ZERO,
         },
@@ -239,6 +242,7 @@ fn engine_transition_switches_program_and_expires() {
             Some(Transition {
                 kind: TransitionKind::Fade,
                 duration_ms: 400,
+                moves: None,
             }),
         )
         .unwrap();
@@ -280,6 +284,7 @@ fn plain_scene_change_cuts_a_running_transition() {
             Some(Transition {
                 kind: TransitionKind::Fade,
                 duration_ms: 5_000,
+                moves: None,
             }),
         )
         .unwrap();
@@ -309,6 +314,7 @@ fn a_copied_canvas_switches_with_its_original_in_one_undo_step() {
     let fade = Transition {
         kind: TransitionKind::Fade,
         duration_ms: 5_000,
+        moves: None,
     };
     engine.transition_to(main, b, Some(fade)).unwrap();
     let snap = engine.snapshot();
@@ -354,6 +360,7 @@ fn transition_setting_is_undoable_and_shaders_are_validated() {
             softness: 0.1,
         },
         duration_ms: 800,
+        moves: None,
     };
     engine
         .execute(Command::SetTransition {
@@ -370,6 +377,7 @@ fn transition_setting_is_undoable_and_shaders_are_validated() {
                 .into(),
         },
         duration_ms: 500,
+        moves: None,
     };
     let err = engine
         .execute(Command::SetTransition { transition: broken })

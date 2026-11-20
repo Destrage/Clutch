@@ -196,6 +196,9 @@ pub struct SceneItem {
     /// Shapes that make parts of the item transparent, and edge effects.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mask: Option<crate::ItemMask>,
+    /// Show and hide animations, and whether the item moves between scenes.
+    #[serde(default, skip_serializing_if = "crate::ItemAnimations::is_default")]
+    pub animations: crate::ItemAnimations,
 }
 
 /// Fills the part of an item's bounding box that a fitted source leaves empty (the bars above
@@ -263,6 +266,7 @@ impl SceneItem {
             blend: BlendMode::Normal,
             fill: ItemFill::None,
             mask: None,
+            animations: crate::ItemAnimations::default(),
         }
     }
 

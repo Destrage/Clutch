@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 pub struct Transition {
     pub kind: TransitionKind,
     pub duration_ms: u32,
+    /// "Move matching items": items in both scenes travel to their new place (`None` = off).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub moves: Option<crate::MoveSettings>,
 }
 
 impl Default for Transition {
@@ -16,6 +19,7 @@ impl Default for Transition {
         Self {
             kind: TransitionKind::Fade,
             duration_ms: 300,
+            moves: None,
         }
     }
 }
@@ -24,6 +28,7 @@ impl Transition {
     pub const CUT: Transition = Transition {
         kind: TransitionKind::Cut,
         duration_ms: 0,
+        moves: None,
     };
 
     /// True if this changes scenes instantly.
@@ -112,6 +117,10 @@ mod tests {
                 softness: 0.2,
             },
             duration_ms: 700,
+            moves: Some(crate::MoveSettings {
+                ease: crate::Ease::Spring,
+                curved: true,
+            }),
         };
         let json = serde_json::to_string(&t).unwrap();
         assert!(json.contains("\"type\":\"wipe\""), "{json}");
@@ -120,6 +129,7 @@ mod tests {
         assert_eq!(d, Transition::default());
         assert_eq!(d.kind, TransitionKind::Fade);
         assert_eq!(d.duration_ms, 300);
+        assert_eq!(d.moves, None, "moves stay off in older collections");
         assert!(Transition::CUT.is_instant());
         assert!(
             Transition {

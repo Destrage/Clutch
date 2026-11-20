@@ -238,6 +238,8 @@ impl Fills {
                     opacity: 1.0,
                     blend: BlendMode::Normal,
                     mask: None,
+                    clip: estream_gpu::DrawItem::FULL,
+                    morph: None,
                 }],
             );
             let source = FilterOutput {
@@ -273,6 +275,8 @@ impl Fills {
             opacity: flat.opacity,
             blend: flat.blend,
             mask: None,
+            clip: estream_gpu::DrawItem::FULL,
+            morph: None,
         })
     }
 }

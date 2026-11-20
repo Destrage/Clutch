@@ -12,6 +12,10 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # A fixed FFmpeg 9 build (BtbN keeps month-end builds; dailies vanish after two weeks).
+  # Not "latest": BtbN builds from 2026-11-18 on crash in libkvazaar.
+  FFMPEG_TAG: autobuild-2026-10-31-12-59
+  FFMPEG_NAME: ffmpeg-n9.0.2-39-g7adfbe40dc
 
 jobs:
   rust:
@@ -22,9 +26,9 @@ jobs:
       - name: FFmpeg 9 (LGPL, shared)
         shell: pwsh
         run: |
-          curl.exe -sSL --fail -o ffmpeg.zip https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-win64-lgpl-shared-9.0.zip
+          curl.exe -sSL --fail -o ffmpeg.zip "https://github.com/BtbN/FFmpeg-Builds/releases/download/$env:FFMPEG_TAG/$env:FFMPEG_NAME-win64-lgpl-shared-9.0.zip"
           Expand-Archive ffmpeg.zip -DestinationPath third_party
-          Move-Item third_party/ffmpeg-n9.0-latest-win64-lgpl-shared-9.0 third_party/ffmpeg
+          Move-Item "third_party/$env:FFMPEG_NAME-win64-lgpl-shared-9.0" third_party/ffmpeg
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -62,7 +66,7 @@ jobs:
       - name: FFmpeg 9 (LGPL, shared)
         run: |
           mkdir -p third_party/ffmpeg
-          curl -sSL https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-linux64-lgpl-shared-9.0.tar.xz \
+          curl -sSL --fail "https://github.com/BtbN/FFmpeg-Builds/releases/download/$FFMPEG_TAG/$FFMPEG_NAME-linux64-lgpl-shared-9.0.tar.xz" \
             | tar -xJ -C third_party/ffmpeg --strip-components=1
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -89,7 +93,7 @@ jobs:
       - name: FFmpeg 9 (LGPL, shared)
         run: |
           mkdir -p third_party/ffmpeg
-          curl -sSL https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-linux64-lgpl-shared-9.0.tar.xz \
+          curl -sSL --fail "https://github.com/BtbN/FFmpeg-Builds/releases/download/$FFMPEG_TAG/$FFMPEG_NAME-linux64-lgpl-shared-9.0.tar.xz" \
             | tar -xJ -C third_party/ffmpeg --strip-components=1
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2

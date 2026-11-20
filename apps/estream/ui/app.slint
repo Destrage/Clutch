@@ -78,6 +78,9 @@ export component AppWindow inherits Window {
     in property <float> transition-duration;
     in property <string> transition-file;
     in property <float> transition-point;
+    in property <bool> transition-moves;
+    in property <int> transition-move-ease;
+    in property <bool> transition-move-curved;
     in property <string> transition-label;
     in property <bool> transition-busy;
     in-out property <bool> shader-open;
@@ -695,6 +698,9 @@ export component AppWindow inherits Window {
                     transition-duration: root.transition-duration;
                     transition-file: root.transition-file;
                     transition-point: root.transition-point;
+                    transition-moves: root.transition-moves;
+                    transition-move-ease: root.transition-move-ease;
+                    transition-move-curved: root.transition-move-curved;
                     activate(id) => { root.scene-activate(id); main-keys.focus(); }
                     add => { root.scene-add(); }
                     duplicate(id) => { root.scene-duplicate(id); }
