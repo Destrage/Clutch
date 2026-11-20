@@ -24,4 +24,4 @@
 
 ## 5. Verification
 - [x] 5.1 `cargo test` and `cargo clippy --all-targets -- -D warnings` for the touched crates
-- [ ] 5.2 Record and clip a game with mic and Discord: tracks named, silent ones left out of clips, the player plays the game alone, no new dropped frames or audio gaps while streaming
+- [x] 5.2 Record and clip a game with mic and Discord: tracks named, silent ones left out of clips, the player plays the game alone, no new dropped frames or audio gaps while streaming

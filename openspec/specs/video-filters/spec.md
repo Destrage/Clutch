@@ -41,3 +41,11 @@ time and four parameters, and SHALL reject invalid code with a message naming th
 #### Scenario: Invalid filter code
 - **WHEN** the user applies filter code with an undefined identifier on line 2
 - **THEN** the filter is not changed and the error names line 2
+
+### Requirement: Filter Values as Percentages
+Video filter settings that are fractions SHALL be shown and entered as percentages, while the
+stored values stay fractions.
+
+#### Scenario: Opacity
+- **WHEN** a Color correction filter has opacity 1.0
+- **THEN** its Opacity slider reads "100%", and setting it to 40% stores 0.4
