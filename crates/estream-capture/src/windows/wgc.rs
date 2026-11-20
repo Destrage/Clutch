@@ -33,6 +33,18 @@ use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemIntero
 use windows::Win32::System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize};
 use windows::core::{IInspectable, Interface};
 
+/// Keeps the process's multithreaded apartment alive for its lifetime (once), so threads
+/// without COM can use WinRT through it and cached WinRT factories never outlive it.
+fn keep_mta() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        // SAFETY: plain COM call; the cookie is never released, on purpose.
+        if let Err(e) = unsafe { windows::Win32::System::Com::CoIncrementMTAUsage() } {
+            tracing::warn!(error = %e, "couldn't keep the COM MTA alive");
+        }
+    });
+}
+
 const RING: usize = 4;
 
 /// WGC buffers. Frames are released right after their copy is queued (not finished), so a
@@ -259,19 +271,14 @@ pub struct WgcCapture {
 unsafe impl Send for WgcCapture {}
 
 impl WgcCapture {
-    /// Asked on a thread of its own that initializes WinRT first: the WinRT call fails on a
-    /// thread without it (Clutch started after "Restore unsaved changes?" did), which hid
-    /// display, window and game capture for that session. Leaves the caller's COM state alone.
+    /// The WinRT call fails on a thread without COM (Clutch started after "Restore unsaved
+    /// changes?" called it there), which hid display, window and game capture for that
+    /// session. Keeping the process's MTA alive lets an uninitialized thread make it, and
+    /// leaves the caller's own apartment as it was (a helper thread that initialized and
+    /// exited tore the MTA down under the cached WinRT factories, which then crashed).
     pub fn is_supported() -> bool {
-        std::thread::spawn(|| {
-            // SAFETY: initializes WinRT for this short-lived thread only.
-            unsafe {
-                let _ = RoInitialize(RO_INIT_MULTITHREADED);
-            }
-            GraphicsCaptureSession::IsSupported().unwrap_or(false)
-        })
-        .join()
-        .unwrap_or(false)
+        keep_mta();
+        GraphicsCaptureSession::IsSupported().unwrap_or(false)
     }
 
     pub fn start(
