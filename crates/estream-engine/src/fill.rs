@@ -240,6 +240,7 @@ impl Fills {
                     mask: None,
                     clip: estream_gpu::DrawItem::FULL,
                     morph: None,
+                    border: None,
                 }],
             );
             let source = FilterOutput {
@@ -277,6 +278,7 @@ impl Fills {
             mask: None,
             clip: estream_gpu::DrawItem::FULL,
             morph: None,
+            border: None,
         })
     }
 }

@@ -67,6 +67,9 @@ pub struct Property {
     /// Short help shown under the field.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub hint: String,
+    /// Shown only while this boolean setting is on (e.g. an outline's color under "Outline").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<String>,
 }
 
 impl Property {
@@ -77,11 +80,18 @@ impl Property {
             kind,
             default: default.into(),
             hint: String::new(),
+            when: None,
         }
     }
 
     pub fn hint(mut self, hint: &str) -> Self {
         self.hint = hint.into();
+        self
+    }
+
+    /// Shows the setting only while the boolean setting `key` is on.
+    pub fn when(mut self, key: &str) -> Self {
+        self.when = Some(key.into());
         self
     }
 
@@ -178,6 +188,19 @@ impl PropertySchema {
         Self { properties }
     }
 
+    /// Whether `property` shows with `settings`: always, or while the boolean setting it
+    /// depends on is on (its default when `settings` doesn't have it).
+    pub fn shown(&self, property: &Property, settings: &Value) -> bool {
+        let Some(key) = &property.when else {
+            return true;
+        };
+        settings
+            .get(key)
+            .or_else(|| self.get(key).map(|p| &p.default))
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
+    }
+
     pub fn get(&self, key: &str) -> Option<&Property> {
         self.properties.iter().find(|p| p.key == key)
     }
@@ -215,6 +238,26 @@ impl PropertySchema {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn dependent_settings_follow_their_switch() {
+        let s = PropertySchema::new(vec![
+            Property::bool("outline", "Outline", false),
+            Property::float("width", "Width", 0.0, 10.0, 1.0, 2.0).when("outline"),
+            Property::bool("on", "On", true),
+            Property::float("depth", "Depth", 0.0, 10.0, 1.0, 1.0).when("on"),
+        ]);
+        let width = s.get("width").unwrap();
+        let depth = s.get("depth").unwrap();
+        assert!(!s.shown(width, &json!({})), "off by default");
+        assert!(s.shown(width, &json!({ "outline": true })));
+        assert!(s.shown(depth, &json!({})), "a switch that defaults to on");
+        assert!(!s.shown(depth, &json!({ "on": false })));
+        assert!(
+            s.shown(s.get("outline").unwrap(), &json!({})),
+            "no condition"
+        );
+    }
 
     fn schema() -> PropertySchema {
         PropertySchema::new(vec![

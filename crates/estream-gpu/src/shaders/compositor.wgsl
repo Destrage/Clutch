@@ -9,12 +9,17 @@ struct Item {
     uv_min: vec2<f32>,
     uv_max: vec2<f32>,
     opacity: f32,
-    _pad0: f32,
+    // 0 draws the source, 1 a border along the morph's outline.
+    mode: f32,
     _pad1: vec2<f32>,
     // Drawn part of the unit square: u_min, v_min, u_max, v_max.
     clip: vec4<f32>,
     // Shape morph: t, feather (px), from kind, to kind (0 = none, 1 = field, 2 = rectangle).
     morph: vec4<f32>,
+    // Border: lo, hi (px off the edge, negative inside), pad x, pad y (item units).
+    band: vec4<f32>,
+    // Border color, premultiplied.
+    tint: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> item: Item;
@@ -54,9 +59,28 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let lo = item.uv_min + half_texel;
     let hi = max(lo, item.uv_max - half_texel);
     let c = textureSample(source_tex, source_sampler, clamp(in.uv, lo, hi));
+    // A border's quad is the item grown by `pad`: `u` is the item's own unit square there, and
+    // the fields are read at the nearest point inside it.
+    let border = item.mode > 0.5;
+    let pad = select(vec2<f32>(0.0), item.band.zw, border);
+    let u = in.unit * (1.0 + 2.0 * pad) - pad;
+    let inner = clamp(u, vec2<f32>(0.0), vec2<f32>(1.0));
     // Sampled before branching so the samples stay in uniform control flow.
-    let first = textureSample(mask_tex, mask_sampler, in.unit).r;
-    let second = textureSample(morph_tex, morph_sampler, in.unit).r;
+    let first = textureSample(mask_tex, mask_sampler, inner).r;
+    let second = textureSample(morph_tex, morph_sampler, inner).r;
+    if (border) {
+        let size = vec2<f32>(length(item.m0), length(item.m1)) / (1.0 + 2.0 * pad);
+        let long = max(size.x, size.y);
+        // Past the item's square the distance grows with the way out (exact where the outline
+        // meets the square's edge, an over-estimate elsewhere).
+        let d = mix(
+            end_distance(item.morph.z, first, inner, size, long),
+            end_distance(item.morph.w, second, inner, size, long),
+            item.morph.x,
+        ) + length((u - inner) * size);
+        let a = clamp(d - item.band.x + 0.5, 0.0, 1.0) * clamp(item.band.y - d + 0.5, 0.0, 1.0);
+        return item.tint * (a * item.opacity);
+    }
     var mask = first;
     if (item.morph.z > 0.5) {
         let size = vec2<f32>(length(item.m0), length(item.m1));

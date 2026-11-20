@@ -186,6 +186,10 @@ pub struct App {
     auto_recording: Option<usize>,
     /// The Automation dialog's lists, kept across refreshes (see [`AutoModels`]).
     auto_models: AutoModels,
+    /// The settings form's lists, kept across refreshes (see [`FormModels`]).
+    form_models: FormModels,
+    /// The Mask panel's shape rows (kept like [`FormModels`], for the same reason).
+    mask_shapes: Rc<VecModel<crate::ui::MaskShapeRow>>,
     /// Stats history and health alerts.
     monitor: estream_health::Monitor,
     system: estream_health::SystemSampler,
@@ -1115,6 +1119,8 @@ impl App {
             auto_selected: None,
             auto_recording: None,
             auto_models: AutoModels::default(),
+            form_models: FormModels::default(),
+            mask_shapes: Rc::default(),
             monitor: estream_health::Monitor::new(),
             system: estream_health::SystemSampler::start(),
             health_at: Instant::now(),
@@ -7254,7 +7260,7 @@ impl App {
                     .position(|c| *c == r.codec)
                     .unwrap_or(0),
             ),
-            encoders: ModelRc::new(VecModel::from(names)),
+            encoders: keep(&self.form_models.encoders, names),
             encoder: encoder as i32,
             rate_control: match r.rate_control {
                 RateControl::Cbr => 0,
@@ -7284,19 +7290,20 @@ impl App {
                 ThemeMode::System => 2,
             },
             ffmpeg: format!("FFmpeg libavutil {}", estream_media::version()).into(),
-            canvas_names: ModelRc::new(VecModel::from(canvas_labels.clone())),
+            canvas_names: keep(&self.form_models.canvas_names, canvas_labels.clone()),
             rec_canvas: if r.all_canvases {
                 canvas_ids.len() as i32
             } else {
                 index_of(r.canvas)
             },
-            rec_canvas_names: ModelRc::new(VecModel::from(
+            rec_canvas_names: keep(
+                &self.form_models.rec_canvas_names,
                 canvas_labels
                     .iter()
                     .cloned()
                     .chain(std::iter::once(SharedString::from("All canvases")))
                     .collect::<Vec<_>>(),
-            )),
+            ),
             dest_canvas: self
                 .dest_selected
                 .and_then(|i| self.settings.destinations.get(i))
@@ -7304,7 +7311,8 @@ impl App {
             ask_details: self.settings.ask_details,
             share_template: self.settings.share.template.clone().into(),
             share_placeholders: crate::share::PLACEHOLDERS.into(),
-            share_webhooks: ModelRc::new(VecModel::from(
+            share_webhooks: keep(
+                &self.form_models.share_webhooks,
                 self.settings
                     .share
                     .webhooks
@@ -7315,7 +7323,7 @@ impl App {
                         mention: w.mention_everyone,
                     })
                     .collect::<Vec<_>>(),
-            )),
+            ),
             share_storage: {
                 let note = crate::secret::storage_note();
                 let mut chars = note.chars();
@@ -7336,7 +7344,8 @@ impl App {
             scroll_pan: self.settings.scroll_pan,
             chat_third_party: self.settings.chat_third_party,
             chat_animate: self.settings.chat_animate,
-            event_sounds: ModelRc::new(VecModel::from(
+            event_sounds: keep(
+                &self.form_models.event_sounds,
                 crate::livechat::event::StreamEventKind::ALL
                     .iter()
                     .map(|k| crate::ui::EventSoundRow {
@@ -7351,7 +7360,7 @@ impl App {
                             .into(),
                     })
                     .collect::<Vec<_>>(),
-            )),
+            ),
             event_sound_volume: self.settings.event_sound_volume,
             remote_enabled: self.settings.remote.enabled,
             remote_port: self.settings.remote.port as f32,
@@ -7477,10 +7486,10 @@ impl App {
                 .display()
                 .to_string()
                 .into(),
-            clip_integrations: ModelRc::new(VecModel::from(integrations)),
-            clip_rule_games: ModelRc::new(VecModel::from(rule_games)),
+            clip_integrations: keep(&self.form_models.clip_integrations, integrations),
+            clip_rule_games: keep(&self.form_models.clip_rule_games, rule_games),
             clip_rule_game: self.clip_rule_game as i32,
-            clip_rules: ModelRc::new(VecModel::from(rules)),
+            clip_rules: keep(&self.form_models.clip_rules, rules),
             hype_game: c.hype_game,
             hype_mic: c.hype_mic,
             hype_sensitivity: match c.hype_sensitivity {
@@ -8369,6 +8378,7 @@ impl App {
                             maximum: p.max,
                             step: p.step,
                             unit: p.unit.into(),
+                            percent: false,
                             choices: ModelRc::new(VecModel::from(
                                 p.choices.iter().map(|&c| c.into()).collect::<Vec<_>>(),
                             )),
@@ -9915,6 +9925,7 @@ impl App {
                         maximum: p.max,
                         step: p.step,
                         unit: p.unit.into(),
+                        percent: p.percent,
                         choices: ModelRc::default(),
                         note: SharedString::new(),
                     })
@@ -10275,6 +10286,7 @@ impl App {
         let rows = schema
             .properties
             .iter()
+            .filter(|p| schema.shown(p, &settings))
             .map(|p| {
                 let mut row = prop_row(p, &settings[&p.key]);
                 row.stop = self.gradient_stop as i32;
@@ -12399,18 +12411,25 @@ struct AutoModels {
     games: Rc<VecModel<SharedString>>,
 }
 
+/// The settings form's lists. The form is rebuilt from background work too (account
+/// checks, update progress, health samples), so its lists keep their models like
+/// [`AutoModels`]: a row with an open dropdown or a field being edited stays put.
+#[derive(Default)]
+struct FormModels {
+    encoders: Rc<VecModel<SharedString>>,
+    canvas_names: Rc<VecModel<SharedString>>,
+    rec_canvas_names: Rc<VecModel<SharedString>>,
+    share_webhooks: Rc<VecModel<crate::ui::ShareWebhookRow>>,
+    event_sounds: Rc<VecModel<crate::ui::EventSoundRow>>,
+    clip_integrations: Rc<VecModel<crate::ui::ClipIntegrationRow>>,
+    clip_rule_games: Rc<VecModel<SharedString>>,
+    clip_rules: Rc<VecModel<crate::ui::ClipRuleRow>>,
+}
+
 /// `slot` as a model holding `rows`; its rows are replaced only where they differ, so rows
 /// that stay the same keep their UI (and any open dropdown in them).
 fn keep<T: Clone + PartialEq + 'static>(slot: &Rc<VecModel<T>>, rows: Vec<T>) -> ModelRc<T> {
-    if slot.row_count() != rows.len() {
-        slot.set_vec(rows);
-    } else {
-        for (i, row) in rows.into_iter().enumerate() {
-            if slot.row_data(i).as_ref() != Some(&row) {
-                slot.set_row_data(i, row);
-            }
-        }
-    }
+    sync_model(slot, rows);
     ModelRc::from(slot.clone())
 }
 

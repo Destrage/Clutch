@@ -1047,13 +1047,16 @@ export component ParamEditor inherits VerticalLayout {
     callback changed(float);
     callback committed();
 
+    // Fractions marked `percent` are shown and entered times 100.
+    property <float> k: root.param.percent ? 100 : 1;
     property <bool> choice: root.param.choices.length > 0;
     property <bool> switch: !root.choice && root.param.minimum == 0 && root.param.maximum == 1 && root.param.step == 1;
     property <bool> slider: !root.choice && !root.switch && root.param.step > 0
         && (root.param.maximum - root.param.minimum) / root.param.step <= 1000;
-    property <int> decimals: root.param.step < 0.1 ? 2 : root.param.step < 1 ? 1 : 0;
+    // Slightly under 0.1 and 1: a 0.01 step times 100 lands just below 1 in floating point.
+    property <int> decimals: root.param.step * root.k < 0.099 ? 2 : root.param.step * root.k < 0.99 ? 1 : 0;
     // Units that read as words get a space ("-26 dB"); symbols don't ("100%", "4.0:1").
-    property <string> unit: root.param.unit == "dB" || root.param.unit == "ms" || root.param.unit == "Hz" || root.param.unit == "px" ? " " + root.param.unit : root.param.unit;
+    property <string> unit: root.param.percent ? "%" : root.param.unit == "dB" || root.param.unit == "ms" || root.param.unit == "Hz" || root.param.unit == "px" ? " " + root.param.unit : root.param.unit;
 
     spacing: 4px;
     if root.choice && root.param.choices.length <= 3: FieldRow {
@@ -1090,26 +1093,26 @@ export component ParamEditor inherits VerticalLayout {
     }
     if root.slider: ValueSlider {
         label: root.param.label;
-        value: root.param.value;
-        minimum: root.param.minimum;
-        maximum: root.param.maximum;
-        step: root.param.step;
+        value: root.param.value * root.k;
+        minimum: root.param.minimum * root.k;
+        maximum: root.param.maximum * root.k;
+        step: root.param.step * root.k;
         decimals: root.decimals;
         suffix: root.unit;
-        changed(v) => { root.changed(v); }
+        changed(v) => { root.changed(v / root.k); }
         committed => { root.committed(); }
     }
     if !root.choice && !root.switch && !root.slider: FieldRow {
         label: root.param.label;
         NumberField {
             label: "";
-            value: root.param.value;
-            minimum: root.param.minimum;
-            maximum: root.param.maximum;
-            step: root.param.step;
+            value: root.param.value * root.k;
+            minimum: root.param.minimum * root.k;
+            maximum: root.param.maximum * root.k;
+            step: root.param.step * root.k;
             decimals: root.decimals;
-            suffix: root.param.unit;
-            changed(v) => { root.changed(v); }
+            suffix: root.unit;
+            changed(v) => { root.changed(v / root.k); }
             committed => { root.committed(); }
         }
     }

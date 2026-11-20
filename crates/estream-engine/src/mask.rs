@@ -442,13 +442,22 @@ fn field(mask: &ItemMask, size: Vec2) -> Image {
     let s = FIELD_SIDE / size.max_element();
     let w = ((size.x * s).round() as usize).max(1);
     let h = ((size.y * s).round() as usize).max(1);
-    let d = signed_distance(&shapes(mask, w, h, s), w, h);
+    // The item's edge is an edge too: measured on the grid with a ring of "outside" around
+    // it, a shape filling the item (rounded corners, a cut corner) gets real distances along
+    // its sides, not the way to the nearest cut-away corner.
+    let coverage = shapes(mask, w, h, s);
+    let (pw, ph) = (w + 2, h + 2);
+    let mut padded = vec![0.0f32; pw * ph];
+    for y in 0..h {
+        padded[(y + 1) * pw + 1..][..w].copy_from_slice(&coverage[y * w..][..w]);
+    }
+    let d = signed_distance(&padded, pw, ph);
     let long = w.max(h) as f32;
     Image {
         width: w as u32,
         height: h as u32,
-        pixels: d
-            .iter()
+        pixels: (0..h)
+            .flat_map(|y| d[(y + 1) * pw + 1..][..w].iter())
             .flat_map(|v| f16_bits(v / long).to_le_bytes())
             .collect(),
     }
@@ -553,6 +562,39 @@ mod tests {
             .is_none(),
             "effects alone keep the item's rectangle"
         );
+    }
+
+    #[test]
+    fn a_field_measures_to_the_item_edge_too() {
+        // Rounded corners fill the item: along its sides the edge is the item's own.
+        let f = bake(&ItemMask::rounded(8.0), Vec2::new(256.0, 128.0))
+            .field
+            .unwrap();
+        let value = |x: usize, y: usize| {
+            let i = (y * f.width as usize + x) * 2;
+            half::f16_from_bits(u16::from_le_bytes([f.pixels[i], f.pixels[i + 1]]))
+        };
+        let middle = value(128, 64) * 256.0;
+        assert!(
+            (middle + 64.0).abs() < 1.5,
+            "64 px from the top and bottom: {middle}"
+        );
+        let side = value(255, 64) * 256.0;
+        assert!(side < 0.0 && side > -1.5, "right at the right edge: {side}");
+    }
+
+    /// Normal halves only (what fields hold).
+    mod half {
+        pub fn f16_from_bits(bits: u16) -> f32 {
+            let sign = if bits & 0x8000 != 0 { -1.0 } else { 1.0 };
+            let exp = ((bits >> 10) & 0x1f) as i32;
+            let man = (bits & 0x3ff) as f32 / 1024.0;
+            if exp == 0 {
+                0.0
+            } else {
+                sign * (1.0 + man) * 2f32.powi(exp - 15)
+            }
+        }
     }
 
     #[test]

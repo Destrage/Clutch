@@ -91,6 +91,7 @@ fn center_pixel(
             mask: None,
             clip: estream_gpu::DrawItem::FULL,
             morph: None,
+            border: None,
         }],
     );
     let preview = estream_gpu::create_preview_texture(&gpu, 64, 32);

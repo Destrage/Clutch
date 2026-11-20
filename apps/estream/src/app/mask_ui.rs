@@ -362,7 +362,7 @@ impl App {
             on: mask.enabled,
             invert: mask.invert,
             editing: self.mask_edit.as_ref().is_some_and(|e| e.item == item.id),
-            shapes: ModelRc::new(VecModel::from(shapes)),
+            shapes: keep(&self.mask_shapes, shapes),
             border: e.border.is_some(),
             border_color: to_color(border.color),
             border_width: border.width,

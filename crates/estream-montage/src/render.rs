@@ -338,6 +338,7 @@ impl Renderer {
                             mask: None,
                             clip: estream_gpu::DrawItem::FULL,
                             morph: None,
+                            border: None,
                         }],
                     );
                 }
@@ -373,6 +374,7 @@ impl Renderer {
                         mask: None,
                         clip: estream_gpu::DrawItem::FULL,
                         morph: None,
+                        border: None,
                     };
                     self.from_pass.render(
                         &self.gpu,
@@ -457,6 +459,7 @@ impl Renderer {
                 mask: None,
                 clip: estream_gpu::DrawItem::FULL,
                 morph: None,
+                border: None,
             });
         }
         for (id, matrix, opacity) in &title_items {
@@ -471,6 +474,7 @@ impl Renderer {
                     mask: None,
                     clip: estream_gpu::DrawItem::FULL,
                     morph: None,
+                    border: None,
                 });
             }
         }
