@@ -190,7 +190,7 @@ export component AppWindow inherits Window {
     // The Live deck shows while a stream runs, unless the user chose to edit the layout.
     // Chat panel (the Live deck's right column and the Chat page).
     in property <[ChatTabRow]> chat-tabs;
-    in property <int> chat-selected;
+    in property <int> chat-selected: -1;
     in property <image> chat-frame;
     in property <string> chat-message;
     /// Who is in the selected chat (-1: not listed).
@@ -559,7 +559,8 @@ export component AppWindow inherits Window {
                         }
                     }
                     if root.studio-mode: Rectangle {
-                        x: parent.width - self.width - 12px;
+                        // Top right of the Preview pane (the Program pane has its own badge).
+                        x: preview.x + preview.width - self.width - 12px;
                         y: 10px;
                         width: preview-label.preferred-width + 14px;
                         height: 20px;

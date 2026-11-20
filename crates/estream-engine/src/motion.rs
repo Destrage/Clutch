@@ -203,6 +203,12 @@ pub fn padded_clip(clip: [f32; 4], pad: Vec2) -> [f32; 4] {
     ]
 }
 
+/// 0 below `lo`, 1 above `hi`, and a smooth S-curve between.
+pub fn smoothstep(lo: f32, hi: f32, x: f32) -> f32 {
+    let t = ((x - lo) / (hi - lo)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
 /// The canvas-space change that takes `from` to `to` (identity when `from` is degenerate).
 pub fn delta(from: Affine2, to: Affine2) -> Affine2 {
     if from.matrix2.determinant().abs() < 1e-9 {

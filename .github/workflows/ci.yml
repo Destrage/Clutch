@@ -29,6 +29,23 @@ jobs:
           curl.exe -sSL --fail -o ffmpeg.zip "https://github.com/BtbN/FFmpeg-Builds/releases/download/$env:FFMPEG_TAG/$env:FFMPEG_NAME-win64-lgpl-shared-9.0.zip"
           Expand-Archive ffmpeg.zip -DestinationPath third_party
           Move-Item "third_party/$env:FFMPEG_NAME-win64-lgpl-shared-9.0" third_party/ffmpeg
+      # Some runner images point at a removed MSVC toolset (CMake then found cl.exe 14.52 but
+      # link.exe 14.51, and the CEF build failed). Load the installed toolset's environment
+      # so every later step uses one consistent compiler and linker.
+      - name: MSVC environment
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $vars = cmd /c "`"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul && set"
+          if ($LASTEXITCODE -ne 0) { throw "vcvars64.bat failed" }
+          foreach ($line in $vars) {
+            if ($line -match '^([^=]+)=(.*)$') {
+              "$($Matches[1])=$($Matches[2])" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            }
+          }
+          $tools = ($vars | Where-Object { $_ -like 'VCToolsInstallDir=*' }) -replace '^VCToolsInstallDir=', ''
+          if (-not (Test-Path (Join-Path $tools 'bin\Hostx64\x64\link.exe'))) { throw "no link.exe in $tools" }
+          Write-Output "MSVC tools: $tools"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy

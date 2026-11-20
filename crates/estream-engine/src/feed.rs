@@ -293,7 +293,9 @@ pub(crate) struct GpuRing {
 }
 
 impl GpuRing {
-    pub const SLOTS: usize = 4;
+    /// Enough to cover a hardware encoder opening on the first frame (NVENC takes about
+    /// 50 ms, three frames at 60 fps); with four, those frames were dropped at every start.
+    pub const SLOTS: usize = 8;
 
     /// `None` for odd sizes or when the export can't create planes.
     pub fn new(gpu: &GpuContext, export: &dyn GpuExport, width: u32, height: u32) -> Option<Self> {

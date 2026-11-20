@@ -81,8 +81,9 @@ fn held_frames_drop_new_ones_instead_of_blocking() {
             held.push(f);
         }
     }
+    // The GPU ring holds 8 frames (`GpuRing::SLOTS`).
     assert!(
-        held.len() <= 4,
+        held.len() <= 8,
         "{} frames while every slot was held",
         held.len()
     );

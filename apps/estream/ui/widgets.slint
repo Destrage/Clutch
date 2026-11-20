@@ -310,6 +310,7 @@ export component NumberField inherits Rectangle {
         }
         input := TextInput {
             enabled: root.enabled;
+            horizontal-stretch: 1;
             single-line: true;
             vertical-alignment: center;
             color: Theme.text;
@@ -334,6 +335,7 @@ export component NumberField inherits Rectangle {
         }
         if root.suffix != "": Text {
             text: root.suffix;
+            horizontal-stretch: 0;
             color: Theme.text-faint;
             font-size: Theme.font-xs;
             vertical-alignment: center;
