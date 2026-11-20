@@ -182,3 +182,75 @@ undoable.
 - **WHEN** the user has removed Desktop Audio and later clicks "Add audio source" in the mixer
   and picks Desktop audio
 - **THEN** a new Desktop audio source is added and heard
+
+### Requirement: Mask Editing on the Preview
+With an item selected, "Edit mask" SHALL let the user draw rectangles, ellipses, polygons and
+freehand shapes on the preview, and move, resize and reshape them with handles and points. The
+outside of the mask SHALL be dimmed in the preview while editing.
+
+#### Scenario: Draw a polygon cut
+- **WHEN** the user edits the mask of a game capture, picks Polygon and Cut, clicks four points and closes the shape
+- **THEN** that area of the game becomes transparent
+
+### Requirement: Mask Panel
+The item inspector SHALL have a Mask panel listing the shapes with keep/cut, feather, reorder and
+delete, invert, on/off, the shape presets, an Effects section (border, glow, shadow) and effect
+styles. The panel and tools SHALL be usable from the keyboard and labelled for screen readers.
+
+#### Scenario: Neon glow style
+- **WHEN** the user picks the Neon glow style on a masked item
+- **THEN** the item gets a bright outside glow and the Effects section shows its color and size
+
+#### Scenario: Rounded camera preset
+- **WHEN** the user picks Rounded corners on a camera item and sets the radius to 40 px
+- **THEN** the camera is drawn with 40 px rounded corners
+
+### Requirement: Move Settings in Transition Settings
+The scene transition settings SHALL offer "Move matching items" with its ease curve (Smooth,
+Spring, Linear) and a curved path option, available for every transition kind except Cut.
+
+#### Scenario: Turning moves on
+- **WHEN** the user turns on "Move matching items" and switches scenes
+- **THEN** items in both scenes move to their new places, and the change can be undone
+
+### Requirement: Item Transitions Panel
+The item inspector SHALL have a Transitions panel with the item's show and hide animations (kind,
+direction where it applies, duration, ease) and "Move between scenes". All controls SHALL be
+reachable by keyboard and have screen-reader labels.
+
+#### Scenario: Setting a hide animation
+- **WHEN** the user picks Pop as the hide animation and then hides the item with its eye button
+- **THEN** the item pops out, and the setting can be undone
+
+### Requirement: Settings That Depend on a Switch
+A source setting that only matters while one of the source's switches is on SHALL be shown only
+while that switch is on.
+
+#### Scenario: Text outline
+- **WHEN** a Text source has Outline off
+- **THEN** the inspector doesn't show Outline color and Outline width, and turning Outline on
+  shows them
+
+### Requirement: Preview Beside Its Panels
+With the scene items panel or the inspector open, the canvas SHALL be fitted into the preview
+space they leave free, as long as the canvas keeps at least half of the preview's width;
+otherwise it is fitted to the whole preview as before.
+
+#### Scenario: Inspector open
+- **WHEN** an item is selected on a wide window
+- **THEN** no part of the canvas is under the inspector or the scene items panel
+
+### Requirement: Stable Lists
+Lists whose rows hold controls SHALL keep their rows when the app refreshes for an unrelated
+change, so an open dropdown or a slider being dragged in a row is not interrupted.
+
+#### Scenario: Remote change while a dropdown is open
+- **WHEN** a filter row's dropdown is open and the remote API renames a scene
+- **THEN** the dropdown stays open and Clutch keeps running
+
+### Requirement: Transition Card Shows Moves
+The transition card under the scenes SHALL say when "Move matching items" is on.
+
+#### Scenario: Moves on
+- **WHEN** the transition is a 700 ms Fade with moves on
+- **THEN** the card reads Fade, 700 ms and that items move

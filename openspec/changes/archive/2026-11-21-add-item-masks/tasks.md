@@ -22,4 +22,4 @@
 
 ## 4. Verification
 - [x] 4.1 `cargo test` and `cargo clippy --all-targets -- -D warnings` for the touched crates
-- [ ] 4.2 Masked camera and game capture while streaming and recording at 1080p60: masks look the same in preview, stream and recording; no extra dropped frames
+- [x] 4.2 Masked camera and game capture while streaming and recording at 1080p60: masks look the same in preview, stream and recording; no extra dropped frames
