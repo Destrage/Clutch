@@ -259,8 +259,19 @@ pub struct WgcCapture {
 unsafe impl Send for WgcCapture {}
 
 impl WgcCapture {
+    /// Asked on a thread of its own that initializes WinRT first: the WinRT call fails on a
+    /// thread without it (Clutch started after "Restore unsaved changes?" did), which hid
+    /// display, window and game capture for that session. Leaves the caller's COM state alone.
     pub fn is_supported() -> bool {
-        GraphicsCaptureSession::IsSupported().unwrap_or(false)
+        std::thread::spawn(|| {
+            // SAFETY: initializes WinRT for this short-lived thread only.
+            unsafe {
+                let _ = RoInitialize(RO_INIT_MULTITHREADED);
+            }
+            GraphicsCaptureSession::IsSupported().unwrap_or(false)
+        })
+        .join()
+        .unwrap_or(false)
     }
 
     pub fn start(

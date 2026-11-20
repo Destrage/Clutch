@@ -425,18 +425,35 @@ fn push_pair<'a>(
     let w = t.clamp(0.0, 1.0);
     let drawn = |f: &FlatItem| f.mask.as_ref().and_then(|_| ctx.masks.get(f.item));
     let (da, db) = (drawn(a), drawn(b));
+    // Edge effects are baked for each end's outline. When the outline changes shape they fit
+    // it only near their own end, so they hand over early and late instead of crossfading all
+    // the way (a border would otherwise hang around the old shape).
+    fn shape(f: &FlatItem) -> Option<(&[estream_project::MaskShape], bool)> {
+        f.mask
+            .as_ref()
+            .filter(|m| m.cuts())
+            .map(|m| (m.shapes.as_slice(), m.invert))
+    }
+    let (ea, eb) = if shape(a) != shape(b) {
+        (
+            1.0 - crate::motion::smoothstep(0.0, 0.3, w),
+            crate::motion::smoothstep(0.7, 1.0, w),
+        )
+    } else {
+        (1.0 - w, w)
+    };
     let ends = [
-        (a, crate::motion::delta(ma, matrix), 1.0 - w, da),
-        (b, crate::motion::delta(mb, matrix), w, db),
+        (a, crate::motion::delta(ma, matrix), 1.0 - w, ea, da),
+        (b, crate::motion::delta(mb, matrix), w, eb, db),
     ];
-    for (flat, delta, weight, _) in ends {
+    for (flat, delta, weight, _, _) in ends {
         if let Some(mut fill) = ctx.fills.item(flat) {
             fill.matrix = delta * fill.matrix;
             fill.opacity *= weight;
             out.push(fill);
         }
     }
-    for (flat, _, weight, d) in ends {
+    for (flat, _, _, weight, d) in ends {
         if let Some(under) = d.and_then(|d| d.under.as_ref()) {
             out.push(effect_item(
                 under,
@@ -475,7 +492,7 @@ fn push_pair<'a>(
             feather: feather(a) + (feather(b) - feather(a)) * w,
         }),
     });
-    for (flat, _, weight, d) in ends {
+    for (flat, _, _, weight, d) in ends {
         if let Some(over) = d.and_then(|d| d.over.as_ref()) {
             out.push(effect_item(
                 over,

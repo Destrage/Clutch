@@ -1,7 +1,7 @@
 import { Theme, Platform } from "theme.slint";
 import { Icons } from "icons.slint";
 import { PaletteEntry, Preset, SetupLine, SourceType, SettingsForm, DestinationRow, LiveRow, CanvasForm, CanvasSize, ShareForm } from "types.slint";
-import { Button, IconButton, Icon, Badge, TextField, TextArea, NumberField, Select, Slider, Toggle, SectionTitle } from "widgets.slint";
+import { Button, IconButton, Icon, Badge, TextField, TextArea, NumberField, Select, Slider, ValueSlider, Toggle, SectionTitle } from "widgets.slint";
 import { KindIcon } from "panels.slint";
 import { PropEditor } from "inspector.slint";
 import { ColorSwatch } from "color.slint";
@@ -53,6 +53,8 @@ export component CommandPalette inherits Modal {
     card-top: 80px;
 
     keys := FocusScope {
+        // Its own height: a FocusScope has no preferred size, so the card squeezed the search row.
+        height: 52px;
         capture-key-pressed(e) => {
             if (e.text == Key.Escape) {
                 root.dismiss();
@@ -83,24 +85,33 @@ export component CommandPalette inherits Modal {
                 alignment: center;
                 Icon { source: Icons.search; size: 18px; tint: Theme.text-muted; }
             }
-            input := TextInput {
-                text <=> root.query;
-                single-line: true;
-                vertical-alignment: center;
-                color: Theme.text;
-                font-size: Theme.font-l;
-                accessible-label: "Search commands";
-                init => { self.focus(); }
-                edited => {
-                    root.current = 0;
-                    root.query-changed(self.text);
+            Rectangle {
+                horizontal-stretch: 1;
+                // The hint sits where typing starts, under the input.
+                if root.query == "": Text {
+                    x: 0px;
+                    width: parent.width;
+                    height: parent.height;
+                    text: "Type a command, scene or source…";
+                    color: Theme.text-faint;
+                    font-size: Theme.font-l;
+                    vertical-alignment: center;
                 }
-            }
-            if root.query == "": Text {
-                text: "Type a command, scene or source…";
-                color: Theme.text-faint;
-                font-size: Theme.font-l;
-                vertical-alignment: center;
+                input := TextInput {
+                    width: parent.width;
+                    height: parent.height;
+                    text <=> root.query;
+                    single-line: true;
+                    vertical-alignment: center;
+                    color: Theme.text;
+                    font-size: Theme.font-l;
+                    accessible-label: "Search commands";
+                    init => { self.focus(); }
+                    edited => {
+                        root.current = 0;
+                        root.query-changed(self.text);
+                    }
+                }
             }
         }
     }
@@ -630,7 +641,7 @@ component SettingRow inherits HorizontalLayout {
     VerticalLayout {
         width: 170px;
         alignment: center;
-        Text { text: root.label; color: Theme.text; font-size: Theme.font-m; }
+        Text { width: 170px; text: root.label; color: Theme.text; font-size: Theme.font-m; wrap: word-wrap; }
         if root.hint != "": Text { width: 170px; text: root.hint; color: Theme.text-faint; font-size: Theme.font-xs; wrap: word-wrap; }
     }
     @children
@@ -1454,6 +1465,7 @@ export component SettingsDialog inherits Modal {
                     SettingRow {
                         label: "Clips folder";
                         TextField { text: root.form.clip-folder; label: "Clips folder"; accepted(t) => { root.set-text("clip-folder", t); } }
+                        Button { text: "Browse…"; clicked => { root.set("clip-folder-browse", 0); } }
                     }
                     SettingRow {
                         label: "Storage limit";
@@ -1683,7 +1695,6 @@ export component SettingsDialog inherits Modal {
                             Toggle { checked: root.form.chat-animate; toggled(v) => { root.set("chat-animate", v ? 1 : 0); } }
                         }
                     }
-                    Text { text: root.form.ffmpeg; color: Theme.text-faint; font-size: Theme.font-xs; }
                 }
 
                 if root.page == 9: VerticalLayout {
@@ -1708,10 +1719,15 @@ export component SettingsDialog inherits Modal {
                     }
                     SettingRow {
                         label: "Event sound volume";
-                        Slider {
-                            label: "Event sound volume";
-                            value: root.form.event-sound-volume;
-                            changed(v) => { root.set("event-sound-volume", v); }
+                        ValueSlider {
+                            label: "Volume";
+                            value: root.form.event-sound-volume * 100;
+                            minimum: 0;
+                            maximum: 100;
+                            step: 1;
+                            decimals: 0;
+                            suffix: "%";
+                            changed(v) => { root.set("event-sound-volume", v / 100); }
                         }
                     }
                 }
@@ -1758,6 +1774,7 @@ export component SettingsDialog inherits Modal {
                         wrap: word-wrap;
                         width: scroller.page-width - 36px;
                     }
+                    Text { text: root.form.ffmpeg; color: Theme.text-faint; font-size: Theme.font-xs; }
                 }
                 if root.page == 7: VerticalLayout {
                     spacing: 12px;

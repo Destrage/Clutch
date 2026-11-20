@@ -184,6 +184,8 @@ pub struct App {
     auto_selected: Option<estream_core::MacroId>,
     /// Trigger whose hotkey is being recorded.
     auto_recording: Option<usize>,
+    /// The Automation dialog's lists, kept across refreshes (see [`AutoModels`]).
+    auto_models: AutoModels,
     /// Stats history and health alerts.
     monitor: estream_health::Monitor,
     system: estream_health::SystemSampler,
@@ -1112,6 +1114,7 @@ impl App {
             runner: Some(new_runner()),
             auto_selected: None,
             auto_recording: None,
+            auto_models: AutoModels::default(),
             monitor: estream_health::Monitor::new(),
             system: estream_health::SystemSampler::start(),
             health_at: Instant::now(),
@@ -7499,6 +7502,17 @@ impl App {
     fn clip_setting(&mut self, field: &str, value: f32) -> bool {
         use estream_clips::Integration;
         use estream_clips::integrations::gsi;
+        if field == "clip-folder-browse" {
+            let Some(folder) = rfd::FileDialog::new()
+                .set_title("Clips folder")
+                .set_directory(self.settings.clips.folder(&self.settings.recording))
+                .pick_folder()
+            else {
+                return false;
+            };
+            self.settings.clips.folder = Some(folder);
+            return true;
+        }
         let i = value.round().max(0.0) as usize;
         let (_, rule_game) = Self::CLIP_INTEGRATIONS
             .get(self.clip_rule_game)
@@ -7975,7 +7989,9 @@ impl App {
         if ((field.starts_with("clip") || field.starts_with("hype"))
             && self.clip_setting(field, value))
             || (field.starts_with("perf-") && self.performance_setting(field, value))
-            || (field.starts_with("upd-") && self.update_setting(field, value))
+            // The About page's links are handled with the updates (both open release pages).
+            || ((field.starts_with("upd-") || field.starts_with("about-"))
+                && self.update_setting(field, value))
         {
             self.settings.save(&self.paths.settings());
             self.refresh_settings_form();
@@ -9055,6 +9071,9 @@ impl App {
         }
     }
 
+    /// Rebuilds the Automation dialog's form. Its lists keep their models (only rows that
+    /// differ are replaced), because the dialog refreshes twice a second and a new model makes
+    /// Slint drop every row: with a dropdown open in a step, that panicked.
     fn refresh_automation(&mut self) {
         use crate::ui::{AutomationForm, MacroRow, StepRow, TriggerRow};
         use estream_project::{Step, Toggle, Trigger};
@@ -9201,36 +9220,46 @@ impl App {
                     .collect()
             })
             .unwrap_or_default();
-        let strings = |v: Vec<String>| {
-            ModelRc::new(VecModel::from(
-                v.into_iter().map(SharedString::from).collect::<Vec<_>>(),
-            ))
+        let m = &self.auto_models;
+        let strings = |slot: &Rc<VecModel<SharedString>>, v: Vec<String>| {
+            keep(slot, v.into_iter().map(SharedString::from).collect())
         };
         w.set_automation_form(AutomationForm {
-            macros: ModelRc::new(VecModel::from(rows)),
+            macros: keep(&m.macros, rows),
             selected: selected
                 .and_then(|m| auto.macros.iter().position(|x| x.id == m.id))
                 .map_or(-1, |i| i as i32),
             name: selected.map(|m| m.name.clone()).unwrap_or_default().into(),
             enabled: selected.is_some_and(|m| m.enabled),
-            triggers: ModelRc::new(VecModel::from(triggers)),
-            steps: ModelRc::new(VecModel::from(steps)),
-            scene_names: strings(pickers.scenes.iter().map(|(_, n)| n.clone()).collect()),
-            source_names: strings(pickers.sources.iter().map(|(_, n)| n.clone()).collect()),
+            triggers: keep(&m.triggers, triggers),
+            steps: keep(&m.steps, steps),
+            scene_names: strings(
+                &m.scenes,
+                pickers.scenes.iter().map(|(_, n)| n.clone()).collect(),
+            ),
+            source_names: strings(
+                &m.sources,
+                pickers.sources.iter().map(|(_, n)| n.clone()).collect(),
+            ),
             output_names: strings(
+                &m.outputs,
                 estream_project::OutputKind::ALL
                     .iter()
                     .map(|o| o.label().to_owned())
                     .collect(),
             ),
-            action_names: strings(pickers.actions.iter().map(|(_, n)| n.clone()).collect()),
+            action_names: strings(
+                &m.actions,
+                pickers.actions.iter().map(|(_, n)| n.clone()).collect(),
+            ),
             event_names: strings(
+                &m.events,
                 estream_project::GameEventKind::ALL
                     .iter()
                     .map(|k| k.label().to_owned())
                     .collect(),
             ),
-            game_names: strings(games.clone()),
+            game_names: strings(&m.games, games.clone()),
             recording: self.auto_recording.map_or(-1, |i| i as i32),
             error: selected
                 .and_then(|m| runner.and_then(|r| r.last_error(m.id)))
@@ -12353,6 +12382,36 @@ fn check_setup_name(name: &str, taken: &[String]) -> Result<String, String> {
 fn meter_position(level: f32) -> f32 {
     let db = estream_engine::audio_engine::db::from_gain(level);
     ((db + 60.0) / 60.0).clamp(0.0, 1.0)
+}
+
+/// The Automation dialog's lists. They stay the same models for the dialog's lifetime: Slint
+/// drops every row of a list that gets a new model, which broke open dropdowns in its rows.
+#[derive(Default)]
+struct AutoModels {
+    macros: Rc<VecModel<crate::ui::MacroRow>>,
+    triggers: Rc<VecModel<crate::ui::TriggerRow>>,
+    steps: Rc<VecModel<crate::ui::StepRow>>,
+    scenes: Rc<VecModel<SharedString>>,
+    sources: Rc<VecModel<SharedString>>,
+    outputs: Rc<VecModel<SharedString>>,
+    actions: Rc<VecModel<SharedString>>,
+    events: Rc<VecModel<SharedString>>,
+    games: Rc<VecModel<SharedString>>,
+}
+
+/// `slot` as a model holding `rows`; its rows are replaced only where they differ, so rows
+/// that stay the same keep their UI (and any open dropdown in them).
+fn keep<T: Clone + PartialEq + 'static>(slot: &Rc<VecModel<T>>, rows: Vec<T>) -> ModelRc<T> {
+    if slot.row_count() != rows.len() {
+        slot.set_vec(rows);
+    } else {
+        for (i, row) in rows.into_iter().enumerate() {
+            if slot.row_data(i).as_ref() != Some(&row) {
+                slot.set_row_data(i, row);
+            }
+        }
+    }
+    ModelRc::from(slot.clone())
 }
 
 /// The inspector's panels, by the names their folds are saved under.

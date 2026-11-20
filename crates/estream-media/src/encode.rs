@@ -285,7 +285,11 @@ impl VideoEncoder {
         enc.set_frame_rate(Some(FfRational(fps.num as i32, fps.den as i32)));
         enc.set_gop((fps.as_f64() * settings.keyframe_seconds.max(1) as f64).round() as u32);
         enc.set_max_b_frames(0);
-        if settings.rate_control != RateControl::ConstantQuality || !takes_nv12(name) {
+        // Constant quality: hardware encoders and SVT-AV1 (which refuses a bitrate in CRF mode)
+        // get none; OpenH264 and Kvazaar still need one to size their rate control.
+        if settings.rate_control != RateControl::ConstantQuality
+            || !(takes_nv12(name) || name == "libsvtav1")
+        {
             enc.set_bit_rate(settings.bitrate_kbps as usize * 1000);
         }
         enc.set_flags(codec::Flags::GLOBAL_HEADER);
@@ -535,6 +539,24 @@ mod tests {
             (3 * 4_800 - 2 * frame..=3 * 4_800 + frame).contains(&last_pts),
             "last audio packet at {last_pts}"
         );
+    }
+
+    /// SVT-AV1 refuses a target bitrate with CRF; constant quality must still open it, or
+    /// software AV1 never shows up as available.
+    #[test]
+    fn svt_av1_opens_in_constant_quality() {
+        crate::init();
+        if ffmpeg::encoder::find_by_name("libsvtav1").is_none() {
+            return; // not in this FFmpeg build
+        }
+        let settings = RecordingSettings {
+            codec: VideoCodec::Av1,
+            rate_control: RateControl::ConstantQuality,
+            ..Default::default()
+        };
+        if let Err(e) = VideoEncoder::open("libsvtav1", 640, 360, Rational::fps(30), &settings) {
+            panic!("libsvtav1 failed to open in constant quality: {e}");
+        }
     }
 
     /// Every probed encoder honours a forced keyframe in the middle of a GOP.
