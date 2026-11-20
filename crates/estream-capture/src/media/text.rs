@@ -410,9 +410,9 @@ fn schema(fonts: Vec<SelectOption>) -> PropertySchema {
         Property::float("size", "Size", 4.0, 1000.0, 1.0, d.size),
         color_prop("color", "Color", d.color),
         Property::bool("gradient", "Gradient", false),
-        color_prop("gradient_color", "Gradient end color", d.gradient_color),
+        color_prop("gradient_color", "Gradient end color", d.gradient_color).when("gradient"),
         Property::bool("outline", "Outline", false),
-        color_prop("outline_color", "Outline color", d.outline_color),
+        color_prop("outline_color", "Outline color", d.outline_color).when("outline"),
         Property::float(
             "outline_width",
             "Outline width",
@@ -420,9 +420,10 @@ fn schema(fonts: Vec<SelectOption>) -> PropertySchema {
             64.0,
             1.0,
             d.outline_width,
-        ),
+        )
+        .when("outline"),
         Property::bool("shadow", "Drop shadow", false),
-        color_prop("shadow_color", "Shadow color", d.shadow_color),
+        color_prop("shadow_color", "Shadow color", d.shadow_color).when("shadow"),
         Property::float(
             "shadow_offset",
             "Shadow distance",
@@ -430,7 +431,8 @@ fn schema(fonts: Vec<SelectOption>) -> PropertySchema {
             128.0,
             1.0,
             d.shadow_offset,
-        ),
+        )
+        .when("shadow"),
         Property::select(
             "align",
             "Alignment",
@@ -451,7 +453,8 @@ fn schema(fonts: Vec<SelectOption>) -> PropertySchema {
             },
             "",
         )
-        .hint("Updates within a second of the file changing"),
+        .hint("Updates within a second of the file changing")
+        .when("from_file"),
     ])
 }
 

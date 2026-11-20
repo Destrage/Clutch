@@ -321,6 +321,7 @@ fn effect_item<'a>(
         mask: None,
         clip: crate::motion::padded_clip(clip, *pad),
         morph: None,
+        border: None,
     }
 }
 
@@ -392,6 +393,7 @@ fn push_item<'a>(
         mask: drawn.and_then(|d| d.mask.as_ref()).map(|m| &m.binding),
         clip: look.clip,
         morph: None,
+        border: None,
     });
     if let Some(over) = drawn.and_then(|d| d.over.as_ref()) {
         out.push(effect_item(over, matrix, opacity, look.clip));
@@ -476,32 +478,142 @@ fn push_pair<'a>(
             m.shapes.iter().map(|s| s.feather).fold(0.0, f32::max)
         })
     };
+    let opacity = a.opacity + (b.opacity - a.opacity) * w;
+    let morph = (cuts(a) || cuts(b)).then(|| Morph {
+        from: end(a, da),
+        to: end(b, db),
+        t: w,
+        feather: feather(a) + (feather(b) - feather(a)) * w,
+    });
     out.push(DrawItem {
         binding,
         matrix,
         uv_min: la.uv_min.lerp(lb.uv_min, w),
         uv_max: la.uv_max.lerp(lb.uv_max, w),
-        opacity: a.opacity + (b.opacity - a.opacity) * w,
+        opacity,
         blend: if w < 0.5 { a.blend } else { b.blend },
         mask: None,
         clip: DrawItem::FULL,
-        morph: (cuts(a) || cuts(b)).then(|| Morph {
-            from: end(a, da),
-            to: end(b, db),
-            t: w,
-            feather: feather(a) + (feather(b) - feather(a)) * w,
-        }),
+        morph,
+        border: None,
     });
-    for (flat, _, _, weight, d) in ends {
-        if let Some(over) = d.and_then(|d| d.over.as_ref()) {
-            out.push(effect_item(
-                over,
-                matrix,
-                flat.opacity * weight,
-                DrawItem::FULL,
-            ));
+    // While the outline changes, a border is drawn along it every frame (in between the two
+    // borders) instead of handing over baked ones. Not with an inner glow: it is baked into the
+    // same layer as the border.
+    let border = match morph {
+        Some(_) if shape(a) != shape(b) && !inner_glow(a) && !inner_glow(b) => {
+            morph_border(a, b, w, matrix)
+        }
+        _ => None,
+    };
+    match (border, morph) {
+        (Some((border, quad)), Some(m)) => out.push(DrawItem {
+            binding,
+            matrix: quad,
+            uv_min: Vec2::ZERO,
+            uv_max: Vec2::ONE,
+            opacity,
+            blend: estream_core::BlendMode::Normal,
+            mask: None,
+            clip: DrawItem::FULL,
+            morph: Some(m),
+            border: Some(border),
+        }),
+        _ => {
+            for (flat, _, _, weight, d) in ends {
+                if let Some(over) = d.and_then(|d| d.over.as_ref()) {
+                    out.push(effect_item(
+                        over,
+                        matrix,
+                        flat.opacity * weight,
+                        DrawItem::FULL,
+                    ));
+                }
+            }
         }
     }
+}
+
+/// Whether `f`'s mask has an inner glow (baked into the layer that also holds its border).
+fn inner_glow(f: &FlatItem) -> bool {
+    f.mask
+        .as_ref()
+        .and_then(|m| m.effects.glow)
+        .is_some_and(|g| g.placement != estream_project::GlowPlacement::Outside)
+}
+
+/// The border between `a`'s and `b`'s at `w` (an end without one is a border of width 0), and
+/// the quad it is drawn on: the item at `matrix` grown by the border's reach. `None` when
+/// neither end has a border.
+fn morph_border(
+    a: &FlatItem,
+    b: &FlatItem,
+    w: f32,
+    matrix: glam::Affine2,
+) -> Option<(estream_gpu::MorphBorder, glam::Affine2)> {
+    use estream_project::BorderPlacement;
+    let border = |f: &FlatItem| {
+        f.mask
+            .as_ref()
+            .and_then(|m| m.effects.border)
+            .filter(|b| b.width > 0.0)
+    };
+    let (ba, bb) = (border(a), border(b));
+    let color = |c: Rgba8| {
+        let f = |v: u8| f32::from(v) / 255.0;
+        [
+            srgb_to_linear(f(c.r)),
+            srgb_to_linear(f(c.g)),
+            srgb_to_linear(f(c.b)),
+            f(c.a),
+        ]
+    };
+    // The band (px off the edge) and straight linear color of each end; a missing border is
+    // the other's color, see-through, with no width.
+    let end =
+        |own: Option<estream_project::Border>, other: Option<estream_project::Border>| match own {
+            Some(b) => {
+                let band = match b.placement {
+                    BorderPlacement::Inside => (-b.width, 0.0),
+                    BorderPlacement::Center => (-b.width / 2.0, b.width / 2.0),
+                    BorderPlacement::Outside => (0.0, b.width),
+                };
+                Some((band, color(b.color)))
+            }
+            None => other.map(|o| {
+                let [r, g, bl, _] = color(o.color);
+                ((0.0, 0.0), [r, g, bl, 0.0])
+            }),
+        };
+    let ((lo_a, hi_a), ca) = end(ba, bb)?;
+    let ((lo_b, hi_b), cb) = end(bb, ba)?;
+    let mix = |x: f32, y: f32| x + (y - x) * w;
+    let (lo, hi) = (mix(lo_a, lo_b), mix(hi_a, hi_b));
+    if hi - lo < 0.01 {
+        return None;
+    }
+    let size = Vec2::new(
+        matrix.matrix2.x_axis.length(),
+        matrix.matrix2.y_axis.length(),
+    );
+    if size.min_element() < 1.0 {
+        return None;
+    }
+    // Room for the band outside the item, and a pixel for its soft edge.
+    let reach = hi.max(0.0) + 2.0;
+    let pad = Vec2::splat(reach) / size;
+    let quad = matrix
+        * glam::Affine2::from_translation(-pad)
+        * glam::Affine2::from_scale(Vec2::ONE + 2.0 * pad);
+    Some((
+        estream_gpu::MorphBorder {
+            color: std::array::from_fn(|i| mix(ca[i], cb[i])),
+            lo,
+            hi,
+            pad,
+        },
+        quad,
+    ))
 }
 
 /// The items a running scene transition draws over the blended scenes: those leaving with
@@ -588,6 +700,7 @@ impl CanvasPaint {
             mask: None,
             clip: estream_gpu::DrawItem::FULL,
             morph: None,
+            border: None,
         }
     }
 }
@@ -1054,6 +1167,7 @@ impl VideoCore {
                         mask: None,
                         clip: estream_gpu::DrawItem::FULL,
                         morph: None,
+                        border: None,
                     });
                 }
             }

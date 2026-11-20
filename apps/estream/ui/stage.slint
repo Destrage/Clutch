@@ -243,12 +243,13 @@ export component SceneStrip inherits Rectangle {
                         border-width: 1px;
                         border-color: Theme.border;
                         accessible-role: button;
-                        accessible-label: "Transition: " + root.transition-name;
+                        accessible-label: "Transition: " + root.transition-name + (root.transition-kind != 0 && root.transition-moves ? ", items move" : "");
                         VerticalLayout {
                             alignment: center;
                             spacing: 4px;
                             Text { text: root.transition-name; color: Theme.text; font-size: Theme.font-m; font-weight: 600; horizontal-alignment: center; }
                             if root.transition-kind != 0: Text { text: round(root.transition-duration) + " ms"; color: Theme.text-muted; font-size: Theme.font-s; horizontal-alignment: center; }
+                            if root.transition-kind != 0 && root.transition-moves: Text { text: "Items move"; color: Theme.accent; font-size: Theme.font-xs; horizontal-alignment: center; }
                         }
                         tr-ta := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { tr-popup.show(); } }
                         tr-popup := PopupWindow {

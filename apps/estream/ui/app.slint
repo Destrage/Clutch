@@ -527,6 +527,11 @@ export component AppWindow inherits Window {
                     HorizontalLayout {
                         preview := Preview {
                             horizontal-stretch: 1;
+                            // The scene items panel (left) and, outside studio mode, the inspector (right)
+                            // float over the preview: fit the canvas beside them. The inspector's room is
+                            // kept while nothing is selected, so selecting doesn't move the canvas mid-click.
+                            inset-left: root.layers-open ? 324px : 0px;
+                            inset-right: root.studio-mode ? 0px : root.inspector-width + 24px;
                             frame: root.preview-frame;
                             canvas-w: root.canvas-w;
                             canvas-h: root.canvas-h;

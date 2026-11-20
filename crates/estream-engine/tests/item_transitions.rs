@@ -217,6 +217,50 @@ fn a_circle_grows_back_into_the_whole_item() {
     assert_eq!(lum(&s.at(1000), corner.0, corner.1), 255);
 }
 
+#[test]
+fn a_border_follows_the_morphing_outline() {
+    let orange = SourceDef::new(
+        "Camera",
+        "color",
+        serde_json::json!({ "width": 16, "height": 16, "color": Rgba8::new(240, 140, 60, 255) }),
+    );
+    let border = estream_project::Border {
+        color: Rgba8::new(255, 255, 255, 255),
+        width: 4.0,
+        placement: estream_project::BorderPlacement::Outside,
+    };
+    let bordered = |mut m: ItemMask| {
+        m.effects.border = Some(border);
+        m
+    };
+    let place = placed(Vec2::new(32.0, 4.0), Vec2::new(64.0, 64.0));
+    let mut a = SceneItem::source(orange.id);
+    a.transform = place;
+    a.mask = Some(bordered(ItemMask::rounded(4.0)));
+    let mut b = SceneItem::source(orange.id);
+    b.transform = place;
+    b.mask = Some(bordered(ItemMask::circle(1.0)));
+    let (p, scenes) = two_scenes(orange, a, b);
+    let mut s = Switch::new(p, scenes);
+    let px = |pixels: &[u8], x: u32, y: u32| {
+        let i = ((y * W + x) * 4) as usize;
+        [pixels[i], pixels[i + 1], pixels[i + 2]]
+    };
+    let white = |c: [u8; 3]| c.iter().all(|v| *v > 230);
+    let black = |c: [u8; 3]| c.iter().all(|v| *v < 25);
+    let mid = s.at(500);
+    // Item-local (3.5, 3.5): inside the rounded square, 8 px outside the circle: halfway it
+    // is 2.5 px outside the in-between outline, in the 4 px border.
+    assert!(white(px(&mid, 35, 7)), "{:?}", px(&mid, 35, 7));
+    // (8.5, 8.5) is still inside, (0.5, 0.5) past the border.
+    let inside = px(&mid, 40, 12);
+    assert!(inside[0] > 200 && inside[2] < 100, "the camera: {inside:?}");
+    assert!(black(px(&mid, 32, 4)), "{:?}", px(&mid, 32, 4));
+    // Beside the item, where both outlines meet its edge: the ring reaches past the item.
+    assert!(white(px(&mid, 98, 36)), "{:?}", px(&mid, 98, 36));
+    assert!(black(px(&mid, 103, 36)), "{:?}", px(&mid, 103, 36));
+}
+
 /// One white 64×64 item in the middle of the canvas playing `kind` (Linear), shown or hidden.
 fn animating(kind: AnimationKind, showing: bool) -> Switch {
     let cam = white();

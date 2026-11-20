@@ -46,6 +46,8 @@ pub struct FilterParam {
     pub step: f32,
     pub default: f32,
     pub unit: &'static str,
+    /// A fraction shown and entered as a percentage (the stored value stays a fraction).
+    pub percent: bool,
 }
 
 /// A file a filter needs (stored in `settings.file`).
@@ -83,6 +85,21 @@ const fn p(
         step,
         default,
         unit,
+        percent: false,
+    }
+}
+
+/// A fraction the UI shows as a percentage (0.25 reads "25%").
+const fn pc(
+    key: &'static str,
+    label: &'static str,
+    min: f32,
+    max: f32,
+    default: f32,
+) -> FilterParam {
+    FilterParam {
+        percent: true,
+        ..p(key, label, min, max, 0.01, default, "")
     }
 }
 
@@ -91,12 +108,12 @@ pub const KINDS: &[FilterKind] = &[
         kind: "color_correction",
         name: "Color correction",
         params: &[
-            p("brightness", "Brightness", -1.0, 1.0, 0.01, 0.0, ""),
-            p("contrast", "Contrast", -1.0, 1.0, 0.01, 0.0, ""),
+            pc("brightness", "Brightness", -1.0, 1.0, 0.0),
+            pc("contrast", "Contrast", -1.0, 1.0, 0.0),
             p("saturation", "Saturation", 0.0, 3.0, 0.01, 1.0, "×"),
             p("gamma", "Gamma", -2.0, 2.0, 0.01, 0.0, ""),
             p("hue_shift", "Hue shift", -180.0, 180.0, 1.0, 0.0, "°"),
-            p("opacity", "Opacity", 0.0, 1.0, 0.01, 1.0, ""),
+            pc("opacity", "Opacity", 0.0, 1.0, 1.0),
         ],
         file: None,
         code: false,
@@ -104,7 +121,7 @@ pub const KINDS: &[FilterKind] = &[
     FilterKind {
         kind: "lut",
         name: "LUT",
-        params: &[p("strength", "Strength", 0.0, 1.0, 0.01, 1.0, "")],
+        params: &[pc("strength", "Strength", 0.0, 1.0, 1.0)],
         file: Some(FilterFile {
             label: "LUT file (.cube)",
             extensions: &["cube"],
@@ -116,9 +133,9 @@ pub const KINDS: &[FilterKind] = &[
         name: "Chroma key",
         params: &[
             p("hue", "Key hue", 0.0, 360.0, 1.0, 120.0, "°"),
-            p("similarity", "Similarity", 0.0, 1.0, 0.01, 0.25, ""),
-            p("smoothness", "Smoothness", 0.0, 0.5, 0.01, 0.08, ""),
-            p("spill", "Spill reduction", 0.0, 1.0, 0.01, 0.5, ""),
+            pc("similarity", "Similarity", 0.0, 1.0, 0.25),
+            pc("smoothness", "Smoothness", 0.0, 0.5, 0.08),
+            pc("spill", "Spill reduction", 0.0, 1.0, 0.5),
         ],
         file: None,
         code: false,
@@ -127,9 +144,9 @@ pub const KINDS: &[FilterKind] = &[
         kind: "luma_key",
         name: "Luma key",
         params: &[
-            p("low", "Low", 0.0, 1.0, 0.01, 0.0, ""),
-            p("high", "High", 0.0, 1.0, 0.01, 1.0, ""),
-            p("smoothness", "Smoothness", 0.0, 0.5, 0.01, 0.05, ""),
+            pc("low", "Low", 0.0, 1.0, 0.0),
+            pc("high", "High", 0.0, 1.0, 1.0),
+            pc("smoothness", "Smoothness", 0.0, 0.5, 0.05),
         ],
         file: None,
         code: false,
@@ -156,7 +173,7 @@ pub const KINDS: &[FilterKind] = &[
     FilterKind {
         kind: "sharpen",
         name: "Sharpen",
-        params: &[p("amount", "Amount", 0.0, 2.0, 0.01, 0.5, "")],
+        params: &[pc("amount", "Amount", 0.0, 2.0, 0.5)],
         file: None,
         code: false,
     },

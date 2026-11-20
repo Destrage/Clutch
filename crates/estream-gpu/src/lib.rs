@@ -16,7 +16,8 @@ pub mod yuv;
 
 pub use bridge::PreviewBridge;
 pub use compositor::{
-    CANVAS_FORMAT, CanvasRenderer, Compositor, DrawItem, Morph, MorphEnd, upload_texture,
+    CANVAS_FORMAT, CanvasRenderer, Compositor, DrawItem, Morph, MorphBorder, MorphEnd,
+    upload_texture,
 };
 pub use context::{GpuContext, GpuError, GpuOptions};
 pub use convert::{

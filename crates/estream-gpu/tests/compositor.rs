@@ -111,6 +111,7 @@ fn item<'a>(
         mask: None,
         clip: DrawItem::FULL,
         morph: None,
+        border: None,
     }
 }
 

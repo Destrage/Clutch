@@ -22,6 +22,10 @@ export component Preview inherits Rectangle {
     in-out property <float> zoom: 1;
     in-out property <length> pan-x;
     in-out property <length> pan-y;
+    /// Room the floating panels take on each side; the canvas is fitted beside them while
+    /// it still gets at least half the width (else over the whole preview, as before).
+    in property <length> inset-left;
+    in property <length> inset-right;
 
     // kind: "down" | "move" | "up"; x/y in canvas pixels; px = canvas px per screen px.
     callback pointer(kind: string, x: float, y: float, px: float, shift: bool, alt: bool, ctrl: bool);
@@ -30,11 +34,17 @@ export component Preview inherits Rectangle {
     /// The mask editor's toolbar (`mask.*` actions).
     callback action(string);
 
-    out property <float> fit: max(0.01, min((self.width - 48px) / 1px / canvas-w, (self.height - 48px) / 1px / canvas-h));
+    property <float> fit-all: max(0.01, min((self.width - 48px) / 1px / canvas-w, (self.height - 48px) / 1px / canvas-h));
+    property <length> free-w: self.width - inset-left - inset-right;
+    property <float> fit-free: max(0.01, min((free-w - 48px) / 1px / canvas-w, (self.height - 48px) / 1px / canvas-h));
+    property <bool> beside: (inset-left > 0 || inset-right > 0) && canvas-w * fit-free * 1px >= self.width * 0.5;
+    out property <float> fit: beside ? fit-free : fit-all;
+    // The middle of the area the canvas is fitted into.
+    property <length> mid-x: beside ? inset-left + free-w / 2 : self.width / 2;
     out property <float> scale: fit * zoom;
     property <length> img-w: canvas-w * scale * 1px;
     property <length> img-h: canvas-h * scale * 1px;
-    property <length> img-x: (self.width - img-w) / 2 + pan-x;
+    property <length> img-x: mid-x - img-w / 2 + pan-x;
     property <length> img-y: (self.height - img-h) / 2 + pan-y;
     property <bool> panning;
     property <length> pan-start-x;
@@ -251,7 +261,7 @@ export component Preview inherits Rectangle {
                 let new-zoom = clamp(root.zoom * factor, 0.1, 16);
                 let new-scale = root.fit * new-zoom;
                 root.zoom = new-zoom;
-                root.pan-x = self.mouse-x - cx * new-scale - (root.width - root.canvas-w * new-scale * 1px) / 2;
+                root.pan-x = self.mouse-x - cx * new-scale - (root.mid-x - root.canvas-w * new-scale * 1px / 2);
                 root.pan-y = self.mouse-y - cy * new-scale - (root.height - root.canvas-h * new-scale * 1px) / 2;
             } else if (root.scroll-pan) {
                 if (e.modifiers.shift) {

@@ -26,6 +26,9 @@ pub struct DrawItem<'a> {
     pub clip: [f32; 4],
     /// Draws the quad's outline as a blend of two shapes (replaces `mask`).
     pub morph: Option<Morph<'a>>,
+    /// Draws, instead of the source, a border along the morph's outline (needs `morph`; the
+    /// quad covers the item grown by the border's `pad`).
+    pub border: Option<MorphBorder>,
 }
 
 impl DrawItem<'_> {
@@ -42,6 +45,17 @@ pub enum MorphEnd<'a> {
     /// [`Compositor::create_source_binding`]): distance from the edge in units of the item's
     /// long side, negative inside.
     Field(&'a wgpu::BindGroup),
+}
+
+/// A border band along a morphing outline: from `lo` to `hi` canvas pixels off the edge
+/// (negative inside), in a straight-alpha linear `color`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MorphBorder {
+    pub color: [f32; 4],
+    pub lo: f32,
+    pub hi: f32,
+    /// How far the quad reaches past the item on each side, in item units.
+    pub pad: Vec2,
 }
 
 /// An outline between two shapes: their distance fields mixed by `t`.
@@ -64,11 +78,16 @@ struct ItemUniform {
     uv_min: [f32; 2],
     uv_max: [f32; 2],
     opacity: f32,
-    _pad0: f32,
+    /// 0 draws the source, 1 a morph border.
+    mode: f32,
     _pad1: [f32; 2],
     clip: [f32; 4],
     /// `t`, feather, from kind, to kind (kinds: 0 = no morph, 1 = field, 2 = rectangle).
     morph: [f32; 4],
+    /// Border: lo, hi (px), pad x, pad y (item units).
+    band: [f32; 4],
+    /// Border color, premultiplied.
+    tint: [f32; 4],
 }
 
 /// Shared, immutable GPU state (pipelines, layouts, sampler). One per device.
@@ -352,10 +371,17 @@ impl CanvasRenderer {
                 uv_min: item.uv_min.to_array(),
                 uv_max: item.uv_max.to_array(),
                 opacity: item.opacity.clamp(0.0, 1.0),
-                _pad0: 0.0,
+                mode: if item.border.is_some() { 1.0 } else { 0.0 },
                 _pad1: [0.0; 2],
                 clip: item.clip,
                 morph: morph_uniform(item.morph.as_ref()),
+                band: item
+                    .border
+                    .map_or([0.0; 4], |b| [b.lo, b.hi, b.pad.x, b.pad.y]),
+                tint: item.border.map_or([0.0; 4], |b| {
+                    let a = b.color[3].clamp(0.0, 1.0);
+                    [b.color[0] * a, b.color[1] * a, b.color[2] * a, a]
+                }),
             };
             let offset = i * stride;
             self.staging[offset..offset + size_of::<ItemUniform>()]

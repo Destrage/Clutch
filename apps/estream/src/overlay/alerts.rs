@@ -201,6 +201,10 @@ fn kind_props(kind: StreamEventKind) -> Vec<Property> {
         ));
     }
     props.push(Property::button(&format!("{k}_test"), "", "Test"));
+    // The rest only matters while this kind of alert is shown.
+    for p in props.iter_mut().skip(1) {
+        p.when = Some(format!("{k}_on"));
+    }
     props
 }
 
