@@ -29,22 +29,38 @@ pub struct ItemAnimationRun {
     pub showing: bool,
     pub animation: ItemAnimation,
     pub start: Timestamp,
+    /// Linear progress at `start` (0..1): above 0 when this run reverses another one midway,
+    /// so it carries on from where that one was.
+    pub from: f32,
 }
 
 impl ItemAnimationRun {
-    pub fn end(&self) -> Timestamp {
-        Timestamp(self.start.0.saturating_add(self.animation.duration_ns()))
+    /// A run from the beginning.
+    pub fn new(showing: bool, animation: ItemAnimation, start: Timestamp) -> Self {
+        Self {
+            showing,
+            animation,
+            start,
+            from: 0.0,
+        }
     }
 
-    /// Linear progress at `t`, 0 before the start and 1 from the end on.
+    pub fn end(&self) -> Timestamp {
+        let left =
+            (1.0 - f64::from(self.from.clamp(0.0, 1.0))) * self.animation.duration_ns() as f64;
+        Timestamp(self.start.0.saturating_add(left as u64))
+    }
+
+    /// Linear progress at `t`: `from` until the start, 1 from the end on.
     pub fn progress(&self, t: Timestamp) -> f32 {
+        let from = f64::from(self.from.clamp(0.0, 1.0));
         let d = self.animation.duration_ns();
         if t <= self.start {
-            0.0
+            from as f32
         } else if d == 0 {
             1.0
         } else {
-            ((t.0 - self.start.0) as f64 / d as f64).min(1.0) as f32
+            (from + (t.0 - self.start.0) as f64 / d as f64).min(1.0) as f32
         }
     }
 
@@ -502,14 +518,7 @@ fn choreograph(from: &[FlatItem], to: &[FlatItem], t: &ActiveTransition) -> Chor
         .filter(|(_, a)| !to.iter().any(|b| b.source == a.source))
         .filter_map(|(i, a)| {
             let animation = clamp(a.animations.hide.as_ref()?);
-            Some((
-                i,
-                ItemAnimationRun {
-                    showing: false,
-                    animation,
-                    start: t.start,
-                },
-            ))
+            Some((i, ItemAnimationRun::new(false, animation, t.start)))
         })
         .collect();
     let arriving = to
@@ -521,11 +530,7 @@ fn choreograph(from: &[FlatItem], to: &[FlatItem], t: &ActiveTransition) -> Chor
             let delay = u64::from(total - animation.duration_ms) * 1_000_000;
             Some((
                 j,
-                ItemAnimationRun {
-                    showing: true,
-                    animation,
-                    start: Timestamp(t.start.0.saturating_add(delay)),
-                },
+                ItemAnimationRun::new(true, animation, Timestamp(t.start.0.saturating_add(delay))),
             ))
         })
         .collect();
@@ -807,11 +812,11 @@ mod tests {
         masked.mask = Some(estream_project::ItemMask::circle(1.0));
         p.scenes[0].items.push(masked);
         let mut view = ViewState::default();
-        let run = ItemAnimationRun {
-            showing: false,
-            animation: animated(estream_project::AnimationKind::Fade, 400).unwrap(),
-            start: Timestamp(0),
-        };
+        let run = ItemAnimationRun::new(
+            false,
+            animated(estream_project::AnimationKind::Fade, 400).unwrap(),
+            Timestamp(0),
+        );
         view.item_animations.insert(id, run);
         let during = RenderGraph::build_with(&p, 1, &view, Timestamp(200_000_000));
         assert_eq!(during.canvases[0].items.len(), 1);

@@ -230,15 +230,15 @@ fn animating(kind: AnimationKind, showing: bool) -> Switch {
     let mut view = ViewState::default();
     view.item_animations.insert(
         id,
-        ItemAnimationRun {
+        ItemAnimationRun::new(
             showing,
-            animation: ItemAnimation {
+            ItemAnimation {
                 kind,
                 duration_ms: 1000,
                 ease: Ease::Linear,
             },
-            start: START,
-        },
+            START,
+        ),
     );
     Switch::with_view(p, view)
 }
@@ -290,7 +290,7 @@ fn hiding_with_the_eye_button_animates_and_reverses_without_a_jump() {
     let mut item = SceneItem::source(cam.id);
     item.animations.hide = Some(ItemAnimation {
         kind: AnimationKind::Fade,
-        duration_ms: 400,
+        duration_ms: 2000,
         ease: Ease::Linear,
     });
     item.animations.show = item.animations.hide;
@@ -317,25 +317,29 @@ fn hiding_with_the_eye_button_animates_and_reverses_without_a_jump() {
         },
     };
     engine.execute(visible(false)).unwrap();
-    let hidden_at = engine.clock().now();
-    let run = engine.render_graph().canvases[0].items[0]
+    let hide = engine.render_graph().canvases[0].items[0]
         .run
         .expect("hiding");
-    assert!(!run.showing);
+    assert!(!hide.showing);
     std::thread::sleep(Duration::from_millis(100));
+    let before = engine.clock().now();
     engine.execute(visible(true)).unwrap();
-    let shown_at = engine.clock().now();
+    let after = engine.clock().now();
+    assert!(hide.end() > after, "still fading out when shown again");
     let graph = engine.render_graph();
-    let run = graph.canvases[0].items[0].run.expect("showing");
-    assert!(run.showing);
-    // Picks up where the fade-out was: presence then ≈ presence now.
-    let was = 1.0 - (shown_at.0 - hidden_at.0) as f32 / 400e6;
-    let now = run.presence(shown_at);
-    assert!((now - was).abs() < 0.1, "{now} vs {was}");
-    assert!(run.end().0 < shown_at.0 + 400_000_000, "a shorter way back");
+    let show = graph.canvases[0].items[0].run.expect("showing");
+    assert!(show.showing);
+    // The fade-in starts while the command runs, at the presence the fade-out had then (no
+    // jump). Checked from the runs' own times, so a slow machine can't skew it, and right
+    // after the engine starts (its clock near 0), where a back-dated start would underflow.
+    assert!(show.start >= before && show.start <= after);
+    let gap = (show.presence(show.start) - hide.presence(show.start)).abs();
+    assert!(gap < 1e-3, "jumped by {gap}");
+    assert!(show.from > 0.0, "carries on midway");
+    assert!(show.end().0 < after.0 + 2_000_000_000, "a shorter way back");
 
     // Finished animations leave the graph.
-    let until = Instant::now() + Duration::from_secs(3);
+    let until = Instant::now() + Duration::from_secs(8);
     while Instant::now() < until && engine.render_graph().canvases[0].items[0].run.is_some() {
         std::thread::sleep(Duration::from_millis(20));
     }

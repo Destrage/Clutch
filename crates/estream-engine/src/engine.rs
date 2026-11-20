@@ -978,19 +978,12 @@ impl Control {
             let Some(animation) = new.animations.for_visibility(new.visible).copied() else {
                 continue;
             };
-            // Back-date the start so the new animation picks up where the old one is.
-            let already = match running.filter(|r| r.end() > now) {
-                Some(r) => ((1.0 - r.progress(now)) as f64 * animation.duration_ns() as f64) as u64,
-                None => 0,
-            };
-            self.view.item_animations.insert(
-                *item,
-                crate::graph::ItemAnimationRun {
-                    showing: new.visible,
-                    animation,
-                    start: estream_core::Timestamp(now.0.saturating_sub(already)),
-                },
-            );
+            // Reversing midway carries on from where the running animation is.
+            let mut run = crate::graph::ItemAnimationRun::new(new.visible, animation, now);
+            if let Some(r) = running.filter(|r| r.end() > now) {
+                run.from = 1.0 - r.progress(now);
+            }
+            self.view.item_animations.insert(*item, run);
         }
     }
 
