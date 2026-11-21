@@ -2,6 +2,7 @@
 //! and panel layout. Stored as JSON in the user's config directory.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// Clutch's ice-blue accent.
@@ -304,6 +305,9 @@ pub struct DestinationConfig {
     pub channel: String,
     /// The stream details used last time on this destination's platform (the Go live window).
     pub details: StreamDetails,
+    /// Each setup's own details for this destination, by setup name. The Go live window fills
+    /// in from these first.
+    pub setup_details: BTreeMap<String, StreamDetails>,
 }
 
 impl Default for DestinationConfig {
@@ -315,6 +319,7 @@ impl Default for DestinationConfig {
             key_protected: String::new(),
             channel: String::new(),
             details: StreamDetails::default(),
+            setup_details: BTreeMap::new(),
         }
     }
 }
@@ -328,7 +333,29 @@ pub struct StreamDetails {
     pub kick: Option<crate::kick::ChannelDetails>,
 }
 
+impl StreamDetails {
+    /// These details, with `other`'s for the platforms these don't have.
+    pub fn or(self, other: &StreamDetails) -> StreamDetails {
+        StreamDetails {
+            youtube: self.youtube.or_else(|| other.youtube.clone()),
+            twitch: self.twitch.or_else(|| other.twitch.clone()),
+            kick: self.kick.or_else(|| other.kick.clone()),
+        }
+    }
+}
+
 impl DestinationConfig {
+    /// `setup`'s own details for this destination (only the platforms it has saved).
+    pub fn own_details(&self, setup: &str) -> StreamDetails {
+        self.setup_details.get(setup).cloned().unwrap_or_default()
+    }
+
+    /// Keeps `details` as `setup`'s own, for the platforms they hold (others stay as they were).
+    pub fn keep_setup_details(&mut self, setup: &str, details: StreamDetails) {
+        let own = self.setup_details.entry(setup.to_owned()).or_default();
+        *own = details.or(own);
+    }
+
     /// Sets the stream key (kept in memory, saved encrypted).
     pub fn set_key(&mut self, key: &str) {
         self.stream.key = key.trim().to_owned();
@@ -773,6 +800,22 @@ impl Settings {
             .collect()
     }
 
+    /// A setup was renamed: its stream details go with it.
+    pub fn rename_setup_details(&mut self, old: &str, new: &str) {
+        for d in &mut self.destinations {
+            if let Some(details) = d.setup_details.remove(old) {
+                d.setup_details.insert(new.to_owned(), details);
+            }
+        }
+    }
+
+    /// A setup was deleted: its stream details go too.
+    pub fn remove_setup_details(&mut self, setup: &str) {
+        for d in &mut self.destinations {
+            d.setup_details.remove(setup);
+        }
+    }
+
     pub fn save(&self, path: &Path) {
         let result = serde_json::to_vec_pretty(self)
             .map_err(std::io::Error::other)
@@ -971,6 +1014,77 @@ mod tests {
         });
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(back.destinations[0].details, s.destinations[0].details);
+    }
+
+    #[test]
+    fn setup_details_are_kept_per_setup() {
+        let old: Settings =
+            serde_json::from_str(r#"{ "destinations": [{ "name": "Kick" }] }"#).unwrap();
+        assert!(old.destinations[0].setup_details.is_empty());
+
+        let kick = |title: &str| crate::kick::ChannelDetails {
+            title: title.into(),
+            category_id: 1,
+            category: "Game".into(),
+        };
+        let twitch = crate::twitch::ChannelDetails {
+            title: "Apex with friends".into(),
+            ..Default::default()
+        };
+        let mut s = Settings::default();
+        s.destinations.push(DestinationConfig::default());
+        let d = &mut s.destinations[0];
+        d.keep_setup_details(
+            "Apex",
+            StreamDetails {
+                kick: Some(kick("Apex with friends")),
+                twitch: Some(twitch.clone()),
+                ..Default::default()
+            },
+        );
+        d.keep_setup_details(
+            "PUBG",
+            StreamDetails {
+                kick: Some(kick("PUBG squads")),
+                ..Default::default()
+            },
+        );
+        // Saving one platform keeps the setup's others.
+        d.keep_setup_details(
+            "Apex",
+            StreamDetails {
+                kick: Some(kick("Apex ranked")),
+                ..Default::default()
+            },
+        );
+        let apex = d.own_details("Apex");
+        assert_eq!(apex.kick, Some(kick("Apex ranked")));
+        assert_eq!(apex.twitch, Some(twitch));
+        assert_eq!(d.own_details("PUBG").kick, Some(kick("PUBG squads")));
+        assert_eq!(d.own_details("PUBG").twitch, None);
+        assert_eq!(d.own_details("New"), StreamDetails::default());
+
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(
+            back.destinations[0].setup_details,
+            s.destinations[0].setup_details
+        );
+
+        s.rename_setup_details("PUBG", "PUBG squads");
+        assert_eq!(
+            s.destinations[0].own_details("PUBG squads").kick,
+            Some(kick("PUBG squads"))
+        );
+        assert_eq!(
+            s.destinations[0].own_details("PUBG"),
+            StreamDetails::default()
+        );
+        s.remove_setup_details("Apex");
+        assert_eq!(
+            s.destinations[0].own_details("Apex"),
+            StreamDetails::default()
+        );
+        assert_eq!(s.destinations[0].setup_details.len(), 1);
     }
 
     #[test]

@@ -30,7 +30,14 @@ last details. Hotkey, macro and remote starts SHALL use the open setup's details
 
 #### Scenario: Existing details carried over
 - **WHEN** a user with remembered details starts this version for the first time
-- **THEN** those details belong to the open setup and the Go live window shows them as before
+- **THEN** the Go live window fills in as before, and going live keeps the details in the open
+  setup
+
+#### Scenario: Broadcast waiting on YouTube
+- **WHEN** the PUBG setup has its own YouTube details and YouTube Studio has a broadcast waiting on
+  the key, copied from the last Apex stream
+- **THEN** the window chooses that broadcast with the PUBG setup's title, description, privacy and
+  category, and keeps the broadcast's latency and auto-start
 
 ### Requirement: Saving stream details
 The Go live window SHALL offer Save, which stores the details in the open setup and closes without

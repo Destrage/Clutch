@@ -25,12 +25,16 @@ only, so:
   existing "Edit stream details" action works too; both open the same window with Save only.
 - **Hotkey, macro and remote starts** use the open setup's details, as "Go live without asking"
   does.
-- **Switching setups while live** doesn't change the platforms. Edit details then shows the new
-  setup's saved details, ready to apply.
+- **YouTube's waiting broadcast.** When a broadcast is already waiting on the key (YouTube Studio
+  makes one, copied from the last stream), it gets the setup's title, description, privacy,
+  category and made-for-kids; its latency and auto-start stay as they are.
+- **While live** Edit details shows the channels as they are, as before; saving there also keeps
+  the details in the open setup. Setups can't be switched while streaming, so no other case
+  arises.
 - **Setup changes.** A renamed setup keeps its details; a deleted setup's details are removed; a
   duplicated or new setup starts with none (and so falls back as above).
-- **Existing users.** The details each destination remembers today become the open setup's
-  details on first start, so the first Go live looks the same as before.
+- **Existing users.** Nothing to move: a setup without its own details fills in exactly as Clutch
+  does today, so the first Go live after updating looks the same as before.
 
 ## Out of scope
 - Changing the platform details automatically on a setup switch while offline (nothing is sent

@@ -2544,6 +2544,10 @@ impl App {
         let _ = std::fs::remove_file(persist::recovery_path(&old));
         self.collection = new;
         self.settings.last_collection = Some(self.collection.clone());
+        // Its stream details go with it.
+        self.settings
+            .rename_setup_details(&current, &self.collection_name());
+        self.settings.save(&self.paths.settings());
         self.dirty = false;
         if let Some(w) = self.window() {
             w.set_collection_name(self.collection_name().into());
@@ -2602,6 +2606,8 @@ impl App {
                 crate::shell::trash(&path).map_err(|e| e.to_string())?;
             }
         }
+        self.settings.remove_setup_details(&current);
+        self.settings.save(&self.paths.settings());
         self.refresh_setups();
         self.toast(
             format!("Deleted “{current}” (it's in the {})", crate::shell::TRASH),
@@ -5221,10 +5227,11 @@ impl App {
             .map(|(i, _)| (*i, &self.settings.destinations[*i]))
             .collect();
         let sessions = self.golive_sessions();
+        let setup = self.collection_name();
         let window = if ask {
-            crate::golive::Window::open(&dests, sessions, false)
+            crate::golive::Window::open(&dests, sessions, &setup)
         } else {
-            crate::golive::Window::remembered(&dests, sessions)
+            crate::golive::Window::remembered(&dests, sessions, &setup)
         };
         if !window.has_sections() {
             self.start_stream(&[], Vec::new());
@@ -5302,17 +5309,29 @@ impl App {
     }
 
     /// Live panel's Edit details: the Go live window for the platforms being streamed to,
-    /// saving without reconnecting.
+    /// saving without reconnecting. While offline, Stream details: the window for the enabled
+    /// destinations, saving the details in the open setup without going live.
     pub fn edit_details(&mut self) {
-        if self.stream.is_none() || self.details.is_some() {
+        if self.details.is_some() {
+            self.show_details();
             return;
         }
-        let dests: Vec<(usize, &crate::settings::DestinationConfig)> = self
-            .stream_dests
-            .iter()
-            .filter_map(|d| Some((d.config, self.settings.destinations.get(d.config)?)))
-            .collect();
-        let window = crate::golive::Window::open(&dests, self.golive_sessions(), true);
+        let window = if self.stream.is_some() {
+            let dests: Vec<(usize, &crate::settings::DestinationConfig)> = self
+                .stream_dests
+                .iter()
+                .filter_map(|d| Some((d.config, self.settings.destinations.get(d.config)?)))
+                .collect();
+            crate::golive::Window::edit_live(&dests, self.golive_sessions())
+        } else {
+            let dests: Vec<(usize, &crate::settings::DestinationConfig)> = self
+                .settings
+                .enabled_destinations()
+                .iter()
+                .map(|(i, _)| (*i, &self.settings.destinations[*i]))
+                .collect();
+            crate::golive::Window::saving(&dests, self.golive_sessions(), &self.collection_name())
+        };
         if !window.has_sections() {
             self.toast(
                 "Connect YouTube, Twitch or Kick in Settings → Stream to change your stream details from Clutch"
@@ -5654,6 +5673,8 @@ impl App {
         sync_model(&self.details_model, rows);
         w.set_details_keys_only(d.keys_only.join(", ").into());
         w.set_details_live(d.live);
+        w.set_details_saving(d.saving);
+        w.set_details_setup(self.collection_name().into());
         w.set_details_busy(d.busy().unwrap_or_default().into());
         w.set_details_loading(d.loading());
         w.set_details_ask(self.settings.ask_details);
@@ -5764,12 +5785,12 @@ impl App {
         }
         let mut lines = Vec::new();
         let mut link = None;
+        let setup = self.collection_name();
         for (config, a) in applied {
             if let Some(d) = self.settings.destinations.get_mut(config) {
-                let saved = &mut d.details;
-                saved.youtube = a.details.youtube.or(saved.youtube.take());
-                saved.twitch = a.details.twitch.or(saved.twitch.take());
-                saved.kick = a.details.kick.or(saved.kick.take());
+                d.details = a.details.clone().or(&d.details);
+                // The open setup keeps them too, for its next Go live.
+                d.keep_setup_details(&setup, a.details);
                 if let Some(setup) = a.switch {
                     d.stream.server = setup.server;
                     d.set_key(&setup.key);
@@ -5878,6 +5899,29 @@ impl App {
         self.show_details();
     }
 
+    /// Save in the window before going live: keeps the details in the open setup and closes,
+    /// without sending anything to the platforms.
+    pub fn details_save(&mut self) {
+        let Some(d) = &self.details else { return };
+        if d.busy().is_some() || d.live {
+            return;
+        }
+        let saved = d.to_save();
+        if saved.is_empty() {
+            self.toast("Still loading your stream details…".into(), false);
+            return;
+        }
+        let setup = self.collection_name();
+        for (config, details) in saved {
+            if let Some(dest) = self.settings.destinations.get_mut(config) {
+                dest.keep_setup_details(&setup, details);
+            }
+        }
+        self.settings.save(&self.paths.settings());
+        self.details_closed();
+        self.toast(format!("Stream details saved for “{setup}”"), false);
+    }
+
     /// The window was closed (Cancel, Escape). While details are being applied it stays open,
     /// so a broadcast isn't made with nobody going live on it.
     pub fn details_closed(&mut self) {
@@ -5923,10 +5967,11 @@ impl App {
             self.show_details();
             return;
         }
+        let setup = self.collection_name();
         let window = if self.settings.ask_details {
-            crate::golive::Window::open(&[(config, dest)], self.golive_sessions(), false)
+            crate::golive::Window::open(&[(config, dest)], self.golive_sessions(), &setup)
         } else {
-            crate::golive::Window::remembered(&[(config, dest)], self.golive_sessions())
+            crate::golive::Window::remembered(&[(config, dest)], self.golive_sessions(), &setup)
         };
         if !window.has_sections() {
             self.start_destination(config, Vec::new());
@@ -12927,6 +12972,7 @@ pub fn install(app: &Shared, w: &AppWindow) -> Vec<slint::Timer> {
     on!(on_details_dest_canvas_picked, |a, d, c| a
         .details_dest_canvas(d, c));
     on!(on_details_go, |a| a.details_go());
+    on!(on_details_save, |a| a.details_save());
     on!(on_details_closed, |a| a.details_closed());
     on!(on_recovery_restore, |a| a.recovery(true));
     on!(on_recovery_discard, |a| a.recovery(false));

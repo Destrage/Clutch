@@ -279,6 +279,8 @@ export component AppWindow inherits Window {
     in property <[DetailsSection]> details-sections;
     in property <string> details-keys-only;
     in property <bool> details-live;
+    in property <bool> details-saving;
+    in property <string> details-setup;
     in property <string> details-busy;
     in property <bool> details-loading;
     in property <bool> details-ask: true;
@@ -295,6 +297,7 @@ export component AppWindow inherits Window {
     callback details-skip(int);
     callback details-set-ask(bool);
     callback details-go();
+    callback details-save();
     callback details-closed();
     /// The Go Live button (hotkeys and remote control use the "stream.toggle" action).
     callback go-live-clicked();
@@ -1006,6 +1009,8 @@ export component AppWindow inherits Window {
         sections: root.details-sections;
         keys-only: root.details-keys-only;
         live: root.details-live;
+        saving: root.details-saving;
+        setup: root.details-setup;
         busy: root.details-busy;
         loading: root.details-loading;
         ask: root.details-ask;
@@ -1021,6 +1026,7 @@ export component AppWindow inherits Window {
         skip(i) => { root.details-skip(i); }
         set-ask(v) => { root.details-set-ask(v); }
         go => { root.details-go(); }
+        save => { root.details-save(); }
         // Rust closes it (it stays open while the details are being applied).
         dismiss => {
             root.details-closed();

@@ -173,6 +173,11 @@ pub struct Section {
     pub applying: bool,
     /// The destination's stream key (YouTube: which stream the broadcast goes on).
     key: String,
+    /// What the form is filled in from: the open setup's details, else the last ones used.
+    saved: StreamDetails,
+    /// The open setup has its own details for this platform (they win over the channel's and a
+    /// waiting broadcast's).
+    own: bool,
     pub form: Form,
 }
 
@@ -209,6 +214,19 @@ pub enum Outcome {
     Done(Vec<(usize, Applied)>),
 }
 
+/// What the window is for.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Mode {
+    /// Before going live, in the window.
+    GoLive,
+    /// Going live without the window.
+    Auto,
+    /// Editing the running stream's details.
+    Live,
+    /// Saving the open setup's details without going live.
+    Save,
+}
+
 /// The Go live window, or the same work without a window (remembered details).
 pub struct Window {
     pub sections: Vec<Section>,
@@ -216,6 +234,9 @@ pub struct Window {
     pub keys_only: Vec<String>,
     /// Editing while live (Save, no broadcast choice, no video start).
     pub live: bool,
+    /// Only saving the details in the open setup (offline Stream details): nothing is sent to
+    /// the platforms, and YouTube's form is the new broadcast's.
+    pub saving: bool,
     sessions: Sessions,
     tx: Sender<Event>,
     rx: Receiver<Event>,
@@ -229,37 +250,57 @@ pub struct Window {
 }
 
 impl Window {
-    /// Opens the window for `dests` (settings index, destination) and starts loading each
-    /// connected platform's section.
+    /// Opens the window for `dests` (settings index, destination) before going live in `setup`,
+    /// and starts loading each connected platform's section.
     pub fn open(
         dests: &[(usize, &crate::settings::DestinationConfig)],
         sessions: Sessions,
-        live: bool,
+        setup: &str,
     ) -> Self {
-        Self::start(dests, sessions, live, false)
+        Self::start(dests, sessions, setup, Mode::GoLive)
     }
 
-    /// The same work without the window, with the remembered details: YouTube gets a broadcast
-    /// (the one waiting on the key, else a new one), and Twitch and Kick get their saved
-    /// details if there are any (else they're left as they are).
-    pub fn remembered(
+    /// The window for editing the running stream's details (the channels as they are now).
+    pub fn edit_live(
         dests: &[(usize, &crate::settings::DestinationConfig)],
         sessions: Sessions,
     ) -> Self {
-        Self::start(dests, sessions, false, true)
+        Self::start(dests, sessions, "", Mode::Live)
+    }
+
+    /// The window for saving `setup`'s details without going live.
+    pub fn saving(
+        dests: &[(usize, &crate::settings::DestinationConfig)],
+        sessions: Sessions,
+        setup: &str,
+    ) -> Self {
+        Self::start(dests, sessions, setup, Mode::Save)
+    }
+
+    /// The same work without the window, with `setup`'s details (else the ones used last):
+    /// YouTube gets a broadcast (the one waiting on the key, else a new one), and Twitch and
+    /// Kick get the saved details if there are any (else they're left as they are).
+    pub fn remembered(
+        dests: &[(usize, &crate::settings::DestinationConfig)],
+        sessions: Sessions,
+        setup: &str,
+    ) -> Self {
+        Self::start(dests, sessions, setup, Mode::Auto)
     }
 
     fn start(
         dests: &[(usize, &crate::settings::DestinationConfig)],
         sessions: Sessions,
-        live: bool,
-        auto: bool,
+        setup: &str,
+        mode: Mode,
     ) -> Self {
+        let (live, auto) = (mode == Mode::Live, mode == Mode::Auto);
         let (tx, rx) = channel();
         let mut window = Self {
             sections: Vec::new(),
             keys_only: Vec::new(),
             live,
+            saving: mode == Mode::Save,
             sessions,
             tx,
             rx,
@@ -274,33 +315,45 @@ impl Window {
                 window.keys_only.push(d.name.clone());
                 continue;
             }
-            // Without the window, Twitch and Kick only change when there's something saved; it's
-            // applied as is (nothing to load).
-            if auto && service != Service::YouTube {
-                let saved = match service {
-                    Service::Twitch => d.details.twitch.is_some(),
-                    _ => d.details.kick.is_some(),
-                };
-                if !saved {
+            // While live the channels as they are now count; otherwise the setup's own details
+            // come first, then the ones used last.
+            let own = if live {
+                StreamDetails::default()
+            } else {
+                d.own_details(setup)
+            };
+            let saved = own.clone().or(&d.details);
+            let (has_saved, has_own) = match service {
+                Service::YouTube => (saved.youtube.is_some(), own.youtube.is_some()),
+                Service::Twitch => (saved.twitch.is_some(), own.twitch.is_some()),
+                _ => (saved.kick.is_some(), own.kick.is_some()),
+            };
+            // Twitch and Kick with the setup's own details, and without the window with any saved
+            // ones, are used as they are (nothing to load). Without the window and nothing saved,
+            // they're left as they are.
+            if service != Service::YouTube {
+                if auto && !has_saved {
                     continue;
                 }
-                ready.push(window.sections.len());
+                if auto || has_own {
+                    ready.push(window.sections.len());
+                }
             }
             let form = match service {
                 Service::YouTube => Form::YouTube {
                     loaded: None,
                     choice: 0,
-                    details: d.details.youtube.clone().unwrap_or_default(),
+                    details: saved.youtube.clone().unwrap_or_default(),
                 },
                 Service::Twitch => Form::Twitch {
-                    details: d.details.twitch.clone().unwrap_or_default(),
+                    details: saved.twitch.clone().unwrap_or_default(),
                     results: Vec::new(),
                     search: None,
                     asked: None,
                     typed: String::new(),
                 },
                 _ => Form::Kick {
-                    details: d.details.kick.clone().unwrap_or_default(),
+                    details: saved.kick.clone().unwrap_or_default(),
                     results: Vec::new(),
                     search: None,
                     asked: None,
@@ -316,6 +369,8 @@ impl Window {
                 tried: false,
                 applying: false,
                 key: d.stream.key.clone(),
+                saved,
+                own: has_own,
                 form,
             });
         }
@@ -323,7 +378,8 @@ impl Window {
             if ready.contains(&i) {
                 window.sections[i].state = SectionState::Ready;
             } else {
-                window.load(i, dests);
+                let saved = window.sections[i].saved.clone();
+                window.load_one(i, saved);
             }
         }
         window
@@ -355,16 +411,6 @@ impl Window {
             };
             let _ = tx.send(event);
         });
-    }
-
-    fn load(&mut self, i: usize, dests: &[(usize, &crate::settings::DestinationConfig)]) {
-        let saved = self
-            .sections
-            .get(i)
-            .and_then(|s| dests.iter().find(|(c, _)| *c == s.config))
-            .map(|(_, d)| d.details.clone())
-            .unwrap_or_default();
-        self.load_one(i, saved);
     }
 
     /// "Try again" on section `i`: reload it if it couldn't load, else apply it again.
@@ -412,6 +458,20 @@ impl Window {
         self.sections
             .iter()
             .any(|s| !s.skipped && matches!(s.state, SectionState::Loading))
+    }
+
+    /// Save: the details in each section that has loaded, by settings index, to keep in the
+    /// open setup. Sections still loading or that couldn't load are left out, so their saved
+    /// details aren't replaced with an empty form.
+    pub fn to_save(&self) -> Vec<(usize, StreamDetails)> {
+        self.sections
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| {
+                !s.skipped && matches!(s.state, SectionState::Ready | SectionState::ApplyFailed(_))
+            })
+            .map(|(i, s)| (s.config, self.form_details(i)))
+            .collect()
     }
 
     /// The form's current details, as they'd be remembered.
@@ -657,12 +717,18 @@ impl Window {
     pub fn poll(&mut self) -> Option<Outcome> {
         self.search();
         let mut changed = false;
-        let live = self.live;
+        let (live, saving) = (self.live, self.saving);
         while let Ok(event) = self.rx.try_recv() {
             changed = true;
             match event {
                 Event::YouTube(i, result) => self.loaded(i, result, |s, loaded| {
-                    let first = first_choice(&loaded.broadcasts, &s.key, live);
+                    // Saving: the setup's details are a new broadcast's.
+                    let first = if saving {
+                        None
+                    } else {
+                        first_choice(&loaded.broadcasts, &s.key, live)
+                    };
+                    let own = s.saved.youtube.clone().filter(|_| s.own);
                     if let Form::YouTube {
                         loaded: l,
                         choice,
@@ -671,7 +737,17 @@ impl Window {
                     {
                         *choice = first.map_or(0, |n| n + 1);
                         *details = match first {
-                            Some(n) => loaded.broadcasts[n].details.clone(),
+                            Some(n) => {
+                                let b = &loaded.broadcasts[n];
+                                match own {
+                                    // One waiting on the key (as Studio makes, a copy of the last
+                                    // stream's) gets what the setup says viewers see.
+                                    Some(own) if !live && can_edit(b) => {
+                                        with_setup_details(&b.details, &own)
+                                    }
+                                    _ => b.details.clone(),
+                                }
+                            }
                             None => loaded.new.clone(),
                         };
                         *l = Some(loaded);
@@ -803,6 +879,24 @@ impl Window {
             .filter(|(_, s)| !s.skipped)
             .nth(row)
             .map(|(i, _)| i)
+    }
+}
+
+/// Whether a broadcast hasn't started yet (its latency and auto-start can still change).
+fn can_edit(b: &Broadcast) -> bool {
+    matches!(b.status.as_str(), "created" | "ready")
+}
+
+/// A waiting broadcast's details with what a setup says viewers see: title, description,
+/// privacy, category and made-for-kids. How it runs (latency, auto-start, auto-stop) stays.
+fn with_setup_details(broadcast: &BroadcastDetails, setup: &BroadcastDetails) -> BroadcastDetails {
+    BroadcastDetails {
+        title: setup.title.clone(),
+        description: setup.description.clone(),
+        privacy: setup.privacy.clone(),
+        category: setup.category.clone(),
+        made_for_kids: setup.made_for_kids,
+        ..broadcast.clone()
     }
 }
 
@@ -979,7 +1073,7 @@ fn row(
                 locked = choice
                     .checked_sub(1)
                     .and_then(|n| l.broadcasts.get(n))
-                    .is_some_and(|b| !matches!(b.status.as_str(), "created" | "ready"));
+                    .is_some_and(|b| !can_edit(b));
             }
             out.broadcasts = strings(options);
             out.broadcast = i32::try_from(*choice).unwrap_or(0);
@@ -1139,5 +1233,110 @@ mod tests {
             stream: None,
         };
         assert_eq!(broadcast_label(&b), "Ranked · live now · unlisted");
+    }
+
+    /// Kick and Twitch connected (with made-up accounts), YouTube not.
+    fn sessions() -> Sessions {
+        Sessions {
+            youtube: crate::youtube::Session::new(None),
+            twitch: crate::twitch::Session::new(Some(Default::default())),
+            kick: crate::kick::Session::new(Some(Default::default())),
+        }
+    }
+
+    fn kick(title: &str, category: &str) -> crate::kick::ChannelDetails {
+        crate::kick::ChannelDetails {
+            title: title.into(),
+            category_id: 7,
+            category: category.into(),
+        }
+    }
+
+    fn kick_destination() -> crate::settings::DestinationConfig {
+        let mut d = crate::settings::DestinationConfig::default();
+        d.stream.service = Service::Kick;
+        d.details.kick = Some(kick("Apex with friends", "Apex Legends"));
+        d.keep_setup_details(
+            "PUBG",
+            StreamDetails {
+                kick: Some(kick("PUBG squads", "PUBG: Battlegrounds")),
+                ..Default::default()
+            },
+        );
+        d
+    }
+
+    fn kick_form(w: &Window) -> crate::kick::ChannelDetails {
+        match &w.sections[0].form {
+            Form::Kick { details, .. } => details.clone(),
+            other => panic!("not Kick: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_setup_details_fill_the_window_without_asking_the_channel() {
+        let d = kick_destination();
+        let w = Window::open(&[(0, &d)], sessions(), "PUBG");
+        assert_eq!(w.sections.len(), 1);
+        // Ready at once: the channel (still showing the last game) isn't read.
+        assert_eq!(w.sections[0].state, SectionState::Ready);
+        assert_eq!(kick_form(&w), kick("PUBG squads", "PUBG: Battlegrounds"));
+        assert_eq!(
+            w.to_save(),
+            vec![(
+                0,
+                StreamDetails {
+                    kick: Some(kick("PUBG squads", "PUBG: Battlegrounds")),
+                    ..Default::default()
+                }
+            )]
+        );
+
+        let w = Window::saving(&[(0, &d)], sessions(), "PUBG");
+        assert!(w.saving && !w.live);
+        assert_eq!(kick_form(&w), kick("PUBG squads", "PUBG: Battlegrounds"));
+    }
+
+    #[test]
+    fn without_the_window_the_setup_details_come_first_then_the_last_ones() {
+        let d = kick_destination();
+        let w = Window::remembered(&[(0, &d)], sessions(), "PUBG");
+        assert_eq!(kick_form(&w), kick("PUBG squads", "PUBG: Battlegrounds"));
+        // A setup without its own details uses the ones used last.
+        let w = Window::remembered(&[(0, &d)], sessions(), "Apex");
+        assert_eq!(w.sections[0].state, SectionState::Ready);
+        assert_eq!(kick_form(&w), kick("Apex with friends", "Apex Legends"));
+        // Nothing saved at all: Kick is left as it is.
+        let mut empty = kick_destination();
+        empty.details = StreamDetails::default();
+        empty.setup_details.clear();
+        let w = Window::remembered(&[(0, &empty)], sessions(), "Apex");
+        assert!(!w.has_sections());
+    }
+
+    #[test]
+    fn a_waiting_broadcast_gets_what_the_setup_says_viewers_see() {
+        let waiting = BroadcastDetails {
+            title: "Apex with friends".into(),
+            description: "Apex".into(),
+            latency: Latency::UltraLow,
+            auto_start: false,
+            ..Default::default()
+        };
+        let setup = BroadcastDetails {
+            title: "PUBG squads".into(),
+            description: "PUBG".into(),
+            privacy: "unlisted".into(),
+            category: "20".into(),
+            ..Default::default()
+        };
+        let both = with_setup_details(&waiting, &setup);
+        assert_eq!(both.title, "PUBG squads");
+        assert_eq!(both.description, "PUBG");
+        assert_eq!(both.privacy, "unlisted");
+        assert_eq!(both.category, "20");
+        // How it runs is the broadcast's.
+        assert_eq!(both.latency, Latency::UltraLow);
+        assert!(!both.auto_start);
     }
 }
