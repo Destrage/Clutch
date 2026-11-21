@@ -61,6 +61,10 @@ export component StreamDetailsDialog inherits Modal {
     in property <string> keys-only;
     /// Editing while live: Save instead of Go live, and no broadcast choice.
     in property <bool> live;
+    /// Saving the open setup's details without going live: Save only, no broadcast choice.
+    in property <bool> saving;
+    /// The open setup's name (details are saved with it).
+    in property <string> setup;
     /// Applying the details (the button says what's happening).
     in property <string> busy;
     /// A platform's details are still loading (Go live waits for them).
@@ -81,6 +85,8 @@ export component StreamDetailsDialog inherits Modal {
     callback skip(int);
     callback set-ask(bool);
     callback go();
+    /// Save the details in the open setup without going live.
+    callback save();
 
     card-width: 620px;
 
@@ -109,10 +115,11 @@ export component StreamDetailsDialog inherits Modal {
             VerticalLayout {
                 alignment: center;
                 spacing: 2px;
-                Text { text: root.live ? "Stream details" : "Go live"; color: Theme.text; font-size: Theme.font-xl; font-weight: 700; }
+                Text { text: root.live || root.saving ? "Stream details" : "Go live"; color: Theme.text; font-size: Theme.font-xl; font-weight: 700; }
                 Text {
                     text: root.live ? "Changes show on each platform right away; the stream keeps running."
-                        : "What viewers see on each platform. Clutch sets it up before your video starts.";
+                        : root.saving ? "Saved with the “" + root.setup + "” setup and filled in when you go live. Nothing changes on the platforms until then."
+                        : "What viewers see on each platform, saved with the “" + root.setup + "” setup. Clutch sets it up before your video starts.";
                     color: Theme.text-muted;
                     font-size: Theme.font-s;
                     wrap: word-wrap;
@@ -120,7 +127,7 @@ export component StreamDetailsDialog inherits Modal {
             }
         }
 
-        if root.canvases.length > 1 && !root.live: VerticalLayout {
+        if root.canvases.length > 1 && !root.live && !root.saving: VerticalLayout {
             spacing: 6px;
             HorizontalLayout {
                 spacing: 10px;
@@ -194,12 +201,12 @@ export component StreamDetailsDialog inherits Modal {
                             spacing: 8px;
                             alignment: start;
                             Button { text: "Try again"; kind: "ghost"; clicked => { root.retry(i); } }
-                            if !root.live: Button { text: "Go live without " + (s.kind == "youtube" ? "YouTube" : s.kind == "twitch" ? "Twitch" : "Kick"); kind: "ghost"; clicked => { root.skip(i); } }
+                            if !root.live && !root.saving: Button { text: "Go live without " + (s.kind == "youtube" ? "YouTube" : s.kind == "twitch" ? "Twitch" : "Kick"); kind: "ghost"; clicked => { root.skip(i); } }
                         }
 
                         if s.state == 1 || s.state == 3: VerticalLayout {
                             spacing: 10px;
-                            if s.kind == "youtube" && !root.live: Select {
+                            if s.kind == "youtube" && !root.live && !root.saving: Select {
                                 label: "Broadcast";
                                 options: s.broadcasts;
                                 current-index: s.broadcast;
@@ -359,7 +366,7 @@ export component StreamDetailsDialog inherits Modal {
 
         HorizontalLayout {
             spacing: 8px;
-            if !root.live: VerticalLayout {
+            if !root.live && !root.saving: VerticalLayout {
                 alignment: center;
                 Toggle {
                     label: "Ask before going live";
@@ -369,7 +376,15 @@ export component StreamDetailsDialog inherits Modal {
             }
             Rectangle { horizontal-stretch: 1; }
             Button { text: "Cancel"; kind: "ghost"; clicked => { root.dismiss(); } }
-            Button {
+            // Before going live: keep the details for this setup without going live.
+            if !root.live: Button {
+                text: "Save";
+                kind: root.saving ? "primary" : "ghost";
+                tooltip: "Keep these details with the “" + root.setup + "” setup without going live";
+                enabled: root.busy == "";
+                clicked => { root.save(); }
+            }
+            if !root.saving: Button {
                 text: root.busy != "" ? root.busy : root.loading ? "Loading…" : root.live ? "Save" : "Go Live";
                 kind: root.live ? "primary" : "live";
                 has-icon: !root.live;
