@@ -47,7 +47,7 @@ pub fn watch_link(
         Service::Twitch => crate::chat::channel_name(channel, "twitch.tv")
             .map(|n| Some(format!("https://www.twitch.tv/{n}")))
             .ok_or("Add your Twitch channel name in Settings → Stream to share a link"),
-        Service::Kick => crate::chat::channel_name(channel, "kick.com")
+        Service::Kick => crate::chat::kick_slug(channel)
             .map(|n| Some(format!("https://kick.com/{n}")))
             .ok_or("Add your Kick channel name in Settings → Stream to share a link"),
         Service::YouTube => youtube
@@ -344,6 +344,10 @@ mod tests {
         assert_eq!(
             watch_link(Service::Kick, "someone", None),
             Ok(Some("https://kick.com/someone".into()))
+        );
+        assert_eq!(
+            watch_link(Service::Kick, "Nukeem_Gaming", None),
+            Ok(Some("https://kick.com/nukeem-gaming".into()))
         );
         assert_eq!(
             watch_link(

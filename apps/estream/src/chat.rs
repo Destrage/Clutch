@@ -9,8 +9,8 @@ pub fn chat_url(service: Service, channel: &str) -> Result<String, &'static str>
     let channel = channel.trim();
     match service {
         Service::Kick => {
-            let name = channel_name(channel, "kick.com")
-                .ok_or("Add your Kick channel name in Settings → Stream")?;
+            let name =
+                kick_slug(channel).ok_or("Add your Kick channel name in Settings → Stream")?;
             Ok(format!("https://kick.com/popout/{name}/chat"))
         }
         Service::Twitch => {
@@ -31,9 +31,11 @@ pub fn chat_url(service: Service, channel: &str) -> Result<String, &'static str>
     }
 }
 
-/// A Kick channel's slug from its name or link.
+/// A Kick channel's slug from its name or link. Kick makes the slug from the user name with
+/// underscores turned into hyphens ("Nukeem_Gaming" is kick.com/nukeem-gaming), and the account
+/// connection and most people give the user name.
 pub fn kick_slug(text: &str) -> Option<String> {
-    channel_name(text, "kick.com")
+    channel_name(text, "kick.com").map(|n| n.replace('_', "-"))
 }
 
 /// A Twitch login from a channel name or link.
@@ -374,6 +376,12 @@ mod tests {
         assert_eq!(
             chat_url(Service::Kick, "https://kick.com/SomeOne/").as_deref(),
             Ok("https://kick.com/popout/someone/chat")
+        );
+        // Kick's slug turns the user name's underscores into hyphens.
+        assert_eq!(kick_slug("Nukeem_Gaming").as_deref(), Some("nukeem-gaming"));
+        assert_eq!(
+            kick_slug("https://kick.com/nukeem-gaming").as_deref(),
+            Some("nukeem-gaming")
         );
         assert_eq!(
             chat_url(Service::Twitch, "@my_channel").as_deref(),
