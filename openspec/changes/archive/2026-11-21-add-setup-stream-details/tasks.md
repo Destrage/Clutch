@@ -18,7 +18,7 @@
 - [x] 3.2 Setups can't be switched while streaming (already enforced), so there's no live case
 
 ## 4. Docs and check
-- [ ] 4.1 Website streaming page: details per setup, Save, Stream details while offline (written in
+- [x] 4.1 Website streaming page: details per setup, Save, Stream details while offline (written in
       clutch-site, not pushed until the release); testing guide
 - [ ] 4.2 In-app check:
   - two setups with different Twitch and Kick categories and YouTube descriptions, switched back
