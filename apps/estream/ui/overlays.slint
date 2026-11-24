@@ -253,6 +253,60 @@ export component AddSourceDialog inherits Modal {
     }
 }
 
+/// One purpose in the setup wizard (click picks it, double-click creates the setup).
+component PurposeCard inherits Rectangle {
+    in property <int> index;
+    in property <[Preset]> purposes;
+    in-out property <int> purpose;
+    callback picked(int);
+    callback chosen();
+    property <bool> on: index == purpose;
+    height: 74px;
+    border-radius: Theme.radius-m;
+    border-width: on ? 2px : 1px;
+    border-color: on ? Theme.accent : Theme.border;
+    background: on ? Theme.accent-soft : card-ta.has-hover ? Theme.hover : Theme.surface-2;
+    accessible-role: radio-button;
+    accessible-label: index < purposes.length ? purposes[index].label : "";
+    accessible-checked: on;
+    card-ta := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        clicked => {
+            root.purpose = index;
+            root.picked(index);
+        }
+        double-clicked => {
+            root.purpose = index;
+            root.chosen();
+        }
+    }
+    HorizontalLayout {
+        padding: 14px;
+        spacing: 12px;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 36px;
+                height: 36px;
+                border-radius: 10px;
+                background: on ? Theme.accent : Theme.surface-3;
+                Icon {
+                    source: index == 0 ? Icons.monitor : index == 1 ? Icons.gamepad : index == 2 ? Icons.camera : index == 3 ? Icons.film : Icons.scan;
+                    size: 18px;
+                    tint: on ? #ffffff : Theme.text-muted;
+                }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+            Text { text: index < purposes.length ? purposes[index].label : ""; color: Theme.text; font-size: Theme.font-m; font-weight: 700; }
+            Text { text: index < purposes.length ? purposes[index].detail : ""; color: Theme.text-muted; font-size: Theme.font-s; overflow: elide; }
+        }
+    }
+}
+
 export component SetupWizard inherits Modal {
     /// What the user wants to do (label + detail).
     in property <[Preset]> purposes;
@@ -288,60 +342,26 @@ export component SetupWizard inherits Modal {
             }
         }
 
-        // Purpose cards, two per row.
-        for row in [0, 2]: HorizontalLayout {
+        // Purpose cards: Basic setup across the first row, the others two per row.
+        PurposeCard {
+            index: 0;
+            purposes: root.purposes;
+            purpose <=> root.purpose;
+            picked(i) => { root.purpose-changed(i); }
+            chosen => { root.create(); }
+        }
+        for row in [1, 3]: HorizontalLayout {
             spacing: 10px;
-            for k in [0, 1]: Rectangle {
-                property <int> i: row + k;
-                property <bool> on: i == root.purpose;
-                height: 74px;
-                horizontal-stretch: 1;
+            for k in [0, 1]: PurposeCard {
+                index: row + k;
                 // Equal halves whatever the text length.
+                horizontal-stretch: 1;
                 min-width: 0px;
                 preferred-width: 0px;
-                border-radius: Theme.radius-m;
-                border-width: on ? 2px : 1px;
-                border-color: on ? Theme.accent : Theme.border;
-                background: on ? Theme.accent-soft : card-ta.has-hover ? Theme.hover : Theme.surface-2;
-                accessible-role: radio-button;
-                accessible-label: i < root.purposes.length ? root.purposes[i].label : "";
-                accessible-checked: on;
-                card-ta := TouchArea {
-                    mouse-cursor: MouseCursor.pointer;
-                    clicked => {
-                        root.purpose = i;
-                        root.purpose-changed(i);
-                    }
-                    double-clicked => {
-                        root.purpose = i;
-                        root.create();
-                    }
-                }
-                HorizontalLayout {
-                    padding: 14px;
-                    spacing: 12px;
-                    VerticalLayout {
-                        alignment: center;
-                        Rectangle {
-                            width: 36px;
-                            height: 36px;
-                            border-radius: 10px;
-                            background: on ? Theme.accent : Theme.surface-3;
-                            Icon {
-                                source: i == 0 ? Icons.gamepad : i == 1 ? Icons.camera : i == 2 ? Icons.film : Icons.scan;
-                                size: 18px;
-                                tint: on ? #ffffff : Theme.text-muted;
-                            }
-                        }
-                    }
-                    VerticalLayout {
-                        alignment: center;
-                        spacing: 2px;
-                        horizontal-stretch: 1;
-                        Text { text: i < root.purposes.length ? root.purposes[i].label : ""; color: Theme.text; font-size: Theme.font-m; font-weight: 700; }
-                        Text { text: i < root.purposes.length ? root.purposes[i].detail : ""; color: Theme.text-muted; font-size: Theme.font-s; overflow: elide; }
-                    }
-                }
+                purposes: root.purposes;
+                purpose <=> root.purpose;
+                picked(i) => { root.purpose-changed(i); }
+                chosen => { root.create(); }
             }
         }
 
@@ -1060,14 +1080,48 @@ export component SettingsDialog inherits Modal {
                         VerticalLayout {
                             alignment: center;
                             Button {
-                                text: "Optimize for this PC";
+                                text: root.form.perf-testing ? "Testing upload…" : "Optimize for this PC";
                                 kind: "primary";
                                 has-icon: true;
                                 icon: Icons.sparkles;
-                                tooltip: "Recommends a profile from this PC's encoder, processor and memory";
+                                enabled: !root.form.perf-testing;
+                                tooltip: "Tests your upload speed, then recommends a profile from this PC's encoder, processor and memory, with stream bitrates that fit your upload";
                                 clicked => { root.set("perf-optimize", 0); }
                             }
                         }
+                    }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 2px;
+                            Text { text: "Your connection"; color: Theme.text; font-size: Theme.font-m; }
+                            Text {
+                                text: root.form.perf-upload;
+                                color: Theme.text-faint;
+                                font-size: Theme.font-xs;
+                                wrap: word-wrap;
+                                width: scroller.page-width - 36px - 200px;
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            Button {
+                                text: "Test again";
+                                enabled: !root.form.perf-testing && !root.form.perf-live;
+                                tooltip: root.form.perf-live
+                                    ? "Can't test while you're live: the stream uses your upload"
+                                    : "Measures your upload speed (about 10 seconds; sends test data to Cloudflare's speed test)";
+                                clicked => { root.set("perf-retest", 0); }
+                            }
+                        }
+                    }
+                    if root.form.perf-upload-note != "": Text {
+                        text: root.form.perf-upload-note;
+                        color: Theme.warn;
+                        font-size: Theme.font-s;
+                        wrap: word-wrap;
+                        width: scroller.page-width - 36px;
                     }
                     if root.form.perf-warning != "": Text {
                         text: root.form.perf-warning;
