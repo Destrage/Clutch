@@ -299,6 +299,11 @@ pub struct App {
     hardware: Arc<Mutex<Option<crate::performance::Hardware>>>,
     perf_pending: Option<crate::performance::Profile>,
     perf_revert: Option<crate::performance::Covered>,
+    /// The upload speed test in progress, what started it, and the last failure.
+    upload_test: Option<(crate::speedtest::Test, UploadFor)>,
+    upload_error: Option<String>,
+    /// The progress last shown on the Performance page (refreshes only when it moves).
+    upload_shown: u32,
     /// Whether Settings has been refreshed since the probe finished.
     hardware_shown: bool,
     /// The profile the toast's button switches to.
@@ -318,11 +323,24 @@ pub struct App {
 /// A destination's server (when the platform gives one) and stream key, or why not.
 type StreamFill = Result<(Option<String>, String), String>;
 
+/// What started an upload speed test, and so what happens with its result.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UploadFor {
+    /// Optimize for this PC: recommend a profile once it is done.
+    Optimize,
+    /// Test again on the Performance page.
+    Retest,
+    /// The Go Live box, while a destination is added.
+    GoLive,
+}
+
 /// What the toast's button does.
 #[derive(Clone, Debug, PartialEq)]
 enum ToastAction {
     /// Switch to a lighter performance profile.
     Profile(crate::performance::Profile),
+    /// Set a destination's (by settings index) video bitrate.
+    SetBitrate(usize, u32),
     /// Download the update that was found.
     InstallUpdate,
     /// Start the YouTube broadcast that waits for it (auto-start off).
@@ -448,6 +466,8 @@ impl LiveDest {
 
 /// A destination's Stop is ignored this long after its Start (the same button: a double-click).
 const STOP_GRACE: Duration = Duration::from_secs(2);
+/// The Go Live box tests the upload again when the last test is older than this.
+const GOLIVE_TEST_REUSE_SECONDS: u64 = 600;
 
 /// Short transport label for a destination, e.g. "RTMPS" or "SRT".
 fn protocol_label(s: &estream_media::StreamSettings, long: bool) -> String {
@@ -1181,6 +1201,9 @@ impl App {
             hardware: Arc::default(),
             perf_pending: None,
             perf_revert: None,
+            upload_test: None,
+            upload_error: None,
+            upload_shown: 0,
             hardware_shown: false,
             toast_action: None,
             update_phase: Arc::default(),
@@ -2935,6 +2958,7 @@ impl App {
         self.tick_youtube_start();
         self.tick_details();
         self.poll_share();
+        self.tick_upload_test();
         if self.visibility_at.elapsed() >= Duration::from_millis(250) {
             self.visibility_at = Instant::now();
             let now = window_visibility(w.window());
@@ -3179,6 +3203,17 @@ impl App {
     pub fn toast_act(&mut self) {
         match self.toast_action.take() {
             Some(ToastAction::Profile(p)) => self.apply_profile(p),
+            Some(ToastAction::SetBitrate(i, kbps)) => {
+                if let Some(d) = self.settings.destinations.get_mut(i) {
+                    d.stream.bitrate_kbps = kbps;
+                    let name = d.name.clone();
+                    self.settings.save(&self.paths.settings());
+                    self.toast(
+                        format!("{name} bitrate set to {kbps} kbps for the next time you go live"),
+                        false,
+                    );
+                }
+            }
             Some(ToastAction::InstallUpdate) => self.update_download(),
             Some(ToastAction::StartYouTube(broadcast)) => self.start_youtube_broadcast(broadcast),
             Some(ToastAction::UseYouTubeKey(config, setup)) => self.use_youtube_key(config, setup),
@@ -3999,6 +4034,43 @@ impl App {
         w.set_golive_message_error(false);
         w.set_golive_auto(SharedString::new());
         w.set_golive_open(true);
+        // Measure the upload while the key is pasted, unless a recent test already did.
+        if self
+            .settings
+            .upload
+            .is_none_or(|t| t.age_seconds() > GOLIVE_TEST_REUSE_SECONDS)
+        {
+            self.start_upload_test(UploadFor::GoLive);
+        }
+    }
+
+    /// The bitrate a destination added from the Go Live box gets: its share of the tested
+    /// upload next to the other enabled destinations, or the platform's table value.
+    fn golive_kbps(&self, service: Service, width: u32, height: u32, fps: f64) -> u32 {
+        let table = service.recommended_kbps(width, height, fps);
+        // While a new test runs, the saved one is too old to go by.
+        let Some(test) = self.settings.upload.filter(|_| self.upload_test.is_none()) else {
+            return table;
+        };
+        let mut needs: Vec<_> = self
+            .stream_needs()
+            .into_iter()
+            .filter(|n| n.enabled && n.service != service)
+            .collect();
+        needs.push(crate::performance::StreamNeed {
+            service,
+            enabled: true,
+            current_kbps: table,
+            audio_kbps: estream_media::StreamSettings::default().audio_bitrate_kbps,
+            width,
+            height,
+            fps,
+        });
+        crate::performance::budget(test.kbps, &needs)
+            .last()
+            .copied()
+            .flatten()
+            .map_or(table, |fit| fit.kbps)
     }
 
     fn golive_service(w: &AppWindow) -> Option<Service> {
@@ -4023,9 +4095,16 @@ impl App {
             0x8086 => "Intel Quick Sync",
             _ => "software encoder",
         };
-        let kbps = service.recommended_kbps(width, height, fps);
+        let kbps = self.golive_kbps(service, width, height, fps);
+        let upload = if matches!(self.upload_test, Some((_, UploadFor::GoLive))) {
+            " Checking your upload speed…".to_owned()
+        } else {
+            self.settings.upload.map_or(String::new(), |t| {
+                format!(" The bitrate fits your {:.1} Mb/s upload.", t.kbps / 1000.0)
+            })
+        };
         format!(
-            "Clutch sets up the rest: {} server, {encoder}, {kbps} kbps for {width} × {height} at {} fps. \
+            "Clutch sets up the rest: {} server, {encoder}, {kbps} kbps for {width} × {height} at {} fps.{upload} \
              Change any of it in More options.",
             service.label(),
             fps.round()
@@ -4125,7 +4204,7 @@ impl App {
                         stream: estream_media::StreamSettings {
                             service,
                             server: service.default_server().into(),
-                            bitrate_kbps: service.recommended_kbps(width, height, fps),
+                            bitrate_kbps: self.golive_kbps(service, width, height, fps),
                             ..Default::default()
                         },
                         ..Default::default()
@@ -5258,6 +5337,8 @@ impl App {
     /// Starts the video on every enabled destination except `skip` (settings indices), and says
     /// what was set up on each platform (`lines`).
     fn start_stream(&mut self, skip: &[usize], lines: Vec<String>) {
+        // A running upload test would take the stream's upload: stop it.
+        self.upload_test = None;
         let Some(engine) = &self.engine else { return };
         let enabled: Vec<_> = self
             .settings
@@ -7738,41 +7819,218 @@ impl App {
         }
     }
 
-    /// Each destination's platform-recommended bitrate for its canvas (`None` for a custom
-    /// server, whose bitrate stays).
-    fn recommended_bitrates(&self) -> Vec<Option<u32>> {
-        let canvases = self
-            .engine
+    /// The size and frame rate of the canvas a destination streams (the first canvas when it
+    /// has none, 1080p60 before the engine runs).
+    fn stream_canvas(&self, s: &estream_media::StreamSettings) -> (u32, u32, f64) {
+        self.engine
             .as_ref()
-            .map(|e| e.snapshot().canvases.clone())
-            .unwrap_or_default();
+            .and_then(|e| {
+                let snapshot = e.snapshot();
+                s.canvas
+                    .and_then(|id| snapshot.canvases.iter().find(|c| c.id == id))
+                    .or(snapshot.canvases.first())
+                    .map(|c| (c.width, c.height, c.fps.as_f64()))
+            })
+            .unwrap_or((1920, 1080, 60.0))
+    }
+
+    /// What each destination needs, for the upload budget.
+    fn stream_needs(&self) -> Vec<crate::performance::StreamNeed> {
         self.settings
             .destinations
             .iter()
             .map(|d| {
-                let s = &d.stream;
-                if s.service == Service::Custom {
-                    return None;
+                let (width, height, fps) = self.stream_canvas(&d.stream);
+                crate::performance::StreamNeed {
+                    service: d.stream.service,
+                    enabled: d.enabled,
+                    current_kbps: d.stream.bitrate_kbps,
+                    audio_kbps: d.stream.audio_bitrate_kbps,
+                    width,
+                    height,
+                    fps,
                 }
-                let canvas = s
-                    .canvas
-                    .and_then(|id| canvases.iter().find(|c| c.id == id))
-                    .or(canvases.first())?;
-                Some(
-                    s.service
-                        .recommended_kbps(canvas.width, canvas.height, canvas.fps.as_f64()),
-                )
             })
             .collect()
     }
 
+    /// Each destination's recommended bitrate and why. With an upload test, enabled
+    /// destinations share the measured upload (up to the platform's ceiling); otherwise, and
+    /// for disabled ones, the platform's table value. `None` keeps the bitrate (a custom
+    /// server without a test).
+    fn bitrate_plan(&self) -> Vec<(Option<u32>, Option<&'static str>)> {
+        use crate::performance::Limit;
+        let needs = self.stream_needs();
+        let fits = match self.settings.upload {
+            Some(test) => crate::performance::budget(test.kbps, &needs),
+            None => vec![None; needs.len()],
+        };
+        needs
+            .iter()
+            .zip(fits)
+            .map(|(n, fit)| match fit {
+                Some(fit) => (
+                    Some(fit.kbps),
+                    Some(match fit.limit {
+                        Limit::Upload => "limited by your upload",
+                        Limit::Platform => "the platform's maximum",
+                        Limit::Kept => "fits your upload",
+                    }),
+                ),
+                None if n.service == Service::Custom => (None, None),
+                None => (
+                    Some(n.service.recommended_kbps(n.width, n.height, n.fps)),
+                    None,
+                ),
+            })
+            .collect()
+    }
+
+    /// When the upload leaves a destination less than its canvas needs for a clear picture:
+    /// what to do about it, for the Performance page.
+    fn upload_note(&self) -> String {
+        let Some(test) = self.settings.upload else {
+            return String::new();
+        };
+        let needs = self.stream_needs();
+        let fits = crate::performance::budget(test.kbps, &needs);
+        let short: Vec<String> = self
+            .settings
+            .destinations
+            .iter()
+            .zip(&needs)
+            .zip(&fits)
+            .filter_map(|((d, n), fit)| {
+                let fit = fit.filter(|f| f.short)?;
+                let need = n.service.minimum_kbps(n.width, n.height, n.fps);
+                Some(format!(
+                    "{} gets {:.1} Mb/s, and {}p at {} fps needs about {:.1} Mb/s",
+                    d.name,
+                    fit.kbps as f64 / 1000.0,
+                    n.width.min(n.height),
+                    n.fps.round(),
+                    need as f64 / 1000.0
+                ))
+            })
+            .collect();
+        if short.is_empty() {
+            return String::new();
+        }
+        format!(
+            "Your upload is tight: {}. Streaming at 720p or 30 fps would look sharper (Canvas \
+             settings).",
+            short.join("; ")
+        )
+    }
+
     /// The settings `profile` would set, from the current ones.
     fn profile_target(&self, profile: crate::performance::Profile) -> crate::performance::Covered {
+        let bitrates: Vec<Option<u32>> = self.bitrate_plan().into_iter().map(|p| p.0).collect();
         crate::performance::Covered::read(&self.settings).with_profile(
             profile,
             &self.hardware(),
-            &self.recommended_bitrates(),
+            &bitrates,
         )
+    }
+
+    /// Starts an upload speed test, unless one runs already or the stream is live (the test
+    /// would take the stream's upload).
+    fn start_upload_test(&mut self, purpose: UploadFor) -> bool {
+        if self.stream.is_some() {
+            return false;
+        }
+        match &mut self.upload_test {
+            Some((_, running)) => *running = purpose,
+            None => self.upload_test = Some((crate::speedtest::Test::start(), purpose)),
+        }
+        self.upload_error = None;
+        self.upload_shown = 0;
+        true
+    }
+
+    /// Picks up the upload test's result and acts on what started it.
+    fn tick_upload_test(&mut self) {
+        let Some((test, purpose)) = &self.upload_test else {
+            return;
+        };
+        let purpose = *purpose;
+        let Some(result) = test.result() else {
+            // Show progress on the Performance page every 10%.
+            let progress = test.progress() / 10 * 10;
+            if progress != self.upload_shown {
+                self.upload_shown = progress;
+                if self.window().is_some_and(|w| w.get_settings_open()) {
+                    self.refresh_settings_form();
+                }
+            }
+            return;
+        };
+        self.upload_test = None;
+        match result {
+            Ok(kbps) => {
+                self.settings.upload = Some(crate::settings::UploadTest::now(kbps));
+                self.settings.save(&self.paths.settings());
+            }
+            Err(e) => self.upload_error = Some(e),
+        }
+        match purpose {
+            UploadFor::Optimize => {
+                self.ensure_hardware();
+                self.perf_pending = Some(crate::performance::recommend(&self.hardware()));
+            }
+            UploadFor::Retest => {}
+            UploadFor::GoLive => {
+                if let Some(w) = self.window()
+                    && w.get_golive_open()
+                    && let Some(service) = Self::golive_service(&w)
+                {
+                    w.set_golive_auto(self.golive_auto_line(service).into());
+                }
+            }
+        }
+        if self.window().is_some_and(|w| w.get_settings_open()) {
+            self.refresh_settings_form();
+        }
+    }
+
+    /// For a destination the network can't keep up with (health key `dest:<settings index>`):
+    /// its settings index and a video bitrate that fits what got through.
+    fn network_fit(&self, key: &str) -> Option<(usize, u32)> {
+        let index: usize = key.strip_prefix("dest:")?.parse().ok()?;
+        let sent = self
+            .monitor
+            .destinations()
+            .iter()
+            .find(|d| d.key == key)?
+            .kbps;
+        let s = &self.settings.destinations.get(index)?.stream;
+        crate::performance::fit_to_sent(sent, s.bitrate_kbps, s.audio_bitrate_kbps)
+            .map(|kbps| (index, kbps))
+    }
+
+    /// The Performance page's upload line.
+    fn upload_line(&self) -> String {
+        if let Some((test, _)) = &self.upload_test {
+            return format!("Testing your upload… {}%", test.progress());
+        }
+        if let Some(e) = &self.upload_error {
+            return format!(
+                "Couldn't test your upload ({e}). Bitrates follow each platform's guidance."
+            );
+        }
+        match self.settings.upload {
+            Some(t) => {
+                let when = chrono::DateTime::from_timestamp(t.tested_at as i64, 0)
+                    .map(|d| {
+                        d.with_timezone(&chrono::Local)
+                            .format("%-d %b, %-I:%M %p")
+                            .to_string()
+                    })
+                    .unwrap_or_default();
+                format!("Upload {:.1} Mb/s · tested {when}", t.kbps / 1000.0)
+            }
+            None => "Upload not tested yet. Optimize tests it (about 10 seconds).".to_owned(),
+        }
     }
 
     /// Settings → Performance fields, on top of `form`.
@@ -7787,9 +8045,10 @@ impl App {
             .iter()
             .map(|d| d.name.clone())
             .collect();
+        let notes: Vec<Option<&str>> = self.bitrate_plan().into_iter().map(|p| p.1).collect();
         let changes: Vec<SharedString> = self
             .perf_pending
-            .map(|p| now.changes(&self.profile_target(p), &names))
+            .map(|p| now.changes(&self.profile_target(p), &names, &notes))
             .unwrap_or_default()
             .into_iter()
             .map(SharedString::from)
@@ -7810,6 +8069,10 @@ impl App {
             perf_pending: self.perf_pending.map_or(-1, |p| p.index() as i32),
             perf_changes: ModelRc::new(VecModel::from(changes)),
             perf_can_revert: self.perf_revert.is_some(),
+            perf_upload: self.upload_line().into(),
+            perf_upload_note: self.upload_note().into(),
+            perf_testing: self.upload_test.is_some(),
+            perf_live: self.stream.is_some(),
             ..form
         }
     }
@@ -7997,8 +8260,14 @@ impl App {
         match field {
             "perf-pick" => self.perf_pending = Profile::ALL.get(i).copied(),
             "perf-optimize" => {
-                self.ensure_hardware();
-                self.perf_pending = Some(recommend(&self.hardware()));
+                // The upload is tested first (not while live: the stream uses it).
+                if !self.start_upload_test(UploadFor::Optimize) {
+                    self.ensure_hardware();
+                    self.perf_pending = Some(recommend(&self.hardware()));
+                }
+            }
+            "perf-retest" => {
+                self.start_upload_test(UploadFor::Retest);
             }
             "perf-cancel" => self.perf_pending = None,
             "perf-apply" => {
@@ -8832,14 +9101,25 @@ impl App {
             } else {
                 None
             };
-            match lighter {
-                Some(p) => self.toast_with_action(
+            // The network can't keep up: offer the bitrate that got through.
+            let lower = alert
+                .id
+                .strip_prefix("network:")
+                .and_then(|key| self.network_fit(key));
+            match (lighter, lower) {
+                (Some(p), _) => self.toast_with_action(
                     text,
                     problem,
                     "Use a lighter profile",
                     ToastAction::Profile(p),
                 ),
-                None => self.toast(text, problem),
+                (None, Some((i, kbps))) => self.toast_with_action(
+                    text,
+                    problem,
+                    &format!("Use {kbps} kbps"),
+                    ToastAction::SetBitrate(i, kbps),
+                ),
+                (None, None) => self.toast(text, problem),
             }
         }
         self.update_tick();

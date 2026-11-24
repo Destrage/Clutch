@@ -284,6 +284,62 @@ impl Service {
         self.max_video_kbps().map_or(kbps, |max| kbps.min(max))
     }
 
+    /// The most H.264 video bitrate worth sending to the platform for a canvas, used when the
+    /// upload allows it: Twitch's and Kick's limits, the top of YouTube's published range.
+    /// `None` for a custom server (its own bitrate is the ceiling).
+    pub fn ceiling_kbps(self, width: u32, height: u32, fps: f64) -> Option<u32> {
+        let lines = width.min(height);
+        let high_fps = fps > 40.0;
+        Some(match self {
+            Service::Twitch => 6_000,
+            Service::Kick => 8_000,
+            Service::YouTube => match (lines, high_fps) {
+                (l, true) if l >= 2160 => 50_000,
+                (l, false) if l >= 2160 => 42_000,
+                (l, true) if l >= 1440 => 34_000,
+                (l, false) if l >= 1440 => 21_000,
+                (l, true) if l >= 1080 => 17_000,
+                (l, false) if l >= 1080 => 14_000,
+                (l, _) if l >= 720 => 8_000,
+                _ => 4_000,
+            },
+            Service::Facebook => {
+                if lines >= 1080 {
+                    9_000
+                } else {
+                    6_000
+                }
+            }
+            Service::Custom => return None,
+        })
+    }
+
+    /// Below this H.264 bitrate the canvas looks noticeably soft on the platform (YouTube's
+    /// published minimums; the usual guidance elsewhere).
+    pub fn minimum_kbps(self, width: u32, height: u32, fps: f64) -> u32 {
+        let lines = width.min(height);
+        let high_fps = fps > 40.0;
+        if self == Service::YouTube {
+            return match (lines, high_fps) {
+                (l, true) if l >= 2160 => 14_000,
+                (l, false) if l >= 2160 => 11_000,
+                (l, true) if l >= 1440 => 8_000,
+                (l, false) if l >= 1440 => 7_000,
+                (l, true) if l >= 1080 => 6_000,
+                (l, false) if l >= 1080 => 5_000,
+                (l, _) if l >= 720 => 3_000,
+                _ => 1_000,
+            };
+        }
+        match (lines, high_fps) {
+            (l, true) if l >= 1080 => 4_500,
+            (l, false) if l >= 1080 => 3_500,
+            (l, true) if l >= 720 => 3_000,
+            (l, false) if l >= 720 => 2_500,
+            _ => 1_500,
+        }
+    }
+
     /// The page where the platform shows your stream key.
     pub fn key_page(self) -> Option<&'static str> {
         match self {
@@ -572,7 +628,21 @@ mod tests {
         assert_eq!(Service::Facebook.recommended_kbps(1280, 720, 30.0), 4_000);
         for s in Service::PLATFORMS {
             assert!(s.key_page().is_some_and(|u| u.starts_with("https://")));
+            // Every platform's range holds its table value.
+            for (w, h, fps) in [(1920, 1080, 60.0), (1280, 720, 30.0), (2560, 1440, 60.0)] {
+                let ceiling = s.ceiling_kbps(w, h, fps).unwrap();
+                assert!(s.minimum_kbps(w, h, fps) <= s.recommended_kbps(w, h, fps));
+                assert!(s.recommended_kbps(w, h, fps) <= ceiling, "{s:?} {w}x{h}");
+                assert!(s.max_video_kbps().is_none_or(|max| ceiling <= max));
+            }
         }
+        assert_eq!(
+            Service::YouTube.ceiling_kbps(1920, 1080, 60.0),
+            Some(17_000)
+        );
+        assert_eq!(Service::YouTube.minimum_kbps(1080, 1920, 60.0), 6_000);
+        assert_eq!(Service::Twitch.minimum_kbps(1920, 1080, 60.0), 4_500);
+        assert_eq!(Service::Custom.ceiling_kbps(1920, 1080, 60.0), None);
 
         assert_eq!(
             Service::from_key("live_123456789_AbCdEf"),

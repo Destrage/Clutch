@@ -123,6 +123,83 @@ pub fn recommend(hw: &Hardware) -> Profile {
     }
 }
 
+/// Upload kept free for the game, voice chat and swings in the connection (kb/s).
+const UPLOAD_RESERVE_KBPS: f64 = 1_500.0;
+/// Share of the measured upload the streams may use.
+const UPLOAD_SHARE: f64 = 0.75;
+/// No stream bitrate is set below this.
+pub const FLOOR_KBPS: u32 = 1_500;
+
+/// What a stream destination needs, for [`budget`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StreamNeed {
+    pub service: estream_media::Service,
+    pub enabled: bool,
+    pub current_kbps: u32,
+    pub audio_kbps: u32,
+    pub width: u32,
+    pub height: u32,
+    pub fps: f64,
+}
+
+/// What set a destination's bitrate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Limit {
+    /// Its share of the measured upload.
+    Upload,
+    /// The platform's ceiling for the canvas.
+    Platform,
+    /// A custom server keeps its bitrate when the upload has room for it.
+    Kept,
+}
+
+/// A destination's bitrate from the upload.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BitrateFit {
+    pub kbps: u32,
+    pub limit: Limit,
+    /// The share is below what the canvas needs for a clear picture on the platform.
+    pub short: bool,
+}
+
+/// Fits each enabled destination's video bitrate into the measured upload: the lower of 75%
+/// of it and all but 1.5 Mb/s, split evenly, less each destination's audio; never above the
+/// platform's ceiling or below [`FLOOR_KBPS`]. A custom server is only ever lowered.
+/// Disabled destinations get `None` (they keep their bitrate).
+pub fn budget(upload_kbps: f64, needs: &[StreamNeed]) -> Vec<Option<BitrateFit>> {
+    let usable = (upload_kbps * UPLOAD_SHARE).min(upload_kbps - UPLOAD_RESERVE_KBPS);
+    let enabled = needs.iter().filter(|n| n.enabled).count().max(1);
+    let share = usable / enabled as f64;
+    needs
+        .iter()
+        .map(|n| {
+            if !n.enabled {
+                return None;
+            }
+            let room = (share - n.audio_kbps as f64).max(0.0) as u32;
+            let (ceiling, at_ceiling) = match n.service.ceiling_kbps(n.width, n.height, n.fps) {
+                Some(c) => (c, Limit::Platform),
+                None => (n.current_kbps, Limit::Kept),
+            };
+            let (kbps, limit) = if room >= ceiling {
+                (ceiling, at_ceiling)
+            } else {
+                (room.max(FLOOR_KBPS), Limit::Upload)
+            };
+            let short = room < n.service.minimum_kbps(n.width, n.height, n.fps);
+            Some(BitrateFit { kbps, limit, short })
+        })
+        .collect()
+}
+
+/// A video bitrate that fits what a struggling stream actually got through: 85% of the rate
+/// sent, less audio, rounded down to 100 kb/s. `None` when that isn't below the current one.
+pub fn fit_to_sent(sent_kbps: f64, current_kbps: u32, audio_kbps: u32) -> Option<u32> {
+    let kbps = ((sent_kbps.max(0.0) * 0.85) as u32).saturating_sub(audio_kbps) / 100 * 100;
+    let kbps = kbps.max(FLOOR_KBPS);
+    (kbps < current_kbps).then_some(kbps)
+}
+
 /// The settings a profile covers, as they are now or as a profile would set them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Covered {
@@ -234,7 +311,8 @@ impl Covered {
     }
 
     /// What changes from `self` to `to`, one line each ("Recording quality: 22 → 20").
-    pub fn changes(&self, to: &Covered, names: &[String]) -> Vec<String> {
+    /// `notes` adds a reason to each destination's bitrate line ("limited by your upload").
+    pub fn changes(&self, to: &Covered, names: &[String], notes: &[Option<&str>]) -> Vec<String> {
         let mut out = Vec::new();
         let mut line = |what: &str, a: String, b: String| {
             if a != b {
@@ -283,11 +361,16 @@ impl Covered {
                 preset_label(a.1),
                 preset_label(b.1),
             );
-            line(
-                &format!("{name} bitrate"),
-                format!("{} kbps", a.2),
-                format!("{} kbps", b.2),
-            );
+            if a.2 != b.2 {
+                line(
+                    &format!("{name} bitrate"),
+                    format!("{} kbps", a.2),
+                    match notes.get(i).copied().flatten() {
+                        Some(note) => format!("{} kbps ({note})", b.2),
+                        None => format!("{} kbps", b.2),
+                    },
+                );
+            }
         }
         out
     }
@@ -400,7 +483,7 @@ mod tests {
         let hw = pc(true, 16, 32);
         let now = covered(1);
         let to = now.with_profile(Profile::Balanced, &hw, &[]);
-        let lines = now.changes(&to, &["Twitch".into()]);
+        let lines = now.changes(&to, &["Twitch".into()], &[]);
         assert!(
             lines.contains(&"Recording quality: 22 → 20".to_owned()),
             "{lines:?}"
@@ -414,7 +497,96 @@ mod tests {
                 .iter()
                 .any(|l| l.starts_with("Recording rate control"))
         );
-        assert!(to.changes(&to, &[]).is_empty());
+        assert!(to.changes(&to, &[], &[]).is_empty());
+
+        // Bitrate lines carry their reason, and only when the bitrate changes.
+        let faster = now.with_profile(Profile::Balanced, &hw, &[Some(8_000)]);
+        let lines = faster.changes(&to, &["Twitch".into()], &[Some("limited by your upload")]);
+        assert!(
+            lines.contains(
+                &"Twitch bitrate: 8000 kbps → 6000 kbps (limited by your upload)".to_owned()
+            ),
+            "{lines:?}"
+        );
+        assert!(
+            to.changes(&to, &["Twitch".into()], &[Some("platform maximum")])
+                .is_empty()
+        );
+    }
+
+    fn need(service: estream_media::Service, w: u32, h: u32, fps: f64) -> StreamNeed {
+        StreamNeed {
+            service,
+            enabled: true,
+            current_kbps: 6_000,
+            audio_kbps: 160,
+            width: w,
+            height: h,
+            fps,
+        }
+    }
+
+    #[test]
+    fn fast_upload_gets_the_platform_ceiling() {
+        use estream_media::Service;
+        let fits = budget(100_000.0, &[need(Service::YouTube, 1920, 1080, 60.0)]);
+        let fit = fits[0].unwrap();
+        assert_eq!(
+            (fit.kbps, fit.limit, fit.short),
+            (17_000, Limit::Platform, false)
+        );
+    }
+
+    #[test]
+    fn slow_upload_limits_and_warns() {
+        use estream_media::Service;
+        // 5 Mb/s: min(3750, 3500) - 160 audio.
+        let fit = budget(5_000.0, &[need(Service::Twitch, 1920, 1080, 60.0)])[0].unwrap();
+        assert_eq!((fit.kbps, fit.limit), (3_340, Limit::Upload));
+        assert!(fit.short, "1080p60 needs about 4.5 Mb/s");
+        // Very slow: the floor, still marked as short.
+        let fit = budget(1_000.0, &[need(Service::Twitch, 1280, 720, 30.0)])[0].unwrap();
+        assert_eq!(fit.kbps, FLOOR_KBPS);
+        assert!(fit.short);
+    }
+
+    #[test]
+    fn destinations_share_the_upload() {
+        use estream_media::Service;
+        let needs = [
+            need(Service::Twitch, 1920, 1080, 60.0),
+            need(Service::Kick, 1920, 1080, 60.0),
+            StreamNeed {
+                enabled: false,
+                ..need(Service::YouTube, 1920, 1080, 60.0)
+            },
+        ];
+        // 20 Mb/s: 15 Mb/s usable, 7.5 each, less 160 audio.
+        let fits = budget(20_000.0, &needs);
+        assert_eq!(fits[0].unwrap().kbps, 6_000, "Twitch's limit");
+        assert_eq!(fits[0].unwrap().limit, Limit::Platform);
+        assert_eq!(fits[1].unwrap().kbps, 7_340);
+        assert_eq!(fits[1].unwrap().limit, Limit::Upload);
+        assert_eq!(fits[2], None, "disabled destinations keep theirs");
+    }
+
+    #[test]
+    fn congested_streams_get_what_got_through() {
+        // 4 Mb/s got through: 3400 - 160 audio, rounded down.
+        assert_eq!(fit_to_sent(4_000.0, 6_000, 160), Some(3_200));
+        assert_eq!(fit_to_sent(0.0, 6_000, 160), Some(FLOOR_KBPS));
+        assert_eq!(fit_to_sent(9_000.0, 6_000, 160), None, "never raised");
+        assert_eq!(fit_to_sent(1_000.0, FLOOR_KBPS, 160), None);
+    }
+
+    #[test]
+    fn custom_servers_are_only_lowered() {
+        use estream_media::Service;
+        let custom = need(Service::Custom, 1920, 1080, 60.0);
+        let fit = budget(100_000.0, &[custom])[0].unwrap();
+        assert_eq!((fit.kbps, fit.limit), (6_000, Limit::Kept));
+        let fit = budget(6_000.0, &[custom])[0].unwrap();
+        assert_eq!((fit.kbps, fit.limit), (4_340, Limit::Upload));
     }
 
     #[test]
