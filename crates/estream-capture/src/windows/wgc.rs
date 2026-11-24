@@ -12,6 +12,7 @@ use super::d3d::{D3D11Interop, SharedTexture};
 use crate::CaptureError;
 use estream_core::Size;
 use estream_engine::{SourceContext, SourceFrame};
+use estream_gpu::HdrToSdr;
 use estream_gpu::wgpu;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -23,7 +24,8 @@ use windows::Graphics::Capture::{
 use windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
 use windows::Graphics::DirectX::DirectXPixelFormat;
 use windows::Win32::Foundation::HWND;
-use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
+use windows::Win32::Graphics::Direct3D11::{D3D11_TEXTURE2D_DESC, ID3D11Texture2D};
+use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R16G16B16A16_FLOAT;
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use windows::Win32::Graphics::Gdi::HMONITOR;
 use windows::Win32::System::WinRT::Direct3D11::{
@@ -71,6 +73,8 @@ struct RingState {
     last_copy: Option<Instant>,
     closed: bool,
     error: Option<String>,
+    /// The captured monitor's HDR levels while it shows HDR (frames are then scRGB).
+    hdr: Option<super::hdr::HdrDisplay>,
 }
 
 /// Frames shared between a capture callback and the video thread.
@@ -112,14 +116,15 @@ impl FrameRing {
                 .state
                 .lock()
                 .map_err(|_| CaptureError::Capture("ring poisoned".into()))?;
+            let hdr = is_hdr_texture(src);
             let size_changed = s
                 .slots
                 .first()
-                .is_none_or(|t| t.width != width || t.height != height);
+                .is_none_or(|t| t.width != width || t.height != height || t.hdr != hdr);
             if size_changed {
-                tracing::debug!(width, height, "wgc: creating shared slots");
+                tracing::debug!(width, height, hdr, "wgc: creating shared slots");
                 let slots = (0..RING)
-                    .map(|_| interop.create_shared(width, height).map(Arc::new))
+                    .map(|_| interop.create_shared_as(width, height, hdr).map(Arc::new))
                     .collect::<Result<Vec<_>, _>>()?;
                 s.slots = slots;
                 s.generation += 1;
@@ -159,12 +164,42 @@ impl FrameRing {
     }
 }
 
+/// Whether a captured texture is 16-bit float (scRGB from an HDR monitor).
+fn is_hdr_texture(texture: &ID3D11Texture2D) -> bool {
+    let mut desc = D3D11_TEXTURE2D_DESC::default();
+    // SAFETY: reading the descriptor of a live texture.
+    unsafe { texture.GetDesc(&mut desc) };
+    desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT
+}
+
+impl FrameRing {
+    fn set_hdr(&self, hdr: Option<super::hdr::HdrDisplay>) {
+        if let Ok(mut s) = self.state.lock() {
+            s.hdr = hdr;
+        }
+    }
+}
+
+/// HDR slots are mapped to SDR into one texture, which the compositor samples instead.
+struct Mapped {
+    // Kept alive with its view.
+    _texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    /// The compositor's binding of `texture`.
+    binding: wgpu::BindGroup,
+    params: wgpu::Buffer,
+    /// Per slot: the mapping pass's binding.
+    inputs: Vec<wgpu::BindGroup>,
+    shown: Option<estream_gpu::HdrParams>,
+}
+
 /// Video-thread side of a [`FrameRing`]: keeps wgpu bindings for the slots.
 #[derive(Default)]
 pub struct RingReader {
     generation: u64,
     slots: Vec<Arc<SharedTexture>>,
     bindings: Vec<wgpu::BindGroup>,
+    mapped: Option<Mapped>,
     current: Option<usize>,
     pub sequence: u64,
     last_tick: Option<Instant>,
@@ -173,9 +208,17 @@ pub struct RingReader {
 }
 
 impl RingReader {
-    /// Picks up the newest frame and orders this frame's GPU work after its copy. Never
-    /// blocks: if the capture thread holds the lock, the previous frame is kept.
-    pub fn tick(&mut self, ring: &FrameRing, ctx: &SourceContext<'_>, interop: &D3D11Interop) {
+    /// Picks up the newest frame and orders this frame's GPU work after its copy; HDR frames
+    /// are mapped to SDR into `encoder`. Never blocks: if the capture thread holds the lock,
+    /// the previous frame is kept.
+    pub fn tick(
+        &mut self,
+        ring: &FrameRing,
+        ctx: &SourceContext<'_>,
+        interop: &D3D11Interop,
+        encoder: &mut wgpu::CommandEncoder,
+        mapper: &HdrToSdr,
+    ) {
         let now = Instant::now();
         if let Some(last) = self.last_tick.replace(now) {
             let dt = (now - last).as_secs_f64().min(0.25);
@@ -195,18 +238,30 @@ impl RingReader {
         if s.generation != self.generation {
             self.generation = s.generation;
             self.slots = s.slots.clone();
-            self.bindings = self
+            let hdr = self.slots.first().is_some_and(|t| t.hdr);
+            self.bindings = if hdr {
+                Vec::new()
+            } else {
+                self.slots
+                    .iter()
+                    .map(|t| {
+                        ctx.compositor.create_source_binding(
+                            ctx.gpu,
+                            &t.texture.create_view(&Default::default()),
+                        )
+                    })
+                    .collect()
+            };
+            self.mapped = self
                 .slots
-                .iter()
-                .map(|t| {
-                    ctx.compositor
-                        .create_source_binding(ctx.gpu, &t.texture.create_view(&Default::default()))
-                })
-                .collect();
+                .first()
+                .filter(|_| hdr)
+                .map(|first| self.create_mapped(ctx, mapper, first.width, first.height));
             self.current = None;
         }
         let Some(latest) = s.latest else { return };
-        if self.current != Some(latest) {
+        let fresh = self.current != Some(latest);
+        if fresh {
             // Work submitted so far is the last to read the old slot.
             if let Some(old) = self.current {
                 s.released[old] = interop.release_reads();
@@ -216,6 +271,57 @@ impl RingReader {
         s.reading = Some(latest);
         self.current = Some(latest);
         self.sequence = s.sequence;
+        let levels = s.hdr.map(|d| d.params()).unwrap_or_else(|| {
+            estream_gpu::HdrParams::new(estream_gpu::hdr::DEFAULT_SDR_WHITE_NITS, 0.0)
+        });
+        drop(s);
+        if let Some(m) = &mut self.mapped {
+            let changed = m.shown != Some(levels);
+            if changed {
+                ctx.gpu.queue.write_buffer(&m.params, 0, levels.as_bytes());
+                m.shown = Some(levels);
+            }
+            if (fresh || changed)
+                && let Some(input) = m.inputs.get(latest)
+            {
+                mapper.encode(encoder, input, &m.view);
+            }
+        }
+    }
+
+    fn create_mapped(
+        &self,
+        ctx: &SourceContext<'_>,
+        mapper: &HdrToSdr,
+        width: u32,
+        height: u32,
+    ) -> Mapped {
+        let texture = mapper.create_target(ctx.gpu, width, height);
+        let view = texture.create_view(&Default::default());
+        let binding = ctx.compositor.create_source_binding(ctx.gpu, &view);
+        let params = mapper.create_params(
+            ctx.gpu,
+            &estream_gpu::HdrParams::new(estream_gpu::hdr::DEFAULT_SDR_WHITE_NITS, 0.0),
+        );
+        let inputs = self
+            .slots
+            .iter()
+            .map(|t| {
+                mapper.bind(
+                    ctx.gpu,
+                    &t.texture.create_view(&Default::default()),
+                    &params,
+                )
+            })
+            .collect();
+        Mapped {
+            _texture: texture,
+            view,
+            binding,
+            params,
+            inputs,
+            shown: None,
+        }
     }
 
     /// The video thread's frame interval as seen by this source, if known yet.
@@ -226,8 +332,12 @@ impl RingReader {
     pub fn frame(&self) -> Option<SourceFrame<'_>> {
         let i = self.current?;
         let slot = self.slots.get(i)?;
+        let binding = match &self.mapped {
+            Some(m) => &m.binding,
+            None => self.bindings.get(i)?,
+        };
         Some(SourceFrame {
-            binding: self.bindings.get(i)?,
+            binding,
             size: Size::new(slot.width as f32, slot.height as f32),
         })
     }
@@ -257,6 +367,46 @@ pub enum Target {
     Window(HWND),
 }
 
+// SAFETY: monitor and window handles are plain values, valid on any thread.
+unsafe impl Send for Target {}
+
+impl Target {
+    /// The HDR levels of the monitor showing the target, when it is in HDR.
+    fn hdr(self) -> Option<super::hdr::HdrDisplay> {
+        #[cfg(test)]
+        if tests::FORCE_HDR.load(Ordering::Relaxed) {
+            // An SDR monitor captured as scRGB: SDR white is 80 nits there.
+            return Some(super::hdr::HdrDisplay {
+                sdr_white_nits: 80.0,
+                peak_nits: 80.0,
+            });
+        }
+        let monitor = match self {
+            Target::Monitor(m) => m,
+            Target::Window(w) => super::hdr::monitor_of_window(w),
+        };
+        super::hdr::monitor_hdr(monitor)
+    }
+}
+
+/// How often a capture checks whether its monitor's HDR state changed.
+const HDR_CHECK: Duration = Duration::from_secs(1);
+
+/// The frame pool's size and format, as last set.
+struct PoolState {
+    size: windows::Graphics::SizeInt32,
+    hdr: Option<super::hdr::HdrDisplay>,
+    checked: Instant,
+}
+
+fn pixel_format(hdr: bool) -> DirectXPixelFormat {
+    if hdr {
+        DirectXPixelFormat::R16G16B16A16Float
+    } else {
+        DirectXPixelFormat::B8G8R8A8UIntNormalized
+    }
+}
+
 /// A running capture session. Stops when dropped.
 pub struct WgcCapture {
     session: GraphicsCaptureSession,
@@ -281,10 +431,13 @@ impl WgcCapture {
         GraphicsCaptureSession::IsSupported().unwrap_or(false)
     }
 
+    /// Starts capturing `target`. With `map_hdr`, an HDR monitor is captured in 16-bit float
+    /// (mapped to SDR on the GPU); otherwise Windows' own 8-bit picture is used.
     pub fn start(
         interop: &D3D11Interop,
         target: Target,
         cursor: bool,
+        map_hdr: bool,
     ) -> Result<Self, CaptureError> {
         // SAFETY: COM/WinRT initialization and factory calls with valid handles.
         unsafe {
@@ -298,15 +451,28 @@ impl WgcCapture {
             let dxgi: IDXGIDevice = interop.device.cast()?;
             let device: IDirect3DDevice = CreateDirect3D11DeviceFromDXGIDevice(&dxgi)?.cast()?;
             let size = item.Size()?;
+            let hdr = if map_hdr { target.hdr() } else { None };
+            if let Some(d) = hdr {
+                tracing::info!(
+                    sdr_white_nits = d.sdr_white_nits,
+                    peak_nits = d.peak_nits,
+                    "capturing an HDR monitor: mapping it to SDR"
+                );
+            }
             let pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
                 &device,
-                DirectXPixelFormat::B8G8R8A8UIntNormalized,
+                pixel_format(hdr.is_some()),
                 POOL_BUFFERS,
                 size,
             )?;
             let ring = Arc::new(FrameRing::default());
+            ring.set_hdr(hdr);
 
-            let pool_size = Arc::new(Mutex::new(size));
+            let pool_state = Arc::new(Mutex::new(PoolState {
+                size,
+                hdr,
+                checked: Instant::now(),
+            }));
             {
                 let ring = ring.clone();
                 let interop = interop.clone();
@@ -327,17 +493,37 @@ impl WgcCapture {
                                 s.error = Some(e.to_string());
                             }
                             drop(frame);
+                            let Ok(mut state) = pool_state.lock() else {
+                                return Ok(());
+                            };
+                            // HDR switched on or off, or a window moved to another monitor:
+                            // checked once a second, here on the capture thread.
+                            let mut recreate = false;
+                            if map_hdr && state.checked.elapsed() >= HDR_CHECK {
+                                state.checked = Instant::now();
+                                let now = target.hdr();
+                                if now.is_some() != state.hdr.is_some() {
+                                    tracing::info!(hdr = now.is_some(), "capture: HDR changed");
+                                    recreate = true;
+                                }
+                                if now != state.hdr {
+                                    state.hdr = now;
+                                    ring.set_hdr(now);
+                                }
+                            }
                             // Follow window/monitor size changes.
-                            if let Ok(mut current) = pool_size.lock()
-                                && (current.Width != content.Width
-                                    || current.Height != content.Height)
+                            if state.size.Width != content.Width
+                                || state.size.Height != content.Height
                             {
-                                *current = content;
+                                state.size = content;
+                                recreate = true;
+                            }
+                            if recreate {
                                 let _ = pool.Recreate(
                                     device.get(),
-                                    DirectXPixelFormat::B8G8R8A8UIntNormalized,
+                                    pixel_format(state.hdr.is_some()),
                                     POOL_BUFFERS,
-                                    content,
+                                    state.size,
                                 );
                             }
                             Ok(())
@@ -437,6 +623,104 @@ mod tests {
         ring.min_copy_interval.store(0, Ordering::Relaxed);
         ring.publish(&interop, &src.d3d11, 64, 32).unwrap();
         assert_eq!(sequence(&ring), 2);
+    }
+
+    /// Makes every capture started by a test treat its monitor as HDR.
+    pub(super) static FORCE_HDR: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    /// Windows delivers 16-bit float frames when asked, and the ring keeps them as HDR slots
+    /// (an SDR monitor works too: it is then scRGB with white at 1.0). No window opens.
+    #[test]
+    fn hdr_capture_delivers_float_frames() {
+        let Some((interop, _)) = setup() else {
+            eprintln!("skipping: no D3D12 GPU");
+            return;
+        };
+        if !WgcCapture::is_supported() {
+            eprintln!("skipping: no Windows.Graphics.Capture");
+            return;
+        }
+        let Some(primary) = super::super::enumerate::monitors()
+            .into_iter()
+            .find(|m| m.primary)
+        else {
+            eprintln!("skipping: no monitor");
+            return;
+        };
+        FORCE_HDR.store(true, Ordering::Relaxed);
+        let capture = WgcCapture::start(&interop, Target::Monitor(primary.handle), false, true);
+        FORCE_HDR.store(false, Ordering::Relaxed);
+        let capture = capture.unwrap();
+        let start = Instant::now();
+        while sequence(&capture.ring) == 0 && start.elapsed() < Duration::from_secs(3) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        {
+            let s = capture.ring.state.lock().unwrap();
+            assert!(s.sequence > 0, "no frame arrived: {:?}", s.error);
+            assert!(s.slots.iter().all(|t| t.hdr), "frames weren't 16-bit float");
+            assert_eq!(s.hdr.map(|d| d.sdr_white_nits), Some(80.0));
+        }
+
+        // The video thread's side: the newest frame is mapped into the texture the compositor
+        // samples, and nothing in it is brighter than SDR white.
+        let gpu = interop.gpu().clone();
+        let compositor = estream_gpu::Compositor::new(&gpu);
+        let gradients = estream_gpu::GradientRenderer::new(&gpu);
+        let ctx = SourceContext {
+            gpu: &gpu,
+            compositor: &compositor,
+            gradients: &gradients,
+            source: estream_core::SourceId::new(),
+        };
+        let mapper = HdrToSdr::new(&gpu);
+        let mut reader = RingReader::default();
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        reader.tick(&capture.ring, &ctx, &interop, &mut encoder, &mapper);
+        gpu.queue.submit([encoder.finish()]);
+        assert!(reader.frame().is_some());
+        let mapped = reader.mapped.as_ref().expect("HDR frames are mapped");
+        let bytes = estream_gpu::readback::read_texture(&gpu, &mapped._texture).unwrap();
+        let half = |b: &[u8]| {
+            let bits = u16::from_le_bytes([b[0], b[1]]);
+            let exp = ((bits >> 10) & 0x1f) as i32;
+            let frac = (bits & 0x3ff) as f32;
+            if exp == 0 {
+                frac * 2f32.powi(-24)
+            } else {
+                (1.0 + frac / 1024.0) * 2f32.powi(exp - 15)
+            }
+        };
+        let mut lit = 0usize;
+        for px in bytes.as_chunks::<8>().0 {
+            for c in 0..3 {
+                let v = half(&px[c * 2..c * 2 + 2]);
+                assert!((0.0..=1.001).contains(&v), "channel value {v}");
+                if v > 0.01 {
+                    lit += 1;
+                }
+            }
+        }
+        assert!(lit > 0, "the mapped picture is black");
+    }
+
+    #[test]
+    fn slots_follow_the_captured_format() {
+        let Some((interop, sdr)) = setup() else {
+            eprintln!("skipping: no D3D12 GPU");
+            return;
+        };
+        let hdr = interop.create_shared_as(64, 32, true).unwrap();
+        assert!(is_hdr_texture(&hdr.d3d11) && !is_hdr_texture(&sdr.d3d11));
+        let ring = FrameRing::default();
+        ring.publish(&interop, &sdr.d3d11, 64, 32).unwrap();
+        let first = ring.state.lock().unwrap().generation;
+        ring.publish(&interop, &hdr.d3d11, 64, 32).unwrap();
+        let s = ring.state.lock().unwrap();
+        assert!(s.generation > first, "HDR frames get new slots");
+        assert!(s.slots.iter().all(|t| t.hdr));
+        assert_eq!(s.sequence, 2);
     }
 
     #[test]

@@ -11,10 +11,10 @@ use estream_engine::{
     Property, PropertySchema, SelectOption, SourceContext, SourceError, SourceFrame, SourceStatus,
     SourceType, VideoSource,
 };
-use estream_gpu::{GpuContext, wgpu};
+use estream_gpu::{GpuContext, HdrToSdr, wgpu};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 type InteropCache = Mutex<Vec<(wgpu::Device, Result<D3D11Interop, String>)>>;
@@ -41,6 +41,25 @@ pub fn interop(gpu: &GpuContext) -> Result<D3D11Interop, String> {
         .map_err(|e| format!("Screen capture needs the DirectX 12 renderer ({e})"))
 }
 
+type MapperCache = Mutex<Vec<(wgpu::Device, Arc<HdrToSdr>)>>;
+static MAPPERS: OnceLock<MapperCache> = OnceLock::new();
+
+/// The HDR → SDR pipeline for `gpu` (built once per device, on a capture start thread so the
+/// video thread never compiles it).
+fn hdr_mapper(gpu: &GpuContext) -> Arc<HdrToSdr> {
+    let cache = MAPPERS.get_or_init(Default::default);
+    let mut cache = match cache.lock() {
+        Ok(c) => c,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Some((_, m)) = cache.iter().find(|(d, _)| *d == gpu.device) {
+        return m.clone();
+    }
+    let mapper = Arc::new(HdrToSdr::new(gpu));
+    cache.push((gpu.device.clone(), mapper.clone()));
+    mapper
+}
+
 const RETRY: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -53,6 +72,8 @@ pub struct CaptureSettings {
     /// Game capture: `"auto"` (any fullscreen app) or `"window"`.
     pub mode: String,
     pub cursor: bool,
+    /// HDR monitors: `"auto"` maps their picture to SDR; `"off"` keeps Windows' own 8-bit one.
+    pub hdr: String,
 }
 
 impl Default for CaptureSettings {
@@ -62,6 +83,7 @@ impl Default for CaptureSettings {
             window: String::new(),
             mode: "auto".into(),
             cursor: true,
+            hdr: "auto".into(),
         }
     }
 }
@@ -83,13 +105,15 @@ impl CaptureKind {
     }
 }
 
-type CaptureResult = Result<(WgcCapture, Option<WindowInfo>), SourceStatus>;
+type CaptureResult = Result<(WgcCapture, Option<WindowInfo>, Arc<HdrToSdr>), SourceStatus>;
 type PendingCapture = std::sync::mpsc::Receiver<CaptureResult>;
 
 pub struct CaptureSource {
     kind: CaptureKind,
     settings: CaptureSettings,
     capture: Option<WgcCapture>,
+    /// Maps HDR frames to SDR (shared by every capture on the device).
+    mapper: Option<Arc<HdrToSdr>>,
     latched_game: Option<WindowInfo>,
     reader: RingReader,
     status: SourceStatus,
@@ -103,6 +127,7 @@ impl CaptureSource {
             kind,
             settings: CaptureSettings::default(),
             capture: None,
+            mapper: None,
             latched_game: None,
             reader: RingReader::default(),
             status: SourceStatus::Unavailable("Starting capture…".into()),
@@ -177,7 +202,8 @@ impl VideoSource for CaptureSource {
         }
         let retarget = new.monitor != self.settings.monitor
             || new.window != self.settings.window
-            || new.mode != self.settings.mode;
+            || new.mode != self.settings.mode
+            || new.hdr != self.settings.hdr;
         if retarget {
             self.latched_game = None;
             self.stop();
@@ -191,7 +217,7 @@ impl VideoSource for CaptureSource {
         Ok(())
     }
 
-    fn tick(&mut self, ctx: &SourceContext<'_>, _: &mut wgpu::CommandEncoder, _: Timestamp) {
+    fn tick(&mut self, ctx: &SourceContext<'_>, encoder: &mut wgpu::CommandEncoder, _: Timestamp) {
         if self.capture.as_ref().is_some_and(|c| c.ring.is_closed()) {
             tracing::info!(kind = self.kind.id(), "capture target closed");
             self.stop();
@@ -200,9 +226,10 @@ impl VideoSource for CaptureSource {
         }
         if let Some(rx) = &self.pending {
             match rx.try_recv() {
-                Ok(Ok((capture, latched))) => {
+                Ok(Ok((capture, latched, mapper))) => {
                     tracing::info!(kind = self.kind.id(), "capture started");
                     self.capture = Some(capture);
+                    self.mapper = Some(mapper);
                     if self.kind == CaptureKind::Game && self.settings.mode == "auto" {
                         self.latched_game = latched;
                     }
@@ -233,8 +260,11 @@ impl VideoSource for CaptureSource {
                 self.start_async(ctx.gpu);
             }
         }
-        if let Some(capture) = &mut self.capture {
-            self.reader.tick(&capture.ring, ctx, &capture.interop);
+        if let Some(capture) = &mut self.capture
+            && let Some(mapper) = &self.mapper
+        {
+            self.reader
+                .tick(&capture.ring, ctx, &capture.interop, encoder, mapper);
             if let Some(interval) = self.reader.frame_interval() {
                 capture.set_min_update_interval(interval.mul_f64(0.5));
             }
@@ -259,8 +289,9 @@ fn start_capture(
     settings: &CaptureSettings,
     latched: Option<WindowInfo>,
     gpu: &GpuContext,
-) -> Result<(WgcCapture, Option<WindowInfo>), SourceStatus> {
+) -> CaptureResult {
     let interop = interop(gpu).map_err(SourceStatus::Error)?;
+    let mapper = hdr_mapper(gpu);
     let waiting = || SourceStatus::Unavailable(waiting_message(kind, settings));
     let find = || enumerate::find_window(&settings.window, &enumerate::windows());
     let (target, target_info) = match kind {
@@ -293,11 +324,12 @@ fn start_capture(
             (Target::Window(win.hwnd), Some(win))
         }
     };
-    let capture = WgcCapture::start(&interop, target, settings.cursor).map_err(|e| {
-        tracing::warn!(kind = kind.id(), error = %e, "capture failed to start");
-        SourceStatus::Error(e.to_string())
-    })?;
-    Ok((capture, target_info))
+    let capture = WgcCapture::start(&interop, target, settings.cursor, settings.hdr != "off")
+        .map_err(|e| {
+            tracing::warn!(kind = kind.id(), error = %e, "capture failed to start");
+            SourceStatus::Error(e.to_string())
+        })?;
+    Ok((capture, target_info, mapper))
 }
 
 fn window_options() -> Vec<SelectOption> {
@@ -341,6 +373,7 @@ pub fn source_types() -> Vec<SourceType> {
             PropertySchema::new(vec![
                 Property::select("monitor", "Display", options, default),
                 Property::bool("cursor", "Capture cursor", true),
+                hdr_property(),
             ])
         },
         |ctx, settings| {
@@ -364,6 +397,7 @@ pub fn source_types() -> Vec<SourceType> {
                 .hint("Re-attaches automatically when the app restarts"),
                 Property::bool("cursor", "Capture cursor", true),
                 audio_property("The app's sound, on its own fader", true),
+                hdr_property(),
             ])
         },
         |ctx, settings| {
@@ -401,6 +435,7 @@ pub fn source_types() -> Vec<SourceType> {
                 .hint("Used in “Specific window” mode"),
                 Property::bool("cursor", "Capture cursor", false),
                 audio_property("The game's sound, on its own fader", false),
+                hdr_property(),
             ])
         },
         |ctx, settings| {
@@ -418,6 +453,7 @@ pub fn source_types() -> Vec<SourceType> {
         PropertySchema::new(vec![
             Property::select("monitor", "Display", vec![], ""),
             Property::bool("cursor", "Capture cursor", true),
+            Property::select("hdr", "HDR screens", vec![], "auto"),
         ])
     });
     let window = window.with_validation(|_| {
@@ -425,6 +461,7 @@ pub fn source_types() -> Vec<SourceType> {
             Property::select("window", "Window", vec![], ""),
             Property::bool("cursor", "Capture cursor", true),
             Property::bool("audio", "Capture audio", true),
+            Property::select("hdr", "HDR screens", vec![], "auto"),
         ])
     });
     let game = game.with_validation(|_| {
@@ -433,6 +470,7 @@ pub fn source_types() -> Vec<SourceType> {
             Property::select("window", "Window", vec![], ""),
             Property::bool("cursor", "Capture cursor", false),
             Property::bool("audio", "Capture audio", false),
+            Property::select("hdr", "HDR screens", vec![], "auto"),
         ])
     });
     vec![display, window, game]
@@ -444,4 +482,21 @@ fn audio_property(what: &str, default: bool) -> Property {
     Property::bool("audio", "Capture audio", default).hint(&format!(
         "{what}. Desktop audio leaves it out, so you never hear it twice."
     ))
+}
+
+/// How a capture treats an HDR monitor.
+fn hdr_property() -> Property {
+    Property::select(
+        "hdr",
+        "HDR screens",
+        vec![
+            SelectOption::new("auto", "Automatic"),
+            SelectOption::new("off", "As Windows gives them"),
+        ],
+        "auto",
+    )
+    .hint(
+        "With Windows HDR on, Automatic keeps the picture as bright as it looks on your screen. \
+         Pick the other if colors look wrong.",
+    )
 }
