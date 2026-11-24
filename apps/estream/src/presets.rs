@@ -95,6 +95,8 @@ pub const PRESETS: &[CanvasPreset] = &[
 /// What the user wants to do; decides the canvas and the first scene.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Purpose {
+    /// The screen, microphone and desktop audio; everything else is added later.
+    Basic,
     Gaming,
     Camera,
     Recording,
@@ -102,7 +104,9 @@ pub enum Purpose {
 }
 
 impl Purpose {
-    pub const ALL: [Purpose; 4] = [
+    /// Basic comes first: the wizard opens on it.
+    pub const ALL: [Purpose; 5] = [
+        Purpose::Basic,
         Purpose::Gaming,
         Purpose::Camera,
         Purpose::Recording,
@@ -111,6 +115,7 @@ impl Purpose {
 
     pub fn label(self) -> &'static str {
         match self {
+            Purpose::Basic => "Basic setup",
             Purpose::Gaming => "Streaming games",
             Purpose::Camera => "Talking to camera",
             Purpose::Recording => "Recording videos & tutorials",
@@ -120,6 +125,7 @@ impl Purpose {
 
     pub fn detail(self) -> &'static str {
         match self {
+            Purpose::Basic => "Your screen, microphone and desktop audio. Add the rest later.",
             Purpose::Gaming => "Your game, webcam in the corner",
             Purpose::Camera => "Just chatting, podcasts, reactions",
             Purpose::Recording => "Your screen, webcam in the corner",
@@ -138,7 +144,7 @@ impl Purpose {
         };
         match self {
             Purpose::Gaming | Purpose::Recording => pick(1920, 1080, 60),
-            Purpose::Camera => pick(1920, 1080, 30),
+            Purpose::Basic | Purpose::Camera => pick(1920, 1080, 30),
             Purpose::Vertical => pick(1080, 1920, 30),
         }
     }
@@ -191,6 +197,7 @@ impl Part {
     fn default_for(self, purpose: Purpose) -> bool {
         match self {
             Part::Chat | Part::Alerts | Part::BreakScenes => purpose.live(),
+            Part::Webcam => purpose != Purpose::Basic,
             _ => true,
         }
     }
@@ -384,8 +391,12 @@ pub fn build_project(
                 add(&mut project, n, k, s, t);
             }
         }
-        Purpose::Recording => {
-            project.scenes[0].name = "Recording".into();
+        Purpose::Basic | Purpose::Recording => {
+            project.scenes[0].name = if purpose == Purpose::Basic {
+                "Main".into()
+            } else {
+                "Recording".into()
+            };
             screen(&mut project, &mut add);
             if let Some((n, k, s, t)) = camera(corner()) {
                 add(&mut project, n, k, s, t);
@@ -630,6 +641,40 @@ mod tests {
 
         let r = build(Purpose::Recording, &d, &all);
         assert_eq!(kinds(&r), ["display_capture", "camera"]);
+    }
+
+    #[test]
+    fn basic_setup_has_only_the_basics() {
+        assert_eq!(Purpose::ALL[0], Purpose::Basic, "the wizard opens on it");
+        let d = detected(true);
+        let b = build(Purpose::Basic, &d, &Choices::default());
+        assert_eq!(b.scenes.len(), 1);
+        assert_eq!(b.scenes[0].name, "Main");
+        assert_eq!(kinds(&b), ["display_capture"]);
+        let c = &b.canvases[0];
+        assert_eq!((c.width, c.height, c.fps), (1920, 1080, Rational::fps(30)));
+        let mut audio: Vec<&str> = b
+            .sources
+            .iter()
+            .filter(|s| s.kind.starts_with("audio_"))
+            .map(|s| s.kind.as_str())
+            .collect();
+        audio.sort_unstable();
+        assert_eq!(audio, ["audio_input", "audio_output"]);
+        assert!(!b.sources.iter().any(|s| s.kind == "camera"));
+
+        // The summary offers the webcam unticked and no game capture.
+        let lines = summary(Purpose::Basic, &d, &Choices::default());
+        let webcam = lines.iter().find(|l| l.part == Some(Part::Webcam)).unwrap();
+        assert!(!webcam.on);
+        assert!(!lines.iter().any(|l| l.part == Some(Part::Game)));
+
+        // Ticked, the webcam goes in a corner over the screen.
+        let mut choices = Choices::default();
+        choices.toggle(Part::Webcam, Purpose::Basic);
+        let b = build(Purpose::Basic, &d, &choices);
+        assert_eq!(kinds(&b), ["display_capture", "camera"]);
+        inside(&b, 0);
     }
 
     #[test]
