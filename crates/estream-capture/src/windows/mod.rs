@@ -6,6 +6,7 @@ pub mod capture;
 pub mod capture_audio;
 pub mod d3d;
 pub mod enumerate;
+pub mod hdr;
 pub mod wgc;
 
 use estream_engine::SourceRegistry;

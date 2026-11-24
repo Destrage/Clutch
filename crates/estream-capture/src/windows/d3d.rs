@@ -26,6 +26,8 @@ use windows::core::Interface;
 
 /// Format of shared capture textures in wgpu (sampled as sRGB → linear).
 pub const SHARED_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;
+/// Format of shared HDR capture textures (scRGB: linear, 1.0 = 80 nits).
+pub const HDR_SHARED_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 const INTEL_VENDOR: u32 = 0x8086;
 /// Highest value `IDXGIDevice::SetGPUThreadPriority` accepts.
@@ -208,13 +210,28 @@ impl D3D11Interop {
 
     /// Creates a BGRA texture shared between D3D11 (write) and wgpu (sample).
     pub fn create_shared(&self, width: u32, height: u32) -> Result<SharedTexture, CaptureError> {
+        self.create_shared_as(width, height, false)
+    }
+
+    /// Creates a shared texture: BGRA, or 16-bit float scRGB for HDR captures.
+    pub fn create_shared_as(
+        &self,
+        width: u32,
+        height: u32,
+        hdr: bool,
+    ) -> Result<SharedTexture, CaptureError> {
+        let (dxgi_format, wgpu_format) = if hdr {
+            (DXGI_FORMAT_R16G16B16A16_FLOAT, HDR_SHARED_FORMAT)
+        } else {
+            // Typeless so wgpu can view it as sRGB while D3D11 copies UNORM data in.
+            (DXGI_FORMAT_B8G8R8A8_TYPELESS, SHARED_FORMAT)
+        };
         let desc = D3D11_TEXTURE2D_DESC {
             Width: width.max(1),
             Height: height.max(1),
             MipLevels: 1,
             ArraySize: 1,
-            // Typeless so wgpu can view it as sRGB while D3D11 copies UNORM data in.
-            Format: DXGI_FORMAT_B8G8R8A8_TYPELESS,
+            Format: dxgi_format,
             SampleDesc: DXGI_SAMPLE_DESC {
                 Count: 1,
                 Quality: 0,
@@ -253,7 +270,7 @@ impl D3D11Interop {
             };
             let hal = wgpu::hal::dx12::Device::texture_from_raw(
                 d3d12_resource,
-                SHARED_FORMAT,
+                wgpu_format,
                 wgpu::TextureDimension::D2,
                 size,
                 1,
@@ -270,7 +287,7 @@ impl D3D11Interop {
                         mip_level_count: 1,
                         sample_count: 1,
                         dimension: wgpu::TextureDimension::D2,
-                        format: SHARED_FORMAT,
+                        format: wgpu_format,
                         usage: wgpu::TextureUsages::TEXTURE_BINDING,
                         view_formats: &[],
                     },
@@ -281,6 +298,7 @@ impl D3D11Interop {
                 texture,
                 width: desc.Width,
                 height: desc.Height,
+                hdr,
             })
         }
     }
@@ -363,6 +381,8 @@ pub struct SharedTexture {
     pub texture: wgpu::Texture,
     pub width: u32,
     pub height: u32,
+    /// 16-bit float scRGB (an HDR capture), else BGRA.
+    pub hdr: bool,
 }
 
 // SAFETY: COM texture references are free-threaded; all D3D11 access goes
