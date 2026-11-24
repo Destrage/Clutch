@@ -403,7 +403,7 @@ export component Preview inherits Rectangle {
         x: parent.width - self.width - 12px;
         y: parent.height - self.height - 12px;
         width: zoom-label.preferred-width + 16px;
-        height: 22px;
+        height: 22px * Theme.grow;
         border-radius: 11px;
         background: Theme.surface.with-alpha(0.85);
         border-width: 1px;

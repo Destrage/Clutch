@@ -14,7 +14,7 @@ import { SoundKnob, AudioSettings } from "sound.slint";
 component PlatformChip inherits Rectangle {
     in property <LiveRow> entry;
     property <color> dot: entry.state == 2 ? Theme.ok : entry.state == 4 ? Theme.live : Theme.warn;
-    height: 30px;
+    height: 30px * Theme.grow;
     width: chip.preferred-width;
     border-radius: 15px;
     background: Theme.surface;
@@ -40,7 +40,7 @@ component ViewTag inherits Rectangle {
     in property <string> text;
     in property <color> tint;
     width: tag.preferred-width + 16px;
-    height: 22px;
+    height: 22px * Theme.grow;
     border-radius: 6px;
     background: root.tint;
     tag := Text {
@@ -85,7 +85,7 @@ component SceneButton inherits Rectangle {
         HorizontalLayout {
             if root.key-label != "": Rectangle {
                 width: key.preferred-width + 10px;
-                height: 18px;
+                height: 18px * Theme.grow;
                 border-radius: 4px;
                 border-width: 1px;
                 border-color: Theme.border-strong;
@@ -196,7 +196,7 @@ export component LiveDeck inherits Rectangle {
             VerticalLayout {
                 alignment: center;
                 Rectangle {
-                    height: 30px;
+                    height: 30px * Theme.grow;
                     width: live.preferred-width;
                     border-radius: 8px;
                     background: Theme.live;
@@ -214,7 +214,7 @@ export component LiveDeck inherits Rectangle {
             if root.viewers-total >= 0: VerticalLayout {
                 alignment: center;
                 Rectangle {
-                    height: 30px;
+                    height: 30px * Theme.grow;
                     width: watching.preferred-width;
                     border-radius: 15px;
                     background: Theme.surface-2;
@@ -554,7 +554,7 @@ export component LiveDeck inherits Rectangle {
         TouchArea {}
         VerticalLayout {
             HorizontalLayout {
-                height: 44px;
+                height: 44px * Theme.grow;
                 padding-left: 14px;
                 padding-right: 8px;
                 Text {

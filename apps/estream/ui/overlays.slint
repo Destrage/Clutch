@@ -128,7 +128,7 @@ export component CommandPalette inherits Modal {
         padding: 6px;
         spacing: 1px;
         for entry[i] in root.entries: Rectangle {
-            height: 36px;
+            height: 36px * Theme.grow;
             border-radius: Theme.radius-m;
             background: i == root.current ? Theme.accent-soft : entry-ta.has-hover ? Theme.hover : transparent;
             accessible-role: list-item;
@@ -337,7 +337,7 @@ export component SetupWizard inherits Modal {
             VerticalLayout {
                 alignment: center;
                 spacing: 2px;
-                Text { text: root.setup-name == "" ? "Welcome to Clutch" : "New setup: " + root.setup-name; color: Theme.text; font-size: 22px; font-weight: 700; }
+                Text { text: root.setup-name == "" ? "Welcome to Clutch" : "New setup: " + root.setup-name; color: Theme.text; font-size: Theme.font-2xl; font-weight: 700; }
                 Text { text: "What will you use it for? We'll set everything up for you."; color: Theme.text-muted; font-size: Theme.font-m; }
             }
         }
@@ -377,7 +377,7 @@ export component SetupWizard inherits Modal {
                 Text { text: "WE'LL SET UP"; color: Theme.text-faint; font-size: Theme.font-xs; font-weight: 700; }
                 for line in root.summary: Rectangle {
                     property <bool> optional: line.key != "";
-                    height: 20px;
+                    height: 20px * Theme.grow;
                     if optional: TouchArea {
                         accessible-role: checkbox;
                         accessible-label: line.text;
@@ -421,7 +421,7 @@ export component SetupWizard inherits Modal {
             spacing: 4px;
             Text { text: "Resolution"; color: Theme.text-muted; font-size: Theme.font-s; }
             for preset[i] in root.presets: Rectangle {
-                height: 36px;
+                height: 36px * Theme.grow;
                 border-radius: Theme.radius-s;
                 border-width: 1px;
                 border-color: i == root.current ? Theme.accent : Theme.border;
@@ -622,7 +622,7 @@ export component Toast inherits Rectangle {
     /// A button after the text ("" = none).
     in property <string> action;
     callback act();
-    height: 38px;
+    height: 38px * Theme.grow;
     width: row.preferred-width;
     border-radius: 19px;
     background: Theme.dark ? #2b303b : #1d2129;
@@ -865,7 +865,7 @@ component SettingsPageItem inherits Rectangle {
     in property <string> label;
     in property <bool> current;
     callback clicked;
-    height: 34px;
+    height: 34px * Theme.grow;
     border-radius: Theme.radius-s;
     background: root.current ? Theme.accent.with-alpha(0.14) : ta.has-hover ? Theme.hover : transparent;
     accessible-role: tab;
@@ -905,7 +905,7 @@ component ProfileCard inherits Rectangle {
     /// The detail text's wrap width (set from outside: the card's own width comes from its row).
     in property <length> text-width;
     callback clicked;
-    height: 132px;
+    height: 132px * Theme.grow * Theme.grow;
     horizontal-stretch: 1;
     border-radius: Theme.radius-m;
     border-width: root.pending || root.current ? 2px : 1px;
@@ -925,7 +925,7 @@ component ProfileCard inherits Rectangle {
             HorizontalLayout {
                 spacing: 4px;
                 alignment: start;
-                height: 18px;
+                height: 18px * Theme.grow;
                 if root.current: Badge { text: "Current"; tone: Theme.accent; }
                 if root.recommended: Badge { text: "Recommended"; tone: Theme.ok; }
             }
@@ -1208,7 +1208,7 @@ export component SettingsDialog inherits Modal {
                         }
                     }
                     for d[i] in root.form.destinations: Rectangle {
-                        height: 36px;
+                        height: 36px * Theme.grow;
                         border-radius: Theme.radius-s;
                         background: i == root.form.dest-selected ? Theme.accent.with-alpha(0.14) : row-ta.has-hover ? Theme.hover : transparent;
                         border-width: i == root.form.dest-selected ? 1px : 0px;
@@ -1430,7 +1430,7 @@ export component SettingsDialog inherits Modal {
                             for t in [0, 1, 2, 3, 4, 5]: Rectangle {
                                 property <bool> on: mod(floor(root.form.tracks / pow(2, t)), 2) == 1;
                                 width: 28px;
-                                height: 26px;
+                                height: 26px * Theme.grow;
                                 border-radius: Theme.radius-s;
                                 background: on ? Theme.accent : Theme.surface-3;
                                 accessible-role: checkbox;
@@ -1537,7 +1537,7 @@ export component SettingsDialog inherits Modal {
                     }
                     for g[i] in root.form.clip-integrations: HorizontalLayout {
                         spacing: 10px;
-                        height: 32px;
+                        height: 32px * Theme.grow;
                         Text { text: g.name; color: Theme.text; font-size: Theme.font-m; vertical-alignment: center; width: 170px; }
                         Text { text: g.status; color: g.connected ? Theme.text-muted : Theme.text-faint; font-size: Theme.font-s; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
                         Button {
@@ -1558,7 +1558,7 @@ export component SettingsDialog inherits Modal {
                     }
                     for r[i] in root.form.clip-rules: HorizontalLayout {
                         spacing: 10px;
-                        height: 30px;
+                        height: 30px * Theme.grow;
                         VerticalLayout {
                             alignment: center;
                             Toggle { checked: r.enabled; toggled(v) => { root.set("clip-rule-enable", i); } }
@@ -1704,6 +1704,15 @@ export component SettingsDialog inherits Modal {
                             selected(i) => { root.set("theme", i); }
                         }
                     }
+                    SettingRow {
+                        label: "Text size";
+                        Select {
+                            label: "Text size";
+                            options: ["Small", "Default", "Large", "Larger"];
+                            current-index: root.form.text-size;
+                            selected(i) => { root.set("text-size", i); }
+                        }
+                    }
                     SectionTitle { text: "CANVAS"; }
                     SettingRow {
                         label: "Mouse wheel pans preview";
@@ -1796,7 +1805,7 @@ export component SettingsDialog inherits Modal {
                         VerticalLayout {
                             alignment: center;
                             spacing: 2px;
-                            Text { text: "Clutch"; color: Theme.text; font-family: Theme.font-display; font-size: 24px; font-weight: 600; }
+                            Text { text: "Clutch"; color: Theme.text; font-family: Theme.font-display; font-size: Theme.font-2xl; font-weight: 600; }
                             Text { text: "Version " + root.form.upd-version; color: Theme.text-muted; font-size: Theme.font-m; }
                         }
                     }

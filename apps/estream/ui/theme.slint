@@ -27,9 +27,11 @@ export global Theme {
     out property <color> border-strong: dark ? #34414f : #c3cdd7;
     out property <color> canvas-bg: dark ? #0a0e12 : #d3dae1;
 
-    out property <color> text: dark ? #e8edf2 : #141a21;
-    out property <color> text-muted: dark ? #93a1b0 : #4f5d6b;
-    out property <color> text-faint: dark ? #66768a : #8794a2;
+    // Every text color reaches 4.5:1 contrast on every surface of its theme (checked by a
+    // test in the app crate, theme_contrast.rs).
+    out property <color> text: dark ? #f3f6f9 : #0d1218;
+    out property <color> text-muted: dark ? #b4c0cc : #3d4955;
+    out property <color> text-faint: dark ? #8a9aac : #5f6b79;
     // In the dark theme accents are light (ice blue by default), so text on them is dark; the
     // light theme gets a deeper shade of the accent (see apply_theme) with white text.
     out property <color> on-accent: dark ? #0f141a : #ffffff;
@@ -48,11 +50,23 @@ export global Theme {
     out property <length> radius-m: 10px;
     out property <length> radius-l: 14px;
 
-    out property <length> font-xs: 11px;
-    out property <length> font-s: 12px;
-    out property <length> font-m: 13px;
-    out property <length> font-l: 15px;
-    out property <length> font-xl: 20px;
+    /// Settings → Appearance → Text size: every font size below is multiplied by it.
+    in-out property <float> text-scale: 1.0;
+    /// Fixed heights of controls that hold text are multiplied by this, so Large and Larger
+    /// text isn't cut off (Small keeps the Default sizes).
+    out property <float> grow: max(1.0, text-scale);
+    /// Small badges (LIVE, counts).
+    out property <length> font-2xs: 10px * text-scale;
+    out property <length> font-xs: 12px * text-scale;
+    out property <length> font-s: 12px * text-scale;
+    out property <length> font-m: 13px * text-scale;
+    out property <length> font-l: 15px * text-scale;
+    /// The CLUTCH wordmark in the title bar.
+    out property <length> font-brand: 17px * text-scale;
+    out property <length> font-xl: 20px * text-scale;
+    /// Dialog and page headings.
+    out property <length> font-2xl: 24px * text-scale;
+    out property <length> font-3xl: 28px * text-scale;
     out property <string> font-family: "Figtree";
     /// Headings and the brand (Jost, like the Clutch wordmark).
     out property <string> font-display: "Jost";

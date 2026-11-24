@@ -3392,6 +3392,7 @@ impl App {
         });
         let theme = w.global::<Theme>();
         theme.set_dark(dark);
+        theme.set_text_scale(self.settings.text_size.scale());
         if let Some((r, g, b)) = crate::settings::parse_hex(&self.settings.accent) {
             // Light accents (like the default ice blue) fade on white: the light theme uses a
             // deeper shade of the same colour, with white text on it.
@@ -7415,6 +7416,7 @@ impl App {
                 ThemeMode::Light => 1,
                 ThemeMode::System => 2,
             },
+            text_size: self.settings.text_size.index() as i32,
             ffmpeg: format!("FFmpeg libavutil {}", estream_media::version()).into(),
             canvas_names: keep(&self.form_models.canvas_names, canvas_labels.clone()),
             rec_canvas: if r.all_canvases {
@@ -8531,6 +8533,13 @@ impl App {
                     2 => ThemeMode::System,
                     _ => ThemeMode::Dark,
                 };
+                self.apply_theme();
+            }
+            "text-size" => {
+                self.settings.text_size = crate::settings::TextSize::ALL
+                    .get(i)
+                    .copied()
+                    .unwrap_or_default();
                 self.apply_theme();
             }
             _ => {}

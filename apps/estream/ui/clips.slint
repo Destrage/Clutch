@@ -47,7 +47,7 @@ component ClipTile inherits Rectangle {
                 x: parent.width - self.width - 6px;
                 y: parent.height - self.height - 6px;
                 width: len.preferred-width + 10px;
-                height: 18px;
+                height: 18px * Theme.grow;
                 border-radius: 4px;
                 background: #000000b0;
                 len := Text { text: entry.length; color: #ffffff; font-size: Theme.font-xs; horizontal-alignment: center; vertical-alignment: center; }

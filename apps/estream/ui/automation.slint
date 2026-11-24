@@ -24,7 +24,7 @@ component TriggerEditor inherits HorizontalLayout {
     callback record(int);
 
     spacing: 8px;
-    height: 30px;
+    height: 30px * Theme.grow;
     Label {
         text: entry.kind == "hotkey" ? "Hotkey"
             : entry.kind == "focus" ? "Window focused"
@@ -140,7 +140,7 @@ component StepEditor inherits HorizontalLayout {
     callback edit(string, int, float);
 
     spacing: 8px;
-    height: 30px;
+    height: 30px * Theme.grow;
     Text {
         width: 18px;
         text: (root.index + 1) + ".";

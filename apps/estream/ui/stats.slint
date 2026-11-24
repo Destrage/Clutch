@@ -41,7 +41,7 @@ component TableRow inherits HorizontalLayout {
     in property <StatRow> row-data;
     in property <bool> header;
     spacing: 10px;
-    height: 26px;
+    height: 26px * Theme.grow;
     property <color> tone: row-data.level == 2 ? Theme.live : row-data.level == 1 ? Theme.warn : Theme.text;
     VerticalLayout {
         alignment: center;
@@ -95,7 +95,7 @@ export component StatsDialog inherits Modal {
 
             if root.form.alerts.length == 0: HorizontalLayout {
                 spacing: 8px;
-                height: 34px;
+                height: 34px * Theme.grow;
                 VerticalLayout {
                     alignment: center;
                     Rectangle { width: 9px; height: 9px; border-radius: 4.5px; background: Theme.ok; }

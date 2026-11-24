@@ -112,6 +112,40 @@ pub enum ThemeMode {
     System,
 }
 
+/// How large the studio's text is drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextSize {
+    Small,
+    #[default]
+    Default,
+    Large,
+    Larger,
+}
+
+impl TextSize {
+    pub const ALL: [TextSize; 4] = [
+        TextSize::Small,
+        TextSize::Default,
+        TextSize::Large,
+        TextSize::Larger,
+    ];
+
+    /// The factor every font size is multiplied by.
+    pub fn scale(self) -> f32 {
+        match self {
+            TextSize::Small => 0.9,
+            TextSize::Default => 1.0,
+            TextSize::Large => 1.15,
+            TextSize::Larger => 1.3,
+        }
+    }
+
+    pub fn index(self) -> usize {
+        Self::ALL.iter().position(|t| *t == self).unwrap_or(1)
+    }
+}
+
 /// A finished upload speed test.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UploadTest {
@@ -203,6 +237,7 @@ impl Default for InspectorState {
 #[serde(default)]
 pub struct Settings {
     pub theme: ThemeMode,
+    pub text_size: TextSize,
     /// Accent color as `#rrggbb`.
     pub accent: String,
     /// The color picker's recent colors, newest first (`#rrggbb` or `#rrggbbaa`).
@@ -656,6 +691,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             theme: ThemeMode::Dark,
+            text_size: TextSize::Default,
             accent: DEFAULT_ACCENT.into(),
             recent_colors: Vec::new(),
             window: None,
@@ -968,6 +1004,14 @@ mod tests {
         assert_eq!(dropped, ["theme"]);
         assert_eq!(s.theme, ThemeMode::default());
         assert!(!s.chat_chime);
+
+        let (s, dropped) =
+            Settings::parse_lenient(r#"{ "text_size": "huge", "theme": "light" }"#).unwrap();
+        assert_eq!(dropped, ["text_size"]);
+        assert_eq!(s.text_size, TextSize::Default);
+        assert_eq!(s.theme, ThemeMode::Light);
+        let (s, _) = Settings::parse_lenient(r#"{ "text_size": "larger" }"#).unwrap();
+        assert_eq!(s.text_size.scale(), 1.3);
 
         assert!(Settings::parse_lenient("{ not json").is_err());
     }

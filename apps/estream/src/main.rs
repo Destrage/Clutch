@@ -26,6 +26,8 @@ mod settings;
 mod share;
 mod shell;
 mod speedtest;
+#[cfg(test)]
+mod theme_contrast;
 mod twitch;
 mod update;
 mod viewers;

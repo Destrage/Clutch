@@ -64,10 +64,10 @@ component SceneCard inherits Rectangle {
                 x: 6px;
                 y: 6px;
                 width: live.preferred-width + 10px;
-                height: 16px;
+                height: max(16px, live.preferred-height + 2px);
                 border-radius: 4px;
                 background: Theme.live;
-                live := Text { text: "LIVE"; color: Theme.on-accent; font-size: 10px; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
+                live := Text { text: "LIVE"; color: Theme.on-accent; font-size: Theme.font-2xs; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
             }
             // The actions are inside the card's TouchArea, which stays hovered while the pointer
             // is over them; beside it, moving onto a button hid the buttons and they flickered.
