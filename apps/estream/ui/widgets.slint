@@ -40,7 +40,7 @@ export component Button inherits Rectangle {
         : kind == "ghost" ? transparent
         : Theme.surface-3;
 
-    height: 30px;
+    height: 30px * Theme.grow;
     min-width: content.min-width;
     border-radius: Theme.radius-s;
     background: !enabled ? (kind == "ghost" ? transparent : Theme.surface-2)
@@ -149,7 +149,7 @@ export component TooltipLayer inherits Rectangle {
         x: max(4px, min(parent.width - self.width - 4px, Hint.x - self.width / 2));
         y: Hint.y;
         width: w;
-        height: 24px;
+        height: 24px * Theme.grow;
         border-radius: Theme.radius-s;
         background: Theme.dark ? #2b303b : #1d2129;
         drop-shadow-blur: 8px;
@@ -175,7 +175,7 @@ export component TextField inherits Rectangle {
     callback accepted(string);
     forward-focus: input;
 
-    height: 28px;
+    height: 28px * Theme.grow;
     clip: true;
     // Size by layout, not by text, so long values (paths) scroll inside the field.
     preferred-width: 160px;
@@ -259,7 +259,7 @@ export component NumberField inherits Rectangle {
     callback committed();
 
     property <float> scrub-start;
-    height: 28px;
+    height: 28px * Theme.grow;
     min-width: 64px;
     border-radius: Theme.radius-s;
     background: Theme.surface-2;
@@ -491,7 +491,7 @@ export component ValueSlider inherits Rectangle {
         root.committed();
     }
 
-    height: 26px;
+    height: 26px * Theme.grow;
     min-width: 80px;
     horizontal-stretch: 1;
     clip: true;
@@ -758,7 +758,7 @@ export component Segmented inherits Rectangle {
     in property <string> label;
     callback selected(int);
 
-    height: 28px;
+    height: 28px * Theme.grow;
     horizontal-stretch: 1;
     border-radius: Theme.radius-s;
     background: Theme.surface-3;
@@ -803,7 +803,7 @@ export component Select inherits Rectangle {
     in property <bool> enabled: true;
     callback selected(int);
 
-    height: 28px;
+    height: 28px * Theme.grow;
     opacity: root.enabled ? 1 : 0.5;
     accessible-enabled: root.enabled;
     border-radius: Theme.radius-s;
@@ -838,7 +838,7 @@ export component Select inherits Rectangle {
         x: 0;
         y: root.height + 4px;
         width: max(root.width, 220px);
-        height: min(root.options.length * 28px + 8px, 320px);
+        height: min(root.options.length * 28px * Theme.grow + 8px, 320px * Theme.grow);
         Rectangle {
             background: Theme.surface-3;
             border-radius: Theme.radius-m;
@@ -851,7 +851,7 @@ export component Select inherits Rectangle {
               option-list := VerticalLayout {
                 padding: 4px;
                 for option[i] in root.options: Rectangle {
-                    height: 28px;
+                    height: 28px * Theme.grow;
                     border-radius: Theme.radius-s;
                     background: item-ta.has-hover ? Theme.hover : i == root.current-index ? Theme.accent-soft : transparent;
                     HorizontalLayout {
@@ -889,7 +889,7 @@ export component Panel inherits Rectangle {
 export component PanelHeader inherits Rectangle {
     in property <string> title;
     in property <image> icon;
-    height: 40px;
+    height: 40px * Theme.grow;
     HorizontalLayout {
         padding-left: 14px;
         padding-right: 8px;
@@ -975,9 +975,9 @@ export component HSplitter inherits Splitter {
 export component Badge inherits Rectangle {
     in property <string> text;
     in property <color> tone: Theme.text-muted;
-    height: 18px;
+    height: max(18px, label.preferred-height + 2px);
     width: label.preferred-width + 12px;
-    border-radius: 9px;
+    border-radius: self.height / 2;
     background: tone.with-alpha(0.14);
     label := Text {
         text: root.text;

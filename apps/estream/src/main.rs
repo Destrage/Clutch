@@ -25,6 +25,8 @@ mod services;
 mod settings;
 mod share;
 mod shell;
+#[cfg(test)]
+mod theme_contrast;
 mod twitch;
 mod update;
 mod viewers;

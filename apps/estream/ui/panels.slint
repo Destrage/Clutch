@@ -16,7 +16,7 @@ export component MenuRow inherits Rectangle {
     in property <bool> indent;
     callback clicked();
 
-    height: 28px;
+    height: 28px * Theme.grow;
     border-radius: Theme.radius-s;
     background: ta.has-hover && root.enabled ? Theme.hover : transparent;
     opacity: root.enabled ? 1 : 0.4;
@@ -61,7 +61,7 @@ component SetupMenu inherits Rectangle {
     callback act(string);
 
     property <string> tip: "Your setup: scenes, sources and audio. Click to switch or manage setups. Canvas: " + root.canvas-info;
-    height: 28px;
+    height: 28px * Theme.grow;
     width: row.preferred-width;
     border-radius: Theme.radius-s;
     background: ta.has-hover || popup-open ? Theme.hover : Theme.surface-2;
@@ -88,7 +88,7 @@ component SetupMenu inherits Rectangle {
         VerticalLayout {
             alignment: center;
             Rectangle {
-                height: 18px;
+                height: 18px * Theme.grow;
                 width: tag.preferred-width + 10px;
                 border-radius: 4px;
                 background: Theme.surface-3;
@@ -147,7 +147,7 @@ component SetupMenu inherits Rectangle {
                     }
                 }
                 for setup[i] in root.setups: Rectangle {
-                    height: 28px;
+                    height: 28px * Theme.grow;
                     border-radius: Theme.radius-s;
                     background: setup-ta.has-hover ? Theme.hover : transparent;
                     accessible-role: button;
@@ -183,7 +183,7 @@ component SetupMenu inherits Rectangle {
                 ]: Rectangle {
                     // Deleting the only setup isn't possible.
                     property <bool> enabled: item.id != "delete" || root.setups.length > 1;
-                    height: 28px;
+                    height: 28px * Theme.grow;
                     border-radius: Theme.radius-s;
                     background: item-ta.has-hover && self.enabled ? Theme.hover : transparent;
                     opacity: self.enabled ? 1 : 0.4;
@@ -274,7 +274,7 @@ export component TopBar inherits Rectangle {
                 text: "CLUTCH";
                 color: Theme.text;
                 font-family: Theme.font-display;
-                font-size: 17px;
+                font-size: Theme.font-brand;
                 font-weight: 600;
                 letter-spacing: 2px;
                 vertical-alignment: center;
@@ -310,7 +310,7 @@ export component TopBar inherits Rectangle {
             alignment: center;
             Rectangle {
                 width: 260px;
-                height: 30px;
+                height: max(30px, Theme.font-s * 2.2);
                 border-radius: Theme.radius-s;
                 background: palette-ta.has-hover ? Theme.surface-3 : Theme.surface-2;
                 border-width: 1px;
@@ -330,6 +330,7 @@ export component TopBar inherits Rectangle {
                         text: "Search actions, scenes, sources…";
                         color: Theme.text-faint;
                         font-size: Theme.font-s;
+                        overflow: elide;
                         vertical-alignment: center;
                         horizontal-stretch: 1;
                     }
@@ -797,7 +798,7 @@ export component ProgramView inherits Rectangle {
         x: 12px;
         y: 10px;
         width: label.preferred-width + 14px;
-        height: 20px;
+        height: 20px * Theme.grow;
         border-radius: 10px;
         background: Theme.live;
         label := Text { text: "PROGRAM"; color: Theme.on-accent; font-size: Theme.font-xs; font-weight: 700; }
@@ -863,7 +864,7 @@ export component SourcesPanel inherits Panel {
             spacing: 2px;
             alignment: start;
             for layer in root.layers: Rectangle {
-                height: 34px;
+                height: 34px * Theme.grow;
                 border-radius: Theme.radius-m;
                 background: layer.selected ? Theme.accent-soft : layer-ta.has-hover ? Theme.hover : transparent;
                 accessible-role: list-item;
@@ -999,7 +1000,7 @@ component MixerRow inherits Rectangle {
                 horizontal-stretch: 1;
                 vertical-alignment: center;
             }
-            if root.strip.global: Text { text: "ALL SCENES"; color: Theme.text-faint; font-size: 9px; font-weight: 700; vertical-alignment: center; }
+            if root.strip.global: Text { text: "ALL SCENES"; color: Theme.text-faint; font-size: Theme.font-2xs; font-weight: 700; vertical-alignment: center; }
             if root.strip.monitoring: Icon { source: Icons.volume; size: 12px; tint: Theme.accent; y: 2px; }
             if root.strip.problem != "": Text { text: "●"; color: Theme.warn; font-size: Theme.font-s; vertical-alignment: center; }
             if !root.master: Text {
@@ -1122,7 +1123,7 @@ export component StatusBar inherits Rectangle {
     callback open-stats();
     callback open-about();
 
-    height: 28px;
+    height: 28px * Theme.grow;
     background: Theme.bg;
     HorizontalLayout {
         padding-left: 16px;
@@ -1269,7 +1270,7 @@ export component CanvasTabs inherits HorizontalLayout {
             if ct.outputs != "": VerticalLayout {
                 alignment: center;
                 Rectangle {
-                    height: 18px;
+                    height: 18px * Theme.grow;
                     width: outputs-text.preferred-width + 10px;
                     border-radius: 4px;
                     background: ct.live ? Theme.live : Theme.surface-3;

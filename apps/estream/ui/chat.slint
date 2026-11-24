@@ -123,13 +123,13 @@ export struct ChatLive {
 component PlatformBadge inherits Rectangle {
     in property <string> kind;
     width: 18px;
-    height: 18px;
+    height: 18px * Theme.grow;
     border-radius: 5px;
     background: kind == "kick" ? #53fc18 : kind == "twitch" ? #a970ff : kind == "youtube" ? #ff3355 : Theme.surface-3;
     Text {
         text: root.kind == "kick" ? "K" : root.kind == "twitch" ? "T" : root.kind == "youtube" ? "Y" : "?";
         color: root.kind == "kick" ? #0f141a : #ffffff;
-        font-size: 11px;
+        font-size: Theme.font-xs;
         font-weight: 800;
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -187,7 +187,7 @@ export component ChatPanel inherits Rectangle {
     VerticalLayout {
         // Header: what is being read (or which page is open), the platform pages, and reload.
         HorizontalLayout {
-            height: 48px;
+            height: 48px * Theme.grow;
             padding-left: 10px;
             padding-right: 6px;
             spacing: 6px;
@@ -205,7 +205,7 @@ export component ChatPanel inherits Rectangle {
                 for st in root.live.states: VerticalLayout {
                     alignment: center;
                     Rectangle {
-                        height: 24px;
+                        height: 24px * Theme.grow;
                         width: chip.preferred-width;
                         border-radius: 12px;
                         background: Theme.surface-2;
@@ -242,7 +242,7 @@ export component ChatPanel inherits Rectangle {
             if root.people-total >= 0 && root.selected >= 0: VerticalLayout {
                 alignment: center;
                 Rectangle {
-                    height: 30px;
+                    height: 30px * Theme.grow;
                     width: people-row.preferred-width;
                     border-radius: 15px;
                     background: root.people-open ? Theme.surface-2 : people-ta.has-hover ? Theme.hover : transparent;
@@ -438,7 +438,7 @@ export component ChatPanel inherits Rectangle {
                         y: parent.height - self.height - 10px;
                         x: (parent.width - self.width) / 2;
                         width: new-row.preferred-width;
-                        height: 30px;
+                        height: 30px * Theme.grow;
                         border-radius: 15px;
                         background: Theme.accent;
                         drop-shadow-blur: 10px;
@@ -542,7 +542,7 @@ export component ChatPanel inherits Rectangle {
                 padding: 6px;
                 spacing: 2px;
                 for entry[i] in root.tabs: Rectangle {
-                    height: 32px;
+                    height: 32px * Theme.grow;
                     border-radius: Theme.radius-s;
                     background: page-ta.has-hover ? Theme.hover : transparent;
                     HorizontalLayout {
@@ -586,7 +586,7 @@ export component SignInDialog inherits Modal {
                 text: root.title;
                 color: Theme.text;
                 font-family: Theme.font-display;
-                font-size: 20px;
+                font-size: Theme.font-xl;
                 font-weight: 600;
                 vertical-alignment: center;
                 horizontal-stretch: 1;

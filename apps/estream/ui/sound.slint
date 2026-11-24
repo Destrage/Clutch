@@ -357,7 +357,7 @@ export component AudioSettings inherits VerticalLayout {
             for i in row: Rectangle {
                 property <bool> on: i == root.audio.voice;
                 horizontal-stretch: 1;
-                height: 28px;
+                height: 28px * Theme.grow;
                 border-radius: Theme.radius-s;
                 background: on ? Theme.accent-soft : chip-ta.has-hover ? Theme.surface-3.mix(Theme.text, 0.92) : Theme.surface-3;
                 border-width: 1px;
@@ -456,7 +456,7 @@ export component AudioSettings inherits VerticalLayout {
             for t in [0, 1, 2, 3, 4, 5]: Rectangle {
                 property <bool> on: mod(floor(root.audio.tracks / pow(2, t)), 2) == 1;
                 horizontal-stretch: 1;
-                height: 26px;
+                height: 26px * Theme.grow;
                 border-radius: Theme.radius-s;
                 background: on ? Theme.accent : Theme.surface-3;
                 accessible-role: checkbox;

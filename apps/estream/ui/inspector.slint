@@ -279,7 +279,7 @@ component InspectorTab inherits Rectangle {
 
     horizontal-stretch: 1;
     min-width: 0px;
-    height: 32px;
+    height: 32px * Theme.grow;
     border-radius: Theme.radius-s;
     background: root.active ? Theme.accent-soft : ta.has-hover ? Theme.hover : transparent;
     accessible-role: tab;
@@ -602,7 +602,7 @@ export component InspectorPanel inherits Panel {
                         spacing: 2px;
                         Text { text: "Playlist"; color: Theme.text-muted; font-size: Theme.font-xs; font-weight: 600; }
                         for track[i] in root.media.tracks: Rectangle {
-                            height: 26px;
+                            height: 26px * Theme.grow;
                             border-radius: Theme.radius-s;
                             background: i == root.media.track ? Theme.accent.with-alpha(0.14) : track-ta.has-hover ? Theme.hover : transparent;
                             accessible-role: button;

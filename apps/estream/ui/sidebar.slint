@@ -12,7 +12,7 @@ component NavItem inherits Rectangle {
     in property <int> badge;
     callback clicked;
     width: 64px;
-    height: 58px;
+    height: 58px * Theme.grow;
     border-radius: Theme.radius-m;
     background: root.current ? Theme.surface-2 : ta.has-hover ? Theme.hover : transparent;
     accessible-role: tab;
@@ -30,11 +30,11 @@ component NavItem inherits Rectangle {
                 if root.badge > 0: Rectangle {
                     x: 14px;
                     y: -5px;
-                    width: max(16px, count.preferred-width + 8px);
-                    height: 16px;
-                    border-radius: 8px;
+                    height: max(16px, count.preferred-height + 2px);
+                    width: max(self.height, count.preferred-width + 8px);
+                    border-radius: self.height / 2;
                     background: Theme.accent;
-                    count := Text { text: root.badge; color: Theme.on-accent; font-size: 10px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+                    count := Text { text: root.badge; color: Theme.on-accent; font-size: Theme.font-2xs; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
                 }
             }
         }

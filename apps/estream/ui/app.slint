@@ -571,7 +571,7 @@ export component AppWindow inherits Window {
                         x: preview.x + preview.width - self.width - 12px;
                         y: 10px;
                         width: preview-label.preferred-width + 14px;
-                        height: 20px;
+                        height: 20px * Theme.grow;
                         border-radius: 10px;
                         background: Theme.ok;
                         preview-label := Text { text: "PREVIEW"; color: Theme.on-accent; font-size: Theme.font-xs; font-weight: 700; }
@@ -850,7 +850,7 @@ export component AppWindow inherits Window {
         VerticalLayout {
             padding: 20px;
             spacing: 14px;
-            Text { text: "Chat"; color: Theme.text; font-family: Theme.font-display; font-size: 28px; font-weight: 600; }
+            Text { text: "Chat"; color: Theme.text; font-family: Theme.font-display; font-size: Theme.font-3xl; font-weight: 600; }
             HorizontalLayout {
                 alignment: start;
                 vertical-stretch: 1;
