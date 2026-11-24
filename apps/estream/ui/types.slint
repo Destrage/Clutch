@@ -532,6 +532,13 @@ export struct SettingsForm {
     perf-pending: int,
     perf-changes: [string],
     perf-can-revert: bool,
+    /// The last upload test (or its progress, or why it failed).
+    perf-upload: string,
+    /// Set when the upload leaves a destination too little for its canvas.
+    perf-upload-note: string,
+    perf-testing: bool,
+    /// Streaming: the upload can't be tested.
+    perf-live: bool,
     /// Settings → Updates: mode (0 install automatically, 1 tell me, 2 off), whether betas
     /// count, the installed version, what's happening, the action button ("" none), download
     /// progress (-1 none) and whether there's a release page to open.

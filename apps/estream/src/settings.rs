@@ -112,6 +112,34 @@ pub enum ThemeMode {
     System,
 }
 
+/// A finished upload speed test.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UploadTest {
+    pub kbps: f64,
+    /// When it ran, in seconds since the Unix epoch.
+    pub tested_at: u64,
+}
+
+impl UploadTest {
+    pub fn now(kbps: f64) -> Self {
+        Self {
+            kbps,
+            tested_at: unix_now(),
+        }
+    }
+
+    /// Seconds since the test ran.
+    pub fn age_seconds(&self) -> u64 {
+        unix_now().saturating_sub(self.tested_at)
+    }
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
 /// Whether a new Game capture captures the game's sound when Desktop or Application audio
 /// already plays it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -219,6 +247,8 @@ pub struct Settings {
     /// Going live opens the Go live window (stream details per platform); off: the remembered
     /// details are used without asking.
     pub ask_details: bool,
+    /// The last upload speed test (Settings → Performance, Go Live).
+    pub upload: Option<UploadTest>,
     /// Adding a Game capture while the game is already heard: ask, or the remembered answer.
     pub game_audio: GameAudio,
     /// Mouse wheel scrolling over the preview pans the canvas (default: off).
@@ -651,6 +681,7 @@ impl Default for Settings {
             chat_third_party: true,
             chat_animate: true,
             ask_details: true,
+            upload: None,
             game_audio: GameAudio::Ask,
             scroll_pan: false,
             gpu_encode: true,

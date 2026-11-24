@@ -1060,14 +1060,48 @@ export component SettingsDialog inherits Modal {
                         VerticalLayout {
                             alignment: center;
                             Button {
-                                text: "Optimize for this PC";
+                                text: root.form.perf-testing ? "Testing upload…" : "Optimize for this PC";
                                 kind: "primary";
                                 has-icon: true;
                                 icon: Icons.sparkles;
-                                tooltip: "Recommends a profile from this PC's encoder, processor and memory";
+                                enabled: !root.form.perf-testing;
+                                tooltip: "Tests your upload speed, then recommends a profile from this PC's encoder, processor and memory, with stream bitrates that fit your upload";
                                 clicked => { root.set("perf-optimize", 0); }
                             }
                         }
+                    }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 2px;
+                            Text { text: "Your connection"; color: Theme.text; font-size: Theme.font-m; }
+                            Text {
+                                text: root.form.perf-upload;
+                                color: Theme.text-faint;
+                                font-size: Theme.font-xs;
+                                wrap: word-wrap;
+                                width: scroller.page-width - 36px - 200px;
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            Button {
+                                text: "Test again";
+                                enabled: !root.form.perf-testing && !root.form.perf-live;
+                                tooltip: root.form.perf-live
+                                    ? "Can't test while you're live: the stream uses your upload"
+                                    : "Measures your upload speed (about 10 seconds; sends test data to Cloudflare's speed test)";
+                                clicked => { root.set("perf-retest", 0); }
+                            }
+                        }
+                    }
+                    if root.form.perf-upload-note != "": Text {
+                        text: root.form.perf-upload-note;
+                        color: Theme.warn;
+                        font-size: Theme.font-s;
+                        wrap: word-wrap;
+                        width: scroller.page-width - 36px;
                     }
                     if root.form.perf-warning != "": Text {
                         text: root.form.perf-warning;
