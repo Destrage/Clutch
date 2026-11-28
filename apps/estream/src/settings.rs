@@ -121,14 +121,16 @@ pub enum TextSize {
     Default,
     Large,
     Larger,
+    Largest,
 }
 
 impl TextSize {
-    pub const ALL: [TextSize; 4] = [
+    pub const ALL: [TextSize; 5] = [
         TextSize::Small,
         TextSize::Default,
         TextSize::Large,
         TextSize::Larger,
+        TextSize::Largest,
     ];
 
     /// The factor every font size is multiplied by.
@@ -138,11 +140,63 @@ impl TextSize {
             TextSize::Default => 1.0,
             TextSize::Large => 1.15,
             TextSize::Larger => 1.3,
+            TextSize::Largest => 1.5,
         }
     }
 
     pub fn index(self) -> usize {
         Self::ALL.iter().position(|t| *t == self).unwrap_or(1)
+    }
+}
+
+/// Interface zoom: one of [`UiZoom::LEVELS`] percent. Saved as the number; any other number
+/// is dropped by lenient parsing, so 100% is used.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "u16", into = "u16")]
+pub struct UiZoom(u16);
+
+impl UiZoom {
+    pub const LEVELS: [u16; 5] = [100, 125, 150, 175, 200];
+
+    pub fn percent(self) -> u16 {
+        self.0
+    }
+
+    /// The factor the OS scale factor is multiplied by.
+    pub fn factor(self) -> f32 {
+        f32::from(self.0) / 100.0
+    }
+
+    pub fn index(self) -> usize {
+        Self::LEVELS.iter().position(|l| *l == self.0).unwrap_or(0)
+    }
+
+    pub fn from_index(i: usize) -> Self {
+        Self(Self::LEVELS.get(i).copied().unwrap_or(100))
+    }
+}
+
+impl Default for UiZoom {
+    fn default() -> Self {
+        Self(100)
+    }
+}
+
+impl TryFrom<u16> for UiZoom {
+    type Error = String;
+
+    fn try_from(percent: u16) -> Result<Self, String> {
+        if Self::LEVELS.contains(&percent) {
+            Ok(Self(percent))
+        } else {
+            Err(format!("{percent}% is not a zoom level"))
+        }
+    }
+}
+
+impl From<UiZoom> for u16 {
+    fn from(z: UiZoom) -> u16 {
+        z.0
     }
 }
 
@@ -238,6 +292,8 @@ impl Default for InspectorState {
 pub struct Settings {
     pub theme: ThemeMode,
     pub text_size: TextSize,
+    /// Interface zoom in percent, on top of the OS display scaling.
+    pub ui_zoom: UiZoom,
     /// Accent color as `#rrggbb`.
     pub accent: String,
     /// The color picker's recent colors, newest first (`#rrggbb` or `#rrggbbaa`).
@@ -692,6 +748,7 @@ impl Default for Settings {
         Self {
             theme: ThemeMode::Dark,
             text_size: TextSize::Default,
+            ui_zoom: UiZoom::default(),
             accent: DEFAULT_ACCENT.into(),
             recent_colors: Vec::new(),
             window: None,
@@ -1012,6 +1069,17 @@ mod tests {
         assert_eq!(s.theme, ThemeMode::Light);
         let (s, _) = Settings::parse_lenient(r#"{ "text_size": "larger" }"#).unwrap();
         assert_eq!(s.text_size.scale(), 1.3);
+        let (s, _) = Settings::parse_lenient(r#"{ "text_size": "largest" }"#).unwrap();
+        assert_eq!(s.text_size.scale(), 1.5);
+
+        let (s, dropped) =
+            Settings::parse_lenient(r#"{ "ui_zoom": 333, "theme": "light" }"#).unwrap();
+        assert_eq!(dropped, ["ui_zoom"]);
+        assert_eq!(s.ui_zoom, UiZoom::default());
+        assert_eq!(s.theme, ThemeMode::Light);
+        let (s, _) = Settings::parse_lenient(r#"{ "ui_zoom": 150 }"#).unwrap();
+        assert_eq!(s.ui_zoom.percent(), 150);
+        assert_eq!(serde_json::to_value(s.ui_zoom).unwrap(), 150);
 
         assert!(Settings::parse_lenient("{ not json").is_err());
     }

@@ -24,6 +24,21 @@ the studio smaller than its minimum layout on the current monitor SHALL NOT be s
 - **WHEN** the window moves from a 4K monitor at 200% zoom to a monitor where 200% doesn't fit
 - **THEN** the zoom steps down to the largest level that fits and a toast says so
 
+### Requirement: Narrow Window Layout
+The studio SHALL stay usable at its minimum logical size (980 × 620) at every interface zoom
+and text size. When the window is too narrow for the top bar's labels, the top bar SHALL show
+icons with tooltips instead of labels, keeping Go Live labelled. A dialog taller than the
+window SHALL be limited to the window's height and its content SHALL scroll, with a scroll
+indicator.
+
+#### Scenario: Go Live stays reachable
+- **WHEN** the window is 1000 logical pixels wide (for example 150% zoom on a 1500-pixel-wide window)
+- **THEN** every top-bar control is visible, Studio mode, Record and search show as icons, and Go Live keeps its label
+
+#### Scenario: Tall dialog in a short window
+- **WHEN** the first-run wizard opens in a window shorter than the wizard
+- **THEN** the wizard fits the window with a margin, a scroll indicator shows, and the wheel scrolls to Get started
+
 ## MODIFIED Requirements
 
 ### Requirement: Text Size Setting

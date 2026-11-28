@@ -38,6 +38,9 @@ pub enum Action {
     ThemeDark,
     ThemeLight,
     ThemeSystem,
+    ZoomIn,
+    ZoomOut,
+    ZoomReset,
     ResetLayout,
     Deselect,
     ToggleRecording,
@@ -187,6 +190,9 @@ actions! {
     ThemeDark, "theme.dark", "Theme: Dark", "Appearance", None, true;
     ThemeLight, "theme.light", "Theme: Light", "Appearance", None, true;
     ThemeSystem, "theme.system", "Theme: Follow system", "Appearance", None, true;
+    ZoomIn, "ui.zoom.in", "Zoom interface in (bigger)", "Appearance", Some(Shortcut::ctrl_shift('=')), true;
+    ZoomOut, "ui.zoom.out", "Zoom interface out (smaller)", "Appearance", Some(Shortcut::ctrl_shift('-')), true;
+    ZoomReset, "ui.zoom.reset", "Reset interface zoom", "Appearance", Some(Shortcut::ctrl_shift('0')), true;
     ResetLayout, "layout.reset", "Reset layout", "View", None, true;
     ToggleRecording, "record.toggle", "Start / stop recording", "Output", None, true;
     ToggleReplay, "replay.toggle", "Start / stop replay buffer", "Output", None, true;
@@ -226,6 +232,15 @@ pub fn by_id(id: &str) -> Option<Action> {
 pub fn for_key(key: Key, ctrl: bool, shift: bool, alt: bool) -> Option<Action> {
     if ctrl && !alt && key == Key::Char('y') {
         return Some(Action::Redo);
+    }
+    // With Shift held, layouts report the shifted character: + _ ) on US keyboards.
+    if ctrl && shift && !alt {
+        match key {
+            Key::Char('+') => return Some(Action::ZoomIn),
+            Key::Char('_') => return Some(Action::ZoomOut),
+            Key::Char(')') => return Some(Action::ZoomReset),
+            _ => {}
+        }
     }
     ACTIONS
         .iter()

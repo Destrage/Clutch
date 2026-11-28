@@ -11,7 +11,7 @@ component NavItem inherits Rectangle {
     /// A small count on the icon (0 = none).
     in property <int> badge;
     callback clicked;
-    width: 64px;
+    width: 64px * Theme.grow;
     height: 58px * Theme.grow;
     border-radius: Theme.radius-m;
     background: root.current ? Theme.surface-2 : ta.has-hover ? Theme.hover : transparent;
@@ -60,7 +60,7 @@ export component Sidebar inherits Rectangle {
     callback open(string);
     callback open-settings();
 
-    width: 76px;
+    width: 76px * Theme.grow;
     background: Theme.bg;
     accessible-role: tab-list;
     accessible-label: "Sections";
@@ -95,7 +95,7 @@ export component Sidebar inherits Rectangle {
     }
     HorizontalLayout {
         y: parent.height - self.height - 10px;
-        height: 58px;
+        height: 58px * Theme.grow;
         alignment: center;
         NavItem { icon: Icons.settings; label: "Settings"; clicked => { root.open-settings(); } }
     }
