@@ -22,6 +22,8 @@ export component PropEditor inherits VerticalLayout {
     callback set-index(int);
     callback browse();
     callback commit();
+    /// A dropdown is about to open: re-read the windows and devices it lists.
+    callback refresh();
     /// Gradient edits: ("select" | "move" | "add" | "remove" | "angle" | "cx" | "cy" |
     /// "radius", stop index, value).
     callback gradient(string, int, float);
@@ -84,6 +86,7 @@ export component PropEditor inherits VerticalLayout {
         options: root.prop.options;
         current-index: root.prop.index;
         selected(i) => { root.set-index(i); }
+        opening => { root.refresh(); }
     }
     if prop.kind == "path": HorizontalLayout {
         spacing: 6px;
@@ -531,6 +534,7 @@ export component InspectorPanel inherits Panel {
                         gradient-text(i, t) => { root.prop-gradient-text(prop.key, i, t); }
                         browse => { root.prop-browse(prop.key); }
                         commit => { root.commit(); }
+                        refresh => { root.prop-refresh(); }
                     }
                 }
                 if root.browser: FoldPanel {

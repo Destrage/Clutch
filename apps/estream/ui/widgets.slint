@@ -802,6 +802,8 @@ export component Select inherits Rectangle {
     in property <string> label;
     in property <bool> enabled: true;
     callback selected(int);
+    /// Runs just before the list opens, so lists of windows or devices can be re-read first.
+    callback opening();
 
     height: 28px * Theme.grow;
     opacity: root.enabled ? 1 : 0.5;
@@ -832,7 +834,10 @@ export component Select inherits Rectangle {
     ta := TouchArea {
         enabled: root.enabled;
         mouse-cursor: MouseCursor.pointer;
-        clicked => { popup.show(); }
+        clicked => {
+            root.opening();
+            popup.show();
+        }
     }
     popup := PopupWindow {
         x: 0;
