@@ -83,6 +83,8 @@ component SetupMenu inherits Rectangle {
             color: Theme.text;
             font-size: Theme.font-s;
             font-weight: 600;
+            max-width: 200px;
+            overflow: elide;
             vertical-alignment: center;
         }
         VerticalLayout {
@@ -254,6 +256,8 @@ export component TopBar inherits Rectangle {
     callback toggle-replay();
     callback save-replay();
     callback open-settings();
+    /// Narrow window (small screen, or large zoom or text): labels give way to icons.
+    in property <bool> compact;
 
     height: 52px;
     background: Theme.bg;
@@ -270,7 +274,7 @@ export component TopBar inherits Rectangle {
                 alignment: center;
                 Image { source: Icons.logo; width: 26px; height: 26px; }
             }
-            Text {
+            if !root.compact: Text {
                 text: "CLUTCH";
                 color: Theme.text;
                 font-family: Theme.font-display;
@@ -309,7 +313,7 @@ export component TopBar inherits Rectangle {
         VerticalLayout {
             alignment: center;
             Rectangle {
-                width: 260px;
+                width: root.compact ? self.height : 260px;
                 height: max(30px, Theme.font-s * 2.2);
                 border-radius: Theme.radius-s;
                 background: palette-ta.has-hover ? Theme.surface-3 : Theme.surface-2;
@@ -319,14 +323,15 @@ export component TopBar inherits Rectangle {
                 accessible-label: "Open command palette";
                 accessible-action-default => { root.open-palette(); }
                 HorizontalLayout {
-                    padding-left: 10px;
-                    padding-right: 6px;
+                    padding-left: root.compact ? 0px : 10px;
+                    padding-right: root.compact ? 0px : 6px;
                     spacing: 8px;
+                    alignment: root.compact ? LayoutAlignment.center : LayoutAlignment.stretch;
                     VerticalLayout {
                         alignment: center;
                         Icon { source: Icons.search; size: 14px; tint: Theme.text-faint; }
                     }
-                    Text {
+                    if !root.compact: Text {
                         text: "Search actions, scenes, sources…";
                         color: Theme.text-faint;
                         font-size: Theme.font-s;
@@ -334,7 +339,7 @@ export component TopBar inherits Rectangle {
                         vertical-alignment: center;
                         horizontal-stretch: 1;
                     }
-                    VerticalLayout {
+                    if !root.compact: VerticalLayout {
                         alignment: center;
                         Badge { text: "Ctrl K"; }
                     }
@@ -362,7 +367,7 @@ export component TopBar inherits Rectangle {
         VerticalLayout {
             alignment: center;
             Button {
-                text: "Studio mode";
+                text: root.compact ? "" : "Studio mode";
                 has-icon: true;
                 icon: Icons.layout-dashboard;
                 kind: root.studio-mode ? "primary" : "ghost";
@@ -442,7 +447,9 @@ export component TopBar inherits Rectangle {
         if root.replay-active: VerticalLayout {
             alignment: center;
             Button {
-                text: "Save clip";
+                text: root.compact ? "" : "Save clip";
+                has-icon: true;
+                icon: Icons.scissors;
                 kind: "ghost";
                 tooltip: "Save the last seconds to your clips (Ctrl+Shift+R or the clip hotkey)";
                 clicked => { root.save-replay(); }
@@ -451,7 +458,7 @@ export component TopBar inherits Rectangle {
         VerticalLayout {
             alignment: center;
             Button {
-                text: root.recording ? root.record-time : "Record";
+                text: root.recording ? root.record-time : root.compact ? "" : "Record";
                 has-icon: true;
                 icon: root.recording ? Icons.square : Icons.circle;
                 kind: root.recording ? "live" : "default";
@@ -464,7 +471,7 @@ export component TopBar inherits Rectangle {
         if root.stream-state != 0: VerticalLayout {
             alignment: center;
             Button {
-                text: "Live deck";
+                text: root.compact ? "" : "Live deck";
                 kind: "primary";
                 has-icon: true;
                 icon: Icons.layout-dashboard;

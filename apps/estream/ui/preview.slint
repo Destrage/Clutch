@@ -55,8 +55,9 @@ export component Preview inherits Rectangle {
         pan-x = 0;
         pan-y = 0;
     }
+    /// One canvas pixel per screen pixel, whatever the OS scaling and interface zoom.
     public function zoom-actual() {
-        zoom = 1 / fit;
+        zoom = (1phx / 1px) / fit;
         pan-x = 0;
         pan-y = 0;
     }
@@ -409,7 +410,8 @@ export component Preview inherits Rectangle {
         border-width: 1px;
         border-color: Theme.border;
         zoom-label := Text {
-            text: round(root.scale * 100) + "%";
+            // In screen pixels, so 100% matches "Zoom to 100%" at any scaling or zoom.
+            text: round(root.scale * 1px / 1phx * 100) + "%";
             color: Theme.text-muted;
             font-size: Theme.font-xs;
             horizontal-alignment: center;

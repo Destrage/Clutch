@@ -447,8 +447,12 @@ export struct SettingsForm {
     rec-canvas-names: [string],
     dest-canvas: int,
     theme: int,
-    /// Small, Default, Large, Larger.
+    /// Small, Default, Large, Larger, Largest.
     text-size: int,
+    /// Interface zoom level index (100, 125, 150, 175, 200%) and its labels; levels too large
+    /// for the current screen say so.
+    ui-zoom: int,
+    zoom-labels: [string],
     scroll-pan: bool,
     ffmpeg: string,
     // Streaming: destination list, then the editor for the selected one

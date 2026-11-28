@@ -24,7 +24,9 @@ export component Modal inherits Rectangle {
         x: root.as-page ? 0px : (parent.width - self.width) / 2;
         y: root.as-page ? 0px : root.card-top >= 0 ? root.card-top : (parent.height - self.height) / 2;
         width: root.as-page ? parent.width : min(root.card-width, parent.width - 40px);
-        height: root.as-page ? parent.height : content.preferred-height;
+        // A card taller than the window (small window, large zoom or text) is capped and its
+        // content scrolls.
+        height: root.as-page ? parent.height : min(content.preferred-height, root.room);
         background: root.as-page ? Theme.bg : Theme.surface;
         border-radius: root.as-page ? 0px : Theme.radius-l;
         border-width: root.as-page ? 0px : 1px;
@@ -35,11 +37,29 @@ export component Modal inherits Rectangle {
         clip: true;
         accessible-role: groupbox;
         TouchArea { }
-        content := VerticalLayout {
-            alignment: start;
-            @children
+        scroller := Flickable {
+            // Wheel only: dragging stays with sliders and fields inside the card.
+            interactive: false;
+            content-height: root.as-page ? self.height : max(self.height, content.preferred-height);
+            content := VerticalLayout {
+                width: scroller.width;
+                height: scroller.content-height;
+                alignment: start;
+                @children
+            }
+        }
+        // Shows that a capped card scrolls, and how far.
+        if scroller.content-height > scroller.height + 1px: Rectangle {
+            x: parent.width - 7px;
+            width: 4px;
+            border-radius: 2px;
+            background: Theme.text-faint.with-alpha(0.6);
+            height: scroller.height * scroller.height / scroller.content-height;
+            y: -scroller.content-y * scroller.height / scroller.content-height;
         }
     }
+    /// The height a card can use: the window less margins (and less `card-top`).
+    property <length> room: root.card-top >= 0 ? root.height - root.card-top - 20px : root.height - 40px;
 }
 
 export component CommandPalette inherits Modal {
@@ -1705,10 +1725,20 @@ export component SettingsDialog inherits Modal {
                         }
                     }
                     SettingRow {
+                        label: "Interface zoom";
+                        hint: "Makes everything bigger: text, icons and controls. Ctrl+Shift+= and Ctrl+Shift+- change it, Ctrl+Shift+0 resets it.";
+                        Select {
+                            label: "Interface zoom";
+                            options: root.form.zoom-labels;
+                            current-index: root.form.ui-zoom;
+                            selected(i) => { root.set("ui-zoom", i); }
+                        }
+                    }
+                    SettingRow {
                         label: "Text size";
                         Select {
                             label: "Text size";
-                            options: ["Small", "Default", "Large", "Larger"];
+                            options: ["Small", "Default", "Large", "Larger", "Largest"];
                             current-index: root.form.text-size;
                             selected(i) => { root.set("text-size", i); }
                         }

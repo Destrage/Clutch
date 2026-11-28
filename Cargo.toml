@@ -43,7 +43,7 @@ tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 uuid = { version = "1.28.0", features = ["v7", "serde"] }
 wgpu = "30.0.1"
-slint = { version = "1.18.1", default-features = false, features = ["std", "backend-winit", "renderer-femtovg-wgpu", "unstable-wgpu-30", "accessibility", "compat-1-2"] }
+slint = { version = "1.18.1", default-features = false, features = ["std", "backend-winit", "renderer-femtovg-wgpu", "unstable-wgpu-30", "unstable-winit-030", "accessibility", "compat-1-2"] }
 slint-build = "1.18.1"
 dirs = "7.0.0"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }

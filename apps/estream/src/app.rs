@@ -188,6 +188,8 @@ pub struct App {
     auto_models: AutoModels,
     /// The settings form's lists, kept across refreshes (see [`FormModels`]).
     form_models: FormModels,
+    /// Interface zoom: what was applied and the monitor it was fitted to.
+    zoom: crate::zoom::ZoomState,
     /// The Mask panel's shape rows (kept like [`FormModels`], for the same reason).
     mask_shapes: Rc<VecModel<crate::ui::MaskShapeRow>>,
     /// Stats history and health alerts.
@@ -999,6 +1001,15 @@ fn status_problem(info: Option<&SourceInfo>) -> String {
     }
 }
 
+/// Tells the UI the window's logical width (the top bar compacts when it is narrow).
+fn publish_window_width(w: &AppWindow) {
+    let window = w.window();
+    let logical = window.size().width as f32 / window.scale_factor();
+    if (w.get_window_width() - logical).abs() > 0.5 {
+        w.set_window_width(logical);
+    }
+}
+
 fn key_from_text(text: &str) -> Option<Key> {
     use slint::platform::Key as K;
     let is = |k: K| text == SharedString::from(k).as_str();
@@ -1140,6 +1151,7 @@ impl App {
             auto_recording: None,
             auto_models: AutoModels::default(),
             form_models: FormModels::default(),
+            zoom: Default::default(),
             mask_shapes: Rc::default(),
             monitor: estream_health::Monitor::new(),
             system: estream_health::SystemSampler::start(),
@@ -2941,6 +2953,7 @@ impl App {
     /// Called from a fast UI timer: preview frames, engine events, stats, toasts.
     pub fn tick(&mut self) {
         let Some(w) = self.window() else { return };
+        self.sync_zoom(false);
         self.screen_pick_tick();
         let mut changed = false;
         if w.get_chat_visible() {
@@ -3404,6 +3417,119 @@ impl App {
                 }
             };
             theme.set_accent(slint::Color::from_rgb_u8(shade(r), shade(g), shade(b)));
+        }
+    }
+
+    /// Keeps the window's scale factor at OS scale × the zoom in effect. Runs every tick: the
+    /// winit backend resets the factor to the OS value when the window changes monitor or
+    /// DPI, and the monitor decides which levels fit. `force` re-applies right away.
+    pub fn sync_zoom(&mut self, force: bool) {
+        use slint::platform::WindowEvent;
+        let Some(w) = self.window() else { return };
+        let window = w.window();
+        publish_window_width(&w);
+        let current = window.scale_factor();
+        let reset = self
+            .zoom
+            .applied
+            .is_some_and(|a| (a - current).abs() > 1e-4);
+        let due = self
+            .zoom
+            .checked_at
+            .is_none_or(|t| t.elapsed() >= std::time::Duration::from_millis(500));
+        if !(force || reset || due || self.zoom.applied.is_none()) {
+            return;
+        }
+        self.zoom.checked_at = Some(std::time::Instant::now());
+        // Before the winit window exists there is no monitor; try again next tick.
+        let Some(monitor) = crate::zoom::monitor_of(window) else {
+            return;
+        };
+        let moved = self.zoom.monitor != Some(monitor);
+        self.zoom.monitor = Some(monitor);
+        let (area, os_scale) = monitor;
+        let chosen = self.settings.ui_zoom;
+        let first = self.zoom.applied.is_none();
+        let before = self.zoom.effective;
+        let effective = crate::zoom::effective(chosen, Some(area), os_scale);
+        self.zoom.effective = effective;
+        let target = os_scale * effective.factor();
+        if (current - target).abs() > 1e-4 {
+            // Keep the window's physical size; only the logical layout size changes.
+            let physical = window.size();
+            window.dispatch_event(WindowEvent::ScaleFactorChanged {
+                scale_factor: target,
+            });
+            window.dispatch_event(WindowEvent::Resized {
+                size: physical.to_logical(target),
+            });
+            tracing::info!(
+                zoom = effective.percent(),
+                os_scale,
+                scale_factor = target,
+                "interface zoom applied"
+            );
+        }
+        self.zoom.applied = Some(target);
+        publish_window_width(&w);
+        // Say so when the monitor (not the user) changed the level.
+        if !first && !force && effective != before {
+            if effective != chosen {
+                self.toast(
+                    format!(
+                        "Zoom lowered to {}% to fit this screen",
+                        effective.percent()
+                    ),
+                    false,
+                );
+            } else {
+                self.toast(format!("Zoom back to {}%", chosen.percent()), false);
+            }
+        }
+        if moved && w.get_settings_open() {
+            self.refresh_settings_form();
+        }
+    }
+
+    /// Sets the chosen zoom from Settings or a shortcut. Returns false when it doesn't fit
+    /// this screen (and says so).
+    fn set_zoom(&mut self, zoom: crate::settings::UiZoom) -> bool {
+        let area = self.zoom.area();
+        if area.is_some_and(|a| !crate::zoom::fits(zoom, a, self.zoom.os_scale())) {
+            self.toast(
+                format!("{}% is too large for this screen", zoom.percent()),
+                true,
+            );
+            return false;
+        }
+        self.settings.ui_zoom = zoom;
+        self.settings.save(&self.paths.settings());
+        self.sync_zoom(true);
+        true
+    }
+
+    /// Ctrl+Shift+= (`Some(true)`), Ctrl+Shift+- (`Some(false)`) and Ctrl+Shift+0 (`None`).
+    fn zoom_step(&mut self, step: Option<bool>) {
+        use crate::settings::UiZoom;
+        let from = self.zoom.effective;
+        let next = match step {
+            Some(up) => crate::zoom::step(from, up, self.zoom.area(), self.zoom.os_scale()),
+            None => (from != UiZoom::default()).then(UiZoom::default),
+        };
+        match next {
+            Some(z) => {
+                if self.set_zoom(z) {
+                    self.toast(format!("Zoom {}%", z.percent()), false);
+                }
+            }
+            None if step == Some(true) => self.toast(
+                format!("{}% is the largest zoom for this screen", from.percent()),
+                false,
+            ),
+            None => {}
+        }
+        if self.window().is_some_and(|w| w.get_settings_open()) {
+            self.refresh_settings_form();
         }
     }
 
@@ -7417,6 +7543,14 @@ impl App {
                 ThemeMode::System => 2,
             },
             text_size: self.settings.text_size.index() as i32,
+            ui_zoom: self.settings.ui_zoom.index() as i32,
+            zoom_labels: keep(
+                &self.form_models.zoom_labels,
+                crate::zoom::labels(self.zoom.area(), self.zoom.os_scale())
+                    .into_iter()
+                    .map(SharedString::from)
+                    .collect(),
+            ),
             ffmpeg: format!("FFmpeg libavutil {}", estream_media::version()).into(),
             canvas_names: keep(&self.form_models.canvas_names, canvas_labels.clone()),
             rec_canvas: if r.all_canvases {
@@ -8541,6 +8675,9 @@ impl App {
                     .copied()
                     .unwrap_or_default();
                 self.apply_theme();
+            }
+            "ui-zoom" => {
+                self.set_zoom(crate::settings::UiZoom::from_index(i));
             }
             _ => {}
         }
@@ -11697,7 +11834,12 @@ impl App {
         if self.engine.is_none()
             && !matches!(
                 action,
-                Action::ThemeDark | Action::ThemeLight | Action::ThemeSystem
+                Action::ThemeDark
+                    | Action::ThemeLight
+                    | Action::ThemeSystem
+                    | Action::ZoomIn
+                    | Action::ZoomOut
+                    | Action::ZoomReset
             )
         {
             return;
@@ -11834,6 +11976,9 @@ impl App {
             Action::ThemeDark => self.set_theme(ThemeMode::Dark),
             Action::ThemeLight => self.set_theme(ThemeMode::Light),
             Action::ThemeSystem => self.set_theme(ThemeMode::System),
+            Action::ZoomIn => self.zoom_step(Some(true)),
+            Action::ZoomOut => self.zoom_step(Some(false)),
+            Action::ZoomReset => self.zoom_step(None),
             Action::ResetLayout => {
                 self.apply_layout(PanelLayout::default());
                 w.invoke_zoom_fit();
@@ -12750,6 +12895,7 @@ struct AutoModels {
 /// [`AutoModels`]: a row with an open dropdown or a field being edited stays put.
 #[derive(Default)]
 struct FormModels {
+    zoom_labels: Rc<VecModel<SharedString>>,
     encoders: Rc<VecModel<SharedString>>,
     canvas_names: Rc<VecModel<SharedString>>,
     rec_canvas_names: Rc<VecModel<SharedString>>,

@@ -31,6 +31,9 @@ export component AppWindow inherits Window {
     preferred-height: 900px;
     min-width: 980px;
     min-height: 620px;
+    /// The window's logical width, set by the app each tick (reading `width` here would make
+    /// a layout loop).
+    in property <length> window-width;
     background: Theme.bg;
     default-font-family: Theme.font-family;
     default-font-size: Theme.font-m;
@@ -504,6 +507,9 @@ export component AppWindow inherits Window {
                 update-ready: root.update-ready;
                 update-restart => { root.action("update-restart"); }
                 toggle-studio => { root.action("studio.toggle"); }
+                // Full labels need about 1380px, more while the replay buffer or a stream
+                // adds buttons. `window-width` comes from the app, so there is no layout loop.
+                compact: root.window-width > 0px && root.window-width < (1380px + (root.replay-active ? 110px : 0px) + (root.stream-state != 0 ? 120px : 0px)) * max(1.0, Theme.text-scale);
             }
             // The Stage: the preview fills the page; layers and settings float over it.
             VerticalLayout {
@@ -581,8 +587,8 @@ export component AppWindow inherits Window {
                         x: 12px;
                         y: 12px;
                         // Room for the title and all five header buttons.
-                        width: 300px;
-                        height: min(parent.height - 24px, 120px + root.layers.length * 34px);
+                        width: min(300px * Theme.grow, parent.width - 24px);
+                        height: min(parent.height - 24px, (120px + root.layers.length * 34px) * Theme.grow);
                         border-radius: Theme.radius-l;
                         drop-shadow-blur: 18px;
                         drop-shadow-color: #00000050;

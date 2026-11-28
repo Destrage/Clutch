@@ -32,6 +32,7 @@ mod twitch;
 mod update;
 mod viewers;
 mod youtube;
+mod zoom;
 
 #[allow(clippy::all, clippy::unwrap_used, clippy::expect_used)]
 pub mod ui {
@@ -220,6 +221,8 @@ fn main() -> anyhow::Result<()> {
     app.borrow_mut().begin();
 
     window.show()?;
+    // The winit window exists now: apply the interface zoom before the first frame.
+    app.borrow_mut().sync_zoom(true);
     if maximized {
         window.window().set_maximized(true);
     }
